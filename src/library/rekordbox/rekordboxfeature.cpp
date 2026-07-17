@@ -903,6 +903,7 @@ void readAnalyze(TrackPointer track,
                             section->body());
 
             QVector<mixxx::audio::FramePos> beats;
+            mixxx::audio::FramePos firstDownbeatPosition;
 
             for (const auto& beat : *beatGridTag->beats()) {
                 int time = static_cast<int>(beat->time()) - timingOffset;
@@ -910,7 +911,16 @@ void readAnalyze(TrackPointer track,
                 if (time < 1) {
                     time = 1;
                 }
-                beats << mixxx::audio::FramePos(sampleRateKhz * static_cast<double>(time));
+                const auto position =
+                        mixxx::audio::FramePos(sampleRateKhz * static_cast<double>(time));
+                beats << position;
+
+                // Rekordbox numbers every beat 1..4 within its bar. Mixxx has
+                // nowhere to store that, but remembering the first downbeat is
+                // enough to reconstruct the phase of the whole grid.
+                if (beat->beat_number() == 1 && !firstDownbeatPosition.isValid()) {
+                    firstDownbeatPosition = position;
+                }
             }
 
             const auto pBeats = mixxx::Beats::fromBeatPositions(
@@ -918,6 +928,18 @@ void readAnalyze(TrackPointer track,
                     beats,
                     mixxx::rekordboxconstants::beatsSubversion);
             track->trySetBeats(pBeats);
+
+            // The intro cue is what WaveformRenderBeat anchors its downbeat
+            // display to, so seed it from the grid to get the same bar phase
+            // Rekordbox shows. Never clobber an existing intro cue: the user
+            // (or AnalyzerSilence) may have placed it deliberately.
+            if (firstDownbeatPosition.isValid() &&
+                    !track->findCueByType(mixxx::CueType::Intro)) {
+                track->createAndAddCue(mixxx::CueType::Intro,
+                        Cue::kNoHotCue,
+                        firstDownbeatPosition,
+                        mixxx::audio::kInvalidFramePos);
+            }
         } break;
         case rekordbox_anlz_t::SECTION_TAGS_CUES: {
             if (ignoreCues) {
