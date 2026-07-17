@@ -11,6 +11,7 @@
 #include <QTextCodec>
 #include <QtDebug>
 
+#include "control/controlpushbutton.h"
 #include "engine/engine.h"
 #include "library/dao/trackschema.h"
 #include "library/library.h"
@@ -1334,7 +1335,18 @@ RekordboxFeature::RekordboxFeature(
         Library* pLibrary,
         UserSettingsPointer pConfig)
         : BaseExternalLibraryFeature(pLibrary, pConfig, QStringLiteral("rekordbox")),
-          m_pSidebarModel(make_parented<TreeItemModel>(this)) {
+          m_pSidebarModel(make_parented<TreeItemModel>(this)),
+          m_pRefreshControl(std::make_unique<ControlPushButton>(
+                  ConfigKey(QStringLiteral("[Rekordbox]"), QStringLiteral("refresh")))) {
+    connect(m_pRefreshControl.get(),
+            &ControlPushButton::valueChanged,
+            this,
+            [this](double value) {
+                if (value > 0.0) {
+                    refreshDevices();
+                }
+            });
+
     QString tableName = kRekordboxLibraryTable;
     QString idColumn = LIBRARYTABLE_ID;
     QStringList columns = {
@@ -1505,15 +1517,19 @@ QString RekordboxFeature::formatRootViewHtml() const {
 void RekordboxFeature::refreshLibraryModels() {
 }
 
-void RekordboxFeature::activate() {
-    qDebug() << "RekordboxFeature::activate()";
-
+void RekordboxFeature::refreshDevices() {
     // Let a worker thread do the XML parsing
     m_devicesFuture = QtConcurrent::run(findRekordboxDevices);
     m_devicesFutureWatcher.setFuture(m_devicesFuture);
     m_title = tr("(loading) Rekordbox");
     //calls a slot in the sidebar model such that 'Rekordbox (isLoading)' is displayed.
     emit featureIsLoading(this, true);
+}
+
+void RekordboxFeature::activate() {
+    qDebug() << "RekordboxFeature::activate()";
+
+    refreshDevices();
 
     emit enableCoverArtDisplay(true);
     emit switchToView("REKORDBOXHOME");

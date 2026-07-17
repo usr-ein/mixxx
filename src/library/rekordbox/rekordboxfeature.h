@@ -29,6 +29,7 @@
 #include <QStringListModel>
 #include <QtConcurrentRun>
 #include <fstream>
+#include <memory>
 
 #include "library/baseexternallibraryfeature.h"
 #include "library/baseexternalplaylistmodel.h"
@@ -38,6 +39,7 @@
 
 class TrackCollectionManager;
 class BaseExternalPlaylistModel;
+class ControlPushButton;
 
 class RekordboxPlaylistModel : public BaseExternalPlaylistModel {
     Q_OBJECT
@@ -69,6 +71,10 @@ class RekordboxFeature : public BaseExternalLibraryFeature {
   public slots:
     void activate() override;
     void activateChild(const QModelIndex& index) override;
+    /// Rescan the attached devices without touching the library view. Bound to
+    /// the `[Rekordbox], refresh` control so controller scripts can pick up a
+    /// freshly mounted USB drive.
+    void refreshDevices();
     void refreshLibraryModels();
     void onRekordboxDevicesFound();
     void onTracksFound();
@@ -89,6 +95,7 @@ class RekordboxFeature : public BaseExternalLibraryFeature {
     QFutureWatcher<QString> m_tracksFutureWatcher;
     QFuture<QString> m_tracksFuture;
     QString m_title;
+    std::unique_ptr<ControlPushButton> m_pRefreshControl;
 
     QSharedPointer<BaseTrackCache> m_trackSource;
 };
