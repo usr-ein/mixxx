@@ -2133,6 +2133,7 @@ if(BUILD_TESTING)
     src-mixxx-test
     src/test/analyserwaveformtest.cpp
     src/test/analyzersilence_test.cpp
+    src/test/prolink_pdb_test.cpp
     src/test/prolink_rpc_test.cpp
     src/test/prolink_xdr_test.cpp
     src/test/audiotaperpot_test.cpp
@@ -2453,7 +2454,8 @@ endif()
 option(PROLINK "Support for the Pioneer Pro DJ Link network protocol" ON)
 if(PROLINK)
   target_sources(mixxx-lib PRIVATE
-    src/library/prolink/prolinkfeature.cpp)
+    src/library/prolink/prolinkfeature.cpp
+    src/library/prolink/prolinkpdbimport.cpp)
   target_compile_definitions(mixxx-lib PUBLIC __PROLINK__)
 endif()
 

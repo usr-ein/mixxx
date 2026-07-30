@@ -69,3 +69,6 @@ res/qrc_mixxx.cc
 
 # Binary built for the deck by ./upload.sh
 /dist/
+
+# A real rekordbox library; see src/test/prolink_pdb_test.cpp.
+src/test/prolink/export.pdb
