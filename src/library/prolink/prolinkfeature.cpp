@@ -115,6 +115,10 @@ ProLinkFeature::ProLinkFeature(Library* pLibrary, UserSettingsPointer pConfig)
             &ProLinkNetworkService::databaseFetched,
             this,
             &ProLinkFeature::onDatabaseFetched);
+    connect(m_pNetwork.get(),
+            &ProLinkNetworkService::announceChanged,
+            this,
+            [this](int, const QString&) { refreshStatusPage(); });
 
     // The columns the track table can show. analyze_path rides along because
     // ColumnCache keys on the plain column name, so it maps for free.
@@ -589,9 +593,25 @@ QString ProLinkFeature::statusHtml() const {
     }
 
     const QList<ProLinkDevice> devices = m_pNetwork->devices();
-    html += QStringLiteral("<p>%1</p>")
-                    .arg(tr("Listening on UDP port 50000. Mixxx does not transmit "
-                            "anything on the Pro DJ Link network."));
+    html += QStringLiteral("<p>%1</p>").arg(tr("Listening on UDP port 50000."));
+
+    // Our own identity on the network, which is not a curiosity: browsing
+    // another player's media is impossible without a number of our own, and the
+    // failure when we lack one is silent at the protocol level (F50). If covers
+    // are not loading, this line is the first thing to look at.
+    const int ourNumber = m_pNetwork->announcedNumber();
+    if (ourNumber > 0) {
+        html += QStringLiteral("<p><b>%1</b></p>")
+                        .arg(tr("Mixxx is on the network as player %1.").arg(ourNumber));
+    } else {
+        html += QStringLiteral("<p><b>%1</b> %2</p>")
+                        .arg(tr("Mixxx has no player number yet."),
+                                m_pNetwork->announceDetail().toHtmlEscaped());
+        html += QStringLiteral("<p>%1</p>")
+                        .arg(tr("It claims one automatically a few seconds after "
+                                "the first player appears. Until then other "
+                                "players' album art cannot be fetched."));
+    }
 
     if (devices.isEmpty()) {
         html += QStringLiteral("<p>%1</p>").arg(tr("No players found yet."));
@@ -608,6 +628,17 @@ QString ProLinkFeature::statusHtml() const {
                            "<th align='left'>%2</th><th align='left'>%3</th>"
                            "<th align='left'>%4</th></tr>")
                     .arg(tr("Player"), tr("Name"), tr("Address"), tr("Interface"));
+    // Ourselves first, so the table is the whole network rather than everyone
+    // except us. Discovery filters our own broadcasts out of the peer table --
+    // otherwise we would appear as a player offering to be browsed over a
+    // round trip to ourselves -- so the row has to be added back here.
+    if (ourNumber > 0) {
+        html += QStringLiteral("<tr><td>%1</td><td>%2</td><td>%3</td><td>%4</td></tr>")
+                        .arg(QString::number(ourNumber),
+                                tr("Mixxx (this machine)"),
+                                QString(),
+                                QString());
+    }
     for (const ProLinkDevice& device : devices) {
         html += QStringLiteral("<tr><td>%1</td><td>%2</td><td>%3</td><td>%4</td></tr>")
                         .arg(QString::number(device.deviceNumber),
