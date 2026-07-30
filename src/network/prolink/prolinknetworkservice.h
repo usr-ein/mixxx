@@ -142,6 +142,9 @@ class ProLinkNetworkService : public QObject {
         MediaSlot slot = MediaSlot::Usb;
         QString remotePath;
         QString localPath;
+        /// Set once a NFSERR_STALE has already cost this request a re-mount, so
+        /// a genuinely missing file cannot loop.
+        bool remounted = false;
     };
     /// Start the next queued request, if the network thread is idle.
     void pumpFileQueue();

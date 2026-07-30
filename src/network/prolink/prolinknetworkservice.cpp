@@ -326,6 +326,35 @@ void ProLinkNetworkService::runFileRequest(const FileRequest& request) {
                                 .arg(static_cast<int>(request.slot));
     const QString localPath = request.localPath;
 
+    // A cached mount does not stay valid indefinitely. After a few dozen
+    // requests a player starts answering NFSERR_STALE to every LOOKUP made
+    // against handles derived from it -- 495 of 576 cover fetches failed that
+    // way, all on the last lookup of the path, with the successes being simply
+    // whichever requests ran before the mount went sour.
+    //
+    // The documented remedy is to re-mount and retry once, which also covers
+    // the case this error was originally expected for: media swapped mid-
+    // session. Retried at most once per request, so a file that is genuinely
+    // gone fails rather than looping.
+    auto retryAfterRemount = [this, request, key]() {
+        kLogger.info() << "mount went stale; re-mounting and retrying"
+                       << request.remotePath;
+        auto stale = m_mounts.take(key);
+        if (stale.pClient) {
+            stale.pClient->deleteLater();
+        }
+        FileRequest again = request;
+        again.remounted = true;
+        QMetaObject::invokeMethod(
+                this,
+                [this, again] {
+                    m_fileBusy = false;
+                    m_fileQueue.prepend(again);
+                    pumpFileQueue();
+                },
+                Qt::QueuedConnection);
+    };
+
     // Report, release the slot, and start the next one. Every exit path goes
     // through here so the queue cannot stall on a failure.
     auto finish = [this, localPath](const QString& error) {
@@ -346,7 +375,9 @@ void ProLinkNetworkService::runFileRequest(const FileRequest& request) {
                 Qt::QueuedConnection);
     };
 
-    auto withRoot = [this, request, key, localPath, finish](const QByteArray& rootHandle) {
+    const bool canRetry = !request.remounted;
+    auto withRoot = [this, request, key, localPath, finish, retryAfterRemount, canRetry](
+                            const QByteArray& rootHandle) {
         nfs::NfsV2Client* pClient = m_mounts.value(key).pClient;
         auto* pTransfer = new nfs::NfsFileTransfer(pClient, pClient);
         pTransfer->setProgressCallback([this, localPath](quint32 done, quint32 total) {
@@ -359,10 +390,14 @@ void ProLinkNetworkService::runFileRequest(const FileRequest& request) {
         });
         pClient->resolvePath(rootHandle,
                 request.remotePath,
-                [this, pClient, pTransfer, localPath, finish](
+                [this, pClient, pTransfer, localPath, finish, retryAfterRemount, canRetry](
                         const nfs::NfsV2Client::Outcome<QByteArray>& file) {
                     if (!file.ok) {
                         pTransfer->deleteLater();
+                        if (canRetry && file.error.contains(QLatin1String("NFSERR_STALE"))) {
+                            retryAfterRemount();
+                            return;
+                        }
                         finish(file.error);
                         return;
                     }
