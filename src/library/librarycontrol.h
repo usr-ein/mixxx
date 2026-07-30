@@ -106,6 +106,8 @@ class LibraryControl : public QObject {
     void slotNumSamplersChanged(double v);
     void slotNumPreviewDecksChanged(double v);
 
+    /// Whether the pane the sidebar would hand focus to actually has tracks.
+    bool currentViewHasTracks() const;
     void slotSortColumn(double v);
     void slotSortColumnToggle(double v);
 

@@ -1021,7 +1021,7 @@ void LibraryControl::slotGoToItem(double v) {
         // Note that Tracks and AutoDJ always return 'false':
         // expanding those root items via controllers is considered dispensable
         // because the subfeatures' actions can't be accessed by controllers anyway.
-        if (m_pSidebarWidget->isLeafNodeSelected()) {
+        if (m_pSidebarWidget->isLeafNodeSelected() && currentViewHasTracks()) {
             setLibraryFocus(FocusWidget::TracksTable);
         } else {
             // Otherwise toggle the sidebar item expanded state
@@ -1068,6 +1068,22 @@ void LibraryControl::slotGoToItem(double v) {
     default:
         setLibraryFocus(FocusWidget::TracksTable);
     }
+}
+
+bool LibraryControl::currentViewHasTracks() const {
+    // A leaf node does not always open a track list. A Rekordbox or ProLink
+    // device shows a summary of what is on the medium -- its name and counts --
+    // and handing focus to a table that is not there strands the encoder on a
+    // pane with nothing to move through, with no obvious way back to the tree.
+    if (!m_pLibraryWidget) {
+        return false;
+    }
+    WTrackTableView* pTrackTableView = m_pLibraryWidget->getCurrentTrackTableView();
+    if (!pTrackTableView) {
+        return false;
+    }
+    const QAbstractItemModel* pModel = pTrackTableView->model();
+    return pModel && pModel->rowCount() > 0;
 }
 
 void LibraryControl::slotSortColumn(double v) {
