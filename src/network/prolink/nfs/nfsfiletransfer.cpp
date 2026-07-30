@@ -30,6 +30,7 @@ void NfsFileTransfer::fetch(const QByteArray& handle,
     m_error.clear();
     m_reads = 0;
     m_shortReads = 0;
+    m_assembled = 0;
     m_timer.start();
 
     if (expectedSize == 0) {
@@ -71,6 +72,10 @@ void NfsFileTransfer::pump() {
                     }
                     const QByteArray& data = result.value.data;
                     m_chunks.insert(offset, data);
+                    m_assembled += static_cast<quint32>(data.size());
+                    if (m_progress) {
+                        m_progress(m_assembled, m_expectedSize);
+                    }
                     if (static_cast<quint32>(data.size()) < count &&
                             offset + static_cast<quint32>(data.size()) < m_expectedSize) {
                         m_shortReads++;

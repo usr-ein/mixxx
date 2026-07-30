@@ -1,5 +1,6 @@
 #include "library/prolink/prolinkdbwriter.h"
 
+#include <QCryptographicHash>
 #include <QSqlError>
 #include <QSqlQuery>
 
@@ -159,7 +160,8 @@ int writeMedium(QSqlDatabase& database,
             "INSERT OR REPLACE INTO %1 "
             "(rb_id, artist, title, album, year, genre, tracknumber, location, "
             " comment, duration, bitrate, bpm, key, rating, analyze_path, device, "
-            " color, artwork_path, coverart_source, coverart_type, coverart_location) "
+            " color, artwork_path, coverart_source, coverart_type, coverart_location, "
+            " coverart_digest) "
             "VALUES (:rb_id, :artist, :title, :album, :year, :genre, :tracknumber, "
             " :location, :comment, :duration, :bitrate, :bpm, :key, :rating, "
             " :analyze_path, :device, :color, :artwork_path, :coverart_source, "
@@ -209,6 +211,7 @@ int writeMedium(QSqlDatabase& database,
             insertTrack.bindValue(QStringLiteral(":coverart_type"),
                     static_cast<int>(CoverInfo::NONE));
             insertTrack.bindValue(QStringLiteral(":coverart_location"), QString());
+            insertTrack.bindValue(QStringLiteral(":coverart_digest"), QByteArray());
         } else {
             insertTrack.bindValue(QStringLiteral(":coverart_source"),
                     static_cast<int>(CoverInfo::GUESSED));
@@ -216,6 +219,20 @@ int writeMedium(QSqlDatabase& database,
                     static_cast<int>(CoverInfo::FILE));
             insertTrack.bindValue(QStringLiteral(":coverart_location"),
                     QString(localRoot + track.artworkPath));
+            // Without a cache key BaseSqlTableModel::getCoverInfo() returns an
+            // empty CoverInfo -- it reads type, source and location only
+            // `if (coverInfo.hasCacheKey())` -- so the column stays blank
+            // however correct the location is.
+            //
+            // The key is opaque: CoverArtCache uses it to index its pixmap
+            // cache and loads the image from coverLocation. So it can be
+            // derived from the artwork *path* rather than the image bytes,
+            // which matters because at this point the images have not been
+            // downloaded yet. Paths are unique per image on a medium, so two
+            // covers cannot collide.
+            insertTrack.bindValue(QStringLiteral(":coverart_digest"),
+                    QCryptographicHash::hash(
+                            track.artworkPath.toUtf8(), QCryptographicHash::Sha1));
         }
         if (!insertTrack.exec()) {
             LOG_FAILED_QUERY(insertTrack);

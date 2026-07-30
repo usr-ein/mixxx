@@ -3,7 +3,10 @@
 #include <QApplication>
 #include <QEventLoop>
 #include <QFile>
+#include <QFileInfo>
 #include <QTimer>
+
+#include "library/prolink/dlgprolinkfetch.h"
 
 #include "moc_prolinktrackfetcher.cpp"
 #include "network/prolink/prolinknetworkservice.h"
@@ -77,15 +80,45 @@ bool ProLinkTrackFetcher::fetchBlocking(const QByteArray& mac,
     });
     timeout.start();
 
+    // The ring. Indeterminate until the first bytes land, because the size is
+    // only known once GETATTR has answered and showing 0% before then would
+    // read as a stall.
+    mixxx::DlgProLinkFetch dialog(
+            QFileInfo(remotePath).fileName(), QApplication::activeWindow());
+    const auto progressConnection = connect(m_pNetwork,
+            &mixxx::prolink::ProLinkNetworkService::fileFetchProgress,
+            &dialog,
+            [&dialog, localPath](const QString& path, quint32 done, quint32 total) {
+                if (path != localPath) {
+                    return;
+                }
+                if (total == 0) {
+                    dialog.setIndeterminate();
+                } else {
+                    dialog.setProgress(static_cast<double>(done) / total);
+                }
+            });
+
+    // Shown after a short delay, so a track already cached -- or one that
+    // arrives quickly -- never flashes a dialog.
+    QTimer showTimer;
+    showTimer.setSingleShot(true);
+    connect(&showTimer, &QTimer::timeout, &dialog, [&dialog]() { dialog.show(); });
+    showTimer.start(250);
+
     // Priority: the user is watching this one, and a few hundred cover images
     // may already be queued ahead of it.
     m_pNetwork->fetchFile(mac, slot, remotePath, localPath, true);
 
     // ExcludeUserInputEvents: during the loop the user must not be able to
     // click another feature or double-click a second track, because the model
-    // index the caller is mid-call on would be invalidated underneath it. Mixxx
-    // still repaints, so the window does not appear frozen.
+    // index the caller is mid-call on would be invalidated underneath it. The
+    // dialog above still paints and animates, so the freeze is visible as
+    // progress rather than as a hang.
     loop.exec(QEventLoop::ExcludeUserInputEvents);
+    showTimer.stop();
+    disconnect(progressConnection);
+    dialog.close();
 
     disconnect(connection);
     m_busy = false;

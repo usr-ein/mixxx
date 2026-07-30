@@ -319,6 +319,14 @@ void ProLinkNetworkService::runFileRequest(const FileRequest& request) {
     auto withRoot = [this, request, key, localPath, finish](const QByteArray& rootHandle) {
         nfs::NfsV2Client* pClient = m_mounts.value(key).pClient;
         auto* pTransfer = new nfs::NfsFileTransfer(pClient, pClient);
+        pTransfer->setProgressCallback([this, localPath](quint32 done, quint32 total) {
+            QMetaObject::invokeMethod(
+                    this,
+                    [this, localPath, done, total] {
+                        emit fileFetchProgress(localPath, done, total);
+                    },
+                    Qt::QueuedConnection);
+        });
         pClient->resolvePath(rootHandle,
                 request.remotePath,
                 [this, pClient, pTransfer, localPath, finish](

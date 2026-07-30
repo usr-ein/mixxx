@@ -20,14 +20,12 @@ namespace nfs {
 /// less in practice, because each reply must be fully processed before the next
 /// request leaves. A small window of concurrent reads removes that.
 ///
-/// **Chunk size.** Real players use 8192, the NFSv2 maximum, and rely on IP
-/// fragmentation to carry it over a 1500-byte MTU (F19). We default to 1280 —
-/// under the MTU, so no fragmentation, measured at 1459 KiB/s in the Python
-/// proof of concept. That is 6.4x the round trips a real player uses and still
-/// fast enough: the database is a one-off and a track download is bounded by the
-/// link, not by us. The conservative default matters because this shares a
-/// 100 Mbit link with the CDJs' own linked playback, where a stall is somebody's
-/// audio dropout.
+/// **Chunk size: 8192**, the NFSv2 maximum and what real players use, relying on
+/// IP fragmentation to carry it over a 1500-byte MTU (F19). An earlier default
+/// of 1280 stayed under the MTU and measured 1459 KiB/s, but that is 6.4x the
+/// round trips a player itself makes, and a track load on this link is bound by
+/// latency rather than bandwidth. Since a CDJ does exactly this to its peers all
+/// day, matching it is not the rude choice it might appear.
 ///
 /// Out-of-order replies are normal on UDP and are reassembled by offset.
 class NfsFileTransfer : public QObject {
@@ -47,6 +45,13 @@ class NfsFileTransfer : public QObject {
         int shortReads = 0;
     };
     using Callback = std::function<void(const Result&)>;
+    /// Bytes assembled so far, and the total expected. Emitted as replies
+    /// arrive, so it can jump by a window's worth at a time.
+    using ProgressCallback = std::function<void(quint32 done, quint32 total)>;
+
+    void setProgressCallback(ProgressCallback callback) {
+        m_progress = std::move(callback);
+    }
 
     NfsFileTransfer(NfsV2Client* pClient, QObject* parent = nullptr);
 
@@ -81,11 +86,20 @@ class NfsFileTransfer : public QObject {
     bool m_done = false;
     QString m_error;
 
+    ProgressCallback m_progress;
+    quint32 m_assembled = 0;
+
     QElapsedTimer m_timer;
     int m_reads = 0;
     int m_shortReads = 0;
 
-    quint32 m_chunkSize = 1280;
+    /// 8192 is the NFSv2 maximum and what real players use, relying on IP
+    /// fragmentation to carry it over a 1500-byte MTU (F19). We defaulted to
+    /// 1280 to stay under the MTU, which cost 6.4x the round trips for no
+    /// measured benefit -- and on this link a track load is latency-bound, not
+    /// bandwidth-bound. Reverting to 1280 is a one-line change if fragmentation
+    /// ever turns out to matter on a busier network.
+    quint32 m_chunkSize = 8192;
     int m_window = 4;
 };
 

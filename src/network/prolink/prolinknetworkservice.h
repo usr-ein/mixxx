@@ -126,6 +126,8 @@ class ProLinkNetworkService : public QObject {
             const QString& error);
     /// Result of fetchFile(). *error* is empty on success.
     void fileFetched(const QString& localPath, const QString& error);
+    /// Bytes so far and total, for whatever is waiting on that file.
+    void fileFetchProgress(const QString& localPath, quint32 done, quint32 total);
 
   private slots:
     void onDeviceFound(const mixxx::prolink::ProLinkDevice& device);
