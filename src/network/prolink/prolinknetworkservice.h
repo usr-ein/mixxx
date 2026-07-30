@@ -76,6 +76,15 @@ class ProLinkNetworkService : public QObject {
     bool isListening() const {
         return m_listening;
     }
+    /// The player number we have claimed, or 0 while the handshake is still
+    /// running or if it failed. Everything dbserver needs this to be non-zero.
+    int announcedNumber() const {
+        return m_announcedNumber;
+    }
+    /// Human-readable announcer state, for the preferences pane.
+    QString announceDetail() const {
+        return m_announceDetail;
+    }
     /// Empty unless the socket could not be bound.
     QString lastError() const {
         return m_lastError;
@@ -138,6 +147,8 @@ class ProLinkNetworkService : public QObject {
     /// Emitted once the socket is up, or once it has failed to come up, so the
     /// UI can say which without polling.
     void listeningChanged(bool listening, const QString& error);
+    /// We claimed a number, lost one, or gave up trying.
+    void announceChanged(int deviceNumber, const QString& detail);
     /// The result of fetchDatabase(). *error* is empty on success.
     void databaseFetched(const QByteArray& mac,
             mixxx::prolink::MediaSlot slot,
@@ -155,6 +166,7 @@ class ProLinkNetworkService : public QObject {
     void onDeviceFound(const mixxx::prolink::ProLinkDevice& device);
     void onDeviceChanged(const mixxx::prolink::ProLinkDevice& device);
     void onDeviceLost(const QByteArray& mac);
+    void onAnnounceStateChanged(int state, int deviceNumber, const QString& detail);
 
   private:
     void fetchOnNetworkThread(const ProLinkDevice& device, MediaSlot slot);
@@ -243,6 +255,11 @@ class ProLinkNetworkService : public QObject {
 
     bool m_listening = false;
     QString m_lastError;
+
+    /// GUI-thread mirror of the announcer's claimed number. Pushed to us rather
+    /// than read across, like the peer table above.
+    int m_announcedNumber = 0;
+    QString m_announceDetail;
 };
 
 } // namespace prolink

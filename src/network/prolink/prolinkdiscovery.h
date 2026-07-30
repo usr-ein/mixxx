@@ -14,17 +14,19 @@ class QTimer;
 namespace mixxx {
 namespace prolink {
 
+class ProLinkVirtualCdj;
+
 /// Listens on UDP 50000 and maintains the table of devices on the network.
 ///
-/// **Entirely passive: this class never transmits.** Discovery works by
-/// listening to broadcasts every player already sends, so Mixxx can be plugged
-/// into a live rig with no risk whatsoever of contending for a device number or
-/// confusing a peer. Announcing is a separate, later, opt-in component.
+/// Listening is passive: discovery works off broadcasts every player already
+/// sends, so the table costs nothing and risks nothing. Transmitting is the
+/// separate concern of ProLinkVirtualCdj, which this class owns and lends its
+/// socket to — replies to a claim are unicast to port 50000, so the announcer
+/// must send from the port we are listening on or it never hears the answer.
 ///
-/// The cost of passivity is that slot occupancy is invisible: a player unicasts
-/// status only to peers that have announced themselves (F21), and media presence
-/// is published there and nowhere else (F20). So this reports *which devices
-/// exist*, not what is in them.
+/// Announcing is not optional for browsing another player's media: dbserver
+/// validates the device number in every request, and a borrowed one fails
+/// silently (the target accepts the handshake and then ignores everything).
 ///
 /// Lives on the network thread. Everything it emits is a value type, so the
 /// signals cross to the GUI thread as plain copies.
@@ -60,7 +62,18 @@ class ProLinkDiscovery : public QObject {
     /// removal grace period. Bound to the `[ProLink],refresh` control.
     void forgetStaleDevices();
 
+    /// Start claiming a player number, on the interface the first player was
+    /// seen on. A no-op if already announcing, or if no player has been seen
+    /// yet — we will not broadcast DJ-Link onto a network we have no evidence
+    /// is the rig's.
+    void startAnnouncing();
+    /// Our claimed number, or 0 if we have not (yet) got one.
+    int announcedNumber() const;
+    QString announceStatus() const;
+
   signals:
+    /// The announcer changed state: claiming, active with a number, or failed.
+    void announceStateChanged(int state, int deviceNumber, const QString& detail);
     /// A device we had not seen before, or one that had been removed and is back.
     void deviceFound(const mixxx::prolink::ProLinkDevice& device);
     /// An existing device whose number, address or online state changed. Not
@@ -82,6 +95,9 @@ class ProLinkDiscovery : public QObject {
     /// Ownership is Qt's -- they die with this object, on its own thread.
     QUdpSocket* m_pSocket = nullptr;
     QTimer* m_pReaper = nullptr;
+    /// Created with the socket, started separately. Owned here because it needs
+    /// that socket and must not outlive it.
+    ProLinkVirtualCdj* m_pVirtualCdj = nullptr;
     /// Keyed on MAC. See the note in ProLinkDevice about why not on number.
     QHash<QByteArray, ProLinkDevice> m_devices;
     /// Which devices we have already told the world are stale, so the "went

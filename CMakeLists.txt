@@ -1080,6 +1080,7 @@ add_library(mixxx-lib STATIC EXCLUDE_FROM_ALL
   src/network/prolink/rpc/xdrbuffer.cpp
   src/network/prolink/prolinknetworkservice.cpp
   src/network/prolink/prolinkpacket.cpp
+  src/network/prolink/prolinkvirtualcdj.cpp
   src/network/webtask.cpp
   src/preferences/colorpaletteeditor.cpp
   src/preferences/colorpaletteeditor.cpp
@@ -2136,6 +2137,7 @@ if(BUILD_TESTING)
     src-mixxx-test
     src/test/analyserwaveformtest.cpp
     src/test/analyzersilence_test.cpp
+    src/test/prolink_announce_test.cpp
     src/test/prolink_dbserver_test.cpp
     src/test/prolink_pdb_test.cpp
     src/test/prolink_rpc_test.cpp

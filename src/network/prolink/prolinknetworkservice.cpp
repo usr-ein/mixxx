@@ -127,6 +127,10 @@ void ProLinkNetworkService::start() {
             &ProLinkDiscovery::deviceLost,
             this,
             &ProLinkNetworkService::onDeviceLost);
+    connect(m_pDiscovery,
+            &ProLinkDiscovery::announceStateChanged,
+            this,
+            &ProLinkNetworkService::onAnnounceStateChanged);
 
     m_pThread->start();
 
@@ -295,35 +299,16 @@ void ProLinkNetworkService::fetchFile(const QByteArray& mac,
 }
 
 int ProLinkNetworkService::pickRequesterNumber(const ProLinkDevice& target) const {
-    // Prefer a real player. The documented rule is that the number must belong
-    // to a device actually on the network and must not be the player being
-    // asked, so borrowing the other deck's number is the safe answer -- and on
-    // the two-deck rig there always is one.
-    for (const ProLinkDevice& device : m_devices) {
-        if (device.mac == target.mac || !device.online || !device.isPlayer()) {
-            continue;
-        }
-        if (device.deviceNumber >= kMinPlayerNumber &&
-                device.deviceNumber <= kMaxPlayerNumber) {
-            return device.deviceNumber;
-        }
-    }
-
-    // Nobody to borrow from: one player on the network, or the only other one is
-    // a mixer. Rather than refuse, take the lowest number in range that is not
-    // the target's and try it. The "must be present on the network" half of the
-    // rule is second-hand -- it comes from Beat Link's notes, not from anything
-    // we have watched a deck enforce -- so this is worth an attempt, and a
-    // refusal here is one clear error rather than a silent absence of covers.
-    for (int number = kMinPlayerNumber; number <= kMaxPlayerNumber; ++number) {
-        if (number != target.deviceNumber) {
-            kLogger.info() << "no other player to borrow a device number from;"
-                           << "claiming" << number << "to" << target.label()
-                           << "-- unverified, watch for a refusal";
-            return number;
-        }
-    }
-    return 0;
+    Q_UNUSED(target);
+    // Our own, claimed through the virtual CDJ. Nothing else works.
+    //
+    // Borrowing another deck's number was the previous answer and it fails in
+    // the worst available way: the target accepts the Introduce and then
+    // silently ignores every request, because that number already has a session
+    // with it. Deck A browsing deck B's USB is enough to poison it -- covers
+    // load from one deck and not the other, with nothing in the log but a
+    // timeout. See research/04 section 2.3, fourth bullet.
+    return m_announcedNumber;
 }
 
 void ProLinkNetworkService::fetchArtwork(const QByteArray& mac,
@@ -351,11 +336,11 @@ void ProLinkNetworkService::fetchArtwork(const QByteArray& mac,
 
     const int requesterNumber = pickRequesterNumber(target);
     if (requesterNumber == 0) {
-        // Not a failure worth a per-image error: it is a property of the network
-        // (only one player on it) and it will be the same answer for every cover
-        // on the medium. Reported once, by the caller counting these.
-        emit artworkFetched(localPath,
-                tr("no other player to borrow a device number from"));
+        // We have not finished claiming a number. Transient -- the handshake
+        // takes about four seconds from the first keep-alive we hear -- so this
+        // is not an error so much as "too early", and the medium's next browse
+        // will pick the covers up.
+        emit artworkFetched(localPath, tr("not announced yet"));
         return;
     }
 
@@ -735,7 +720,30 @@ void ProLinkNetworkService::onFetchFinished(const QByteArray& mac,
 
 void ProLinkNetworkService::onDeviceFound(const ProLinkDevice& device) {
     m_devices.append(device);
+    // First player seen is also the first moment we know which NIC faces the
+    // rig, and announcing needs that: the deck Pi has eth0 on the CDJ network
+    // and wlan0 on the house LAN, and a broadcast out the wrong one is both
+    // useless and rude. Idempotent, so calling it per device is fine.
+    if (m_pDiscovery && device.isPlayer()) {
+        ProLinkDiscovery* pDiscovery = m_pDiscovery;
+        QMetaObject::invokeMethod(
+                m_pDiscovery,
+                [pDiscovery] { pDiscovery->startAnnouncing(); },
+                Qt::QueuedConnection);
+    }
     emit deviceFound(device);
+}
+
+void ProLinkNetworkService::onAnnounceStateChanged(
+        int state, int deviceNumber, const QString& detail) {
+    m_announcedNumber = deviceNumber;
+    m_announceDetail = detail;
+    emit announceChanged(deviceNumber, detail);
+    if (deviceNumber > 0) {
+        kLogger.info() << "announcing as device" << deviceNumber
+                       << "- dbserver requests will use it";
+    }
+    Q_UNUSED(state);
 }
 
 void ProLinkNetworkService::onDeviceChanged(const ProLinkDevice& device) {

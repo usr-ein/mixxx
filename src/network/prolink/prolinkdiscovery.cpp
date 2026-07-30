@@ -7,6 +7,7 @@
 
 #include "moc_prolinkdiscovery.cpp"
 #include "network/prolink/prolinkpacket.h"
+#include "network/prolink/prolinkvirtualcdj.h"
 #include "util/assert.h"
 #include "util/logger.h"
 
@@ -31,6 +32,11 @@ bool ProLinkDiscovery::start() {
                 &QUdpSocket::readyRead,
                 this,
                 &ProLinkDiscovery::readPendingDatagrams);
+        m_pVirtualCdj = new ProLinkVirtualCdj(m_pSocket, this);
+        connect(m_pVirtualCdj,
+                &ProLinkVirtualCdj::stateChanged,
+                this,
+                &ProLinkDiscovery::announceStateChanged);
     }
 
     // ShareAddress | ReuseAddressHint so we coexist with anything else already
@@ -64,6 +70,12 @@ bool ProLinkDiscovery::start() {
 }
 
 void ProLinkDiscovery::stop() {
+    if (m_pVirtualCdj) {
+        // Before the socket closes: the announcer writes to it on a timer, and
+        // a tick landing on a closed socket would log a warning per second for
+        // the rest of shutdown.
+        m_pVirtualCdj->stop();
+    }
     if (m_pReaper) {
         m_pReaper->stop();
     }
@@ -107,8 +119,24 @@ void ProLinkDiscovery::readPendingDatagrams() {
         const QNetworkDatagram datagram = m_pSocket->receiveDatagram();
         const QByteArray data = datagram.data();
 
+        // Offered to the announcer first, and unconditionally: conflicts and
+        // claims identify nobody, so parseAnnouncement rejects them, but they
+        // are exactly the packets a claim in progress turns on.
+        if (m_pVirtualCdj) {
+            m_pVirtualCdj->handleDatagram(data, datagram.senderAddress());
+        }
+
         ProLinkDevice device;
         if (!packet::parseAnnouncement(data, &device)) {
+            continue;
+        }
+
+        // Our own broadcasts come back to us on this socket. Without this we
+        // appear in our own sidebar as another CDJ -- offering to browse
+        // ourselves, over a network round trip -- and we inflate the peer count
+        // we then advertise in every keep-alive.
+        if (m_pVirtualCdj && device.mac == m_pVirtualCdj->mac() &&
+                !device.mac.isEmpty()) {
             continue;
         }
 
@@ -120,6 +148,14 @@ void ProLinkDiscovery::readPendingDatagrams() {
             device.address = datagram.senderAddress();
         }
         device.interfaceName = interfaceForAddress(device.address);
+
+        if (m_pVirtualCdj) {
+            // Feeds the pre-scan. A number seen in use is never free, however
+            // quiet its holder is afterwards -- XDJ-XZ and Opus Quad do not
+            // defend theirs at all, so silence proves nothing.
+            m_pVirtualCdj->noteNumberInUse(device.deviceNumber);
+            m_pVirtualCdj->setPeerCount(m_devices.size() + 1);
+        }
 
         auto existing = m_devices.find(device.mac);
         if (existing == m_devices.end()) {
@@ -197,6 +233,50 @@ void ProLinkDiscovery::forgetStaleDevices() {
         m_reportedStale.remove(mac);
         emit deviceLost(mac);
     }
+}
+
+
+void ProLinkDiscovery::startAnnouncing() {
+    if (!m_pVirtualCdj || !isListening()) {
+        return;
+    }
+    // Announce on the interface a player was actually seen on. Guessing would
+    // mean broadcasting DJ-Link onto the house LAN on a multi-homed host, which
+    // is the deck Pi's normal configuration.
+    QString interfaceName;
+    int peers = 0;
+    for (auto it = m_devices.constBegin(); it != m_devices.constEnd(); ++it) {
+        if (!it->online) {
+            continue;
+        }
+        ++peers;
+        if (interfaceName.isEmpty() && !it->interfaceName.isEmpty()) {
+            interfaceName = it->interfaceName;
+        }
+    }
+    if (interfaceName.isEmpty()) {
+        kLogger.info() << "not announcing yet: no player seen, so no interface to"
+                       << "announce on";
+        return;
+    }
+    m_pVirtualCdj->start(interfaceName, peers);
+
+    // We may have already admitted ourselves: start() is the first moment our
+    // own MAC is known, and on a restart our previous keep-alives can still be
+    // in flight.
+    const QByteArray ownMac = m_pVirtualCdj->mac();
+    if (!ownMac.isEmpty() && m_devices.remove(ownMac) > 0) {
+        m_reportedStale.remove(ownMac);
+        emit deviceLost(ownMac);
+    }
+}
+
+int ProLinkDiscovery::announcedNumber() const {
+    return m_pVirtualCdj ? m_pVirtualCdj->deviceNumber() : 0;
+}
+
+QString ProLinkDiscovery::announceStatus() const {
+    return m_pVirtualCdj ? m_pVirtualCdj->stateName() : QStringLiteral("off");
 }
 
 } // namespace prolink

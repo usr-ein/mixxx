@@ -125,6 +125,190 @@ bool parseAnnouncement(const QByteArray& datagram, ProLinkDevice* pDevice) {
     return true;
 }
 
+int packetType(const QByteArray& datagram) {
+    if (!hasMagic(datagram)) {
+        return -1;
+    }
+    return static_cast<quint8>(datagram.at(kOffsetType));
+}
+
+bool parseContestedNumber(const QByteArray& datagram, int* pNumber) {
+    VERIFY_OR_DEBUG_ASSERT(pNumber) {
+        return false;
+    }
+    if (!hasMagic(datagram)) {
+        return false;
+    }
+    try {
+        const std::string buffer(datagram.constData(), datagram.size());
+        kaitai::kstream stream(buffer);
+        prolink_djl_t parsed(&stream);
+        switch (parsed.packet_type()) {
+        case prolink_djl_t::PACKET_TYPE_CLAIM_IP:
+            *pNumber = static_cast<prolink_djl_t::claim_ip_body_t*>(parsed.body())
+                               ->device_number();
+            return true;
+        case prolink_djl_t::PACKET_TYPE_CLAIM_NUMBER:
+            *pNumber = static_cast<prolink_djl_t::number_body_t*>(parsed.body())
+                               ->device_number();
+            return true;
+        case prolink_djl_t::PACKET_TYPE_NUMBER_CONFLICT:
+            *pNumber = static_cast<prolink_djl_t::number_conflict_body_t*>(
+                    parsed.body())
+                               ->device_number();
+            return true;
+        default:
+            return false;
+        }
+    } catch (const std::exception&) {
+        return false;
+    } catch (...) {
+        return false;
+    }
+}
+
+// -- builders --------------------------------------------------------------
+
+namespace {
+
+/// The common 0x24-byte header, inside a zeroed buffer of *length*.
+///
+/// The `stype` byte at 0x23 equals the whole datagram length for every type we
+/// have captured. research/02 lists claim_number as stype 0x26 but length 0x2a,
+/// which would leave four undescribed trailing bytes; six real ones in the
+/// dysentery captures are 0x26 bytes long, so the table's length column is
+/// simply wrong there (C2).
+QByteArray header(quint8 type, const QString& name, DeviceKind kind, int length) {
+    QByteArray out(length, '\0');
+    out.replace(0, kMagicLength, QByteArray::fromRawData(kMagic, kMagicLength));
+    out[kOffsetType] = static_cast<char>(type);
+    // 0x0b subtype stays 0: nonzero only marks a directed mixer reply, which is
+    // a flow we do not participate in.
+
+    // NUL-padded to exactly 20 bytes, and truncated rather than allowed to
+    // overrun -- the padding is part of what makes an announcement look real
+    // (F1), and the name is the first thing a DJ sees on the deck's screen.
+    const QByteArray ascii = name.toLatin1().left(kDeviceNameLength);
+    out.replace(kOffsetName, ascii.size(), ascii);
+
+    out[kOffsetConstOne] = 0x01;
+    out[kOffsetDeviceKind] = static_cast<char>(kind);
+    // 0x22 pad stays 0.
+    out[kOffsetStype] = static_cast<char>(length);
+    return out;
+}
+
+/// 0x01 for a CDJ, 0x02 for a mixer. Recurs at 0x30 in the stage-2 claim and at
+/// 0x34 in the keep-alive, tracking the device kind in both.
+quint8 roleFor(DeviceKind kind) {
+    return kind == DeviceKind::Mixer ? 0x02 : 0x01;
+}
+
+void putIp(QByteArray* pOut, int offset, const QHostAddress& ip) {
+    const quint32 value = ip.toIPv4Address();
+    (*pOut)[offset] = static_cast<char>((value >> 24) & 0xFF);
+    (*pOut)[offset + 1] = static_cast<char>((value >> 16) & 0xFF);
+    (*pOut)[offset + 2] = static_cast<char>((value >> 8) & 0xFF);
+    (*pOut)[offset + 3] = static_cast<char>(value & 0xFF);
+}
+
+void putMac(QByteArray* pOut, int offset, const QByteArray& mac) {
+    pOut->replace(offset, qMin(mac.size(), 6), mac.left(6));
+}
+
+} // namespace
+
+QByteArray buildHello(const QString& name, DeviceKind kind) {
+    QByteArray out = header(static_cast<quint8>(PacketType::Hello), name, kind, 0x25);
+    out[0x24] = static_cast<char>(kind == DeviceKind::Mixer ? 0x02 : 0x01);
+    return out;
+}
+
+QByteArray buildClaimMac(const QString& name,
+        DeviceKind kind,
+        int iteration,
+        const QByteArray& mac) {
+    QByteArray out =
+            header(static_cast<quint8>(PacketType::ClaimMac), name, kind, 0x2C);
+    out[0x24] = static_cast<char>(iteration);
+    out[0x25] = static_cast<char>(roleFor(kind));
+    putMac(&out, 0x26, mac);
+    return out;
+}
+
+QByteArray buildClaimIp(const QString& name,
+        DeviceKind kind,
+        const QHostAddress& ip,
+        const QByteArray& mac,
+        int deviceNumber,
+        int iteration) {
+    QByteArray out =
+            header(static_cast<quint8>(PacketType::ClaimIp), name, kind, 0x32);
+    putIp(&out, 0x24, ip);
+    putMac(&out, 0x28, mac);
+    out[0x2E] = static_cast<char>(deviceNumber);
+    out[0x2F] = static_cast<char>(iteration);
+    // 0x30 is the CDJ/mixer role byte, not the "const 01" research/02 calls it:
+    // a real DJM-2000nexus sends 02 here where a CDJ-2000nexus sends 01 (C1).
+    out[0x30] = static_cast<char>(roleFor(kind));
+    // 0x31 assignment mode. 01 = we picked the number ourselves, which is what
+    // we do even in AUTO: "auto" here means we chose a free one after watching,
+    // not that we asked a mixer to allocate one (that is the 02 flow, and it
+    // needs a mixer to answer).
+    out[0x31] = 0x01;
+    return out;
+}
+
+QByteArray buildClaimNumber(const QString& name,
+        DeviceKind kind,
+        int deviceNumber,
+        int iteration) {
+    QByteArray out =
+            header(static_cast<quint8>(PacketType::ClaimNumber), name, kind, 0x26);
+    out[0x24] = static_cast<char>(deviceNumber);
+    out[0x25] = static_cast<char>(iteration);
+    return out;
+}
+
+QByteArray buildKeepAlive(const QString& name,
+        DeviceKind kind,
+        int deviceNumber,
+        const QByteArray& mac,
+        const QHostAddress& ip,
+        int peerCount,
+        bool firstOnNetwork) {
+    QByteArray out =
+            header(static_cast<quint8>(PacketType::KeepAlive), name, kind, 0x36);
+    out[0x24] = static_cast<char>(deviceNumber);
+    // 0x25 is latched at boot: 02 if we were first on the network, 01 if peers
+    // were already there. Six observed boots, no exceptions (F9). Documented
+    // elsewhere as a CDJ/mixer role byte, which real captures contradict (C4).
+    out[0x25] = static_cast<char>(firstOnNetwork ? 0x02 : 0x01);
+    putMac(&out, 0x26, mac);
+    putIp(&out, 0x2C, ip);
+    // Includes ourselves.
+    out[0x30] = static_cast<char>(peerCount);
+    // 0x31-0x33 stay zero.
+    out[0x34] = static_cast<char>(roleFor(kind));
+    // 0x35: research/02 calls 01 the "typical CDJ keep-alive" value, but every
+    // real nexus packet captured -- 148 from a CDJ-2000nexus and 91 from a
+    // DJM-2000nexus -- carries 00, and looking like a CDJ-2000nexus is the whole
+    // point (C3). 0x64 is what CDJ-3000 coexistence would need instead.
+    out[0x35] = 0x00;
+    return out;
+}
+
+QByteArray buildNumberConflict(const QString& name,
+        DeviceKind kind,
+        int deviceNumber,
+        const QHostAddress& ip) {
+    QByteArray out =
+            header(static_cast<quint8>(PacketType::NumberConflict), name, kind, 0x29);
+    out[0x24] = static_cast<char>(deviceNumber);
+    putIp(&out, 0x25, ip);
+    return out;
+}
+
 } // namespace packet
 } // namespace prolink
 } // namespace mixxx

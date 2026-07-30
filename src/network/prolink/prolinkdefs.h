@@ -51,6 +51,40 @@ constexpr int kMagicLength = 10;
 /// casing, captured literally rather than inferred (F1).
 constexpr int kDeviceNameLength = 20;
 
+/// Offsets within the 0x24-byte common header shared by every UDP-50000 type.
+///
+/// Reading is done by the generated Kaitai parser, which carries these in the
+/// schema; they are repeated here for the *builders*, which cannot be generated
+/// because Kaitai emits no C++ serializers. The unit tests round-trip a built
+/// packet back through the generated parser, so the two cannot drift apart
+/// without something going red.
+constexpr int kOffsetType = 0x0A;
+constexpr int kOffsetSubtype = 0x0B;
+constexpr int kOffsetName = 0x0C;
+constexpr int kOffsetConstOne = 0x20;
+constexpr int kOffsetDeviceKind = 0x21;
+constexpr int kOffsetPad = 0x22;
+/// Equals the whole datagram length for every type we have captured (C2).
+constexpr int kOffsetStype = 0x23;
+/// First byte of the type-specific payload; also the common-header length.
+constexpr int kHeaderLength = 0x24;
+
+/// The name we announce ourselves under.
+///
+/// A real model name, because a deck that does not recognise the string may not
+/// offer us as a source at all — and because impersonating a CDJ-2000nexus is
+/// what every other byte of our announcement is doing. The exact casing is
+/// captured, not guessed (F1).
+constexpr char kVirtualCdjName[] = "CDJ-2000nexus";
+
+/// Handshake packet spacing, and how long to watch before claiming a number.
+///
+/// The pre-scan is not optional: XDJ-XZ and Opus Quad do not defend their
+/// numbers with conflict packets, so silence is not evidence a number is free —
+/// only having watched for a while is.
+constexpr int kHandshakeIntervalMs = 300;
+constexpr int kPrescanMs = 2500;
+
 /// Smallest datagram that can carry a complete header, on either port layout.
 constexpr int kMinPacketLength = 0x25;
 
