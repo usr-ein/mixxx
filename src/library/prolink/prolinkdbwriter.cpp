@@ -165,8 +165,16 @@ int writeMedium(QSqlDatabase& database,
             "VALUES (:rb_id, :artist, :title, :album, :year, :genre, :tracknumber, "
             " :location, :comment, :duration, :bitrate, :bpm, :key, :rating, "
             " :analyze_path, :device, :color, :artwork_path, :coverart_source, "
-            " :coverart_type, :coverart_location)")
+            " :coverart_type, :coverart_location, :coverart_digest)")
                                 .arg(kProLinkLibraryTable));
+    // prepare() returning false is how a malformed statement announces itself,
+    // and ignoring it is how a column list that had drifted out of step with its
+    // placeholders turned into "wrote 0 tracks" and an empty library, once per
+    // row, with only a debug-level warning to show for it.
+    VERIFY_OR_DEBUG_ASSERT(insertTrack.lastError().type() == QSqlError::NoError) {
+        LOG_FAILED_QUERY(insertTrack) << "could not prepare the track insert";
+        return 0;
+    }
 
     // rb_id -> our row id, so playlist entries can be resolved without a query
     // per entry. A 651-track medium with a 40-entry playlist is small, but the
@@ -295,7 +303,16 @@ int writeMedium(QSqlDatabase& database,
         addPlaylist(playlist.name, playlist.trackIds);
     }
 
-    kLogger.info() << "wrote" << rowIds.size() << "tracks for" << deviceKey;
+    if (rowIds.isEmpty() && !contents.tracks.isEmpty()) {
+        // Every row failed. Loud, because the visible symptom -- an empty track
+        // list -- looks identical to a medium that genuinely has no tracks, and
+        // the two want completely different investigations.
+        kLogger.warning() << "wrote NO tracks for" << deviceKey << "despite"
+                          << contents.tracks.size()
+                          << "parsed; the insert is failing, see the query above";
+    } else {
+        kLogger.info() << "wrote" << rowIds.size() << "tracks for" << deviceKey;
+    }
     return rowIds.size();
 }
 
