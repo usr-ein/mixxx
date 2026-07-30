@@ -3,6 +3,9 @@
 #include <QDir>
 #include <QFile>
 
+#include "library/dao/analysisdao.h"
+#include "library/trackcollection.h"
+#include "library/trackcollectionmanager.h"
 #include "track/track.h"
 
 #include "library/prolink/prolinkdbwriter.h"
@@ -135,7 +138,9 @@ TrackPointer ProLinkPlaylistModel::getTrack(const QModelIndex& index) const {
         // once the files are on local disk the two cases are identical, and the
         // beats are tagged with rekordbox's subversion so Mixxx's own analyzer
         // will not overwrite the grid.
-        mixxx::rekordbox::applyAnalysis(pTrack, analyzePathForRow(index));
+        mixxx::rekordbox::applyAnalysis(pTrack,
+                analyzePathForRow(index),
+                &m_pTrackCollectionManager->internalCollection()->getAnalysisDAO());
 
         const QString artworkRemote = artworkPathForRow(index);
         const QString artworkLocal = artworkRemote.isEmpty()

@@ -6,6 +6,8 @@
 #include "track/track_decl.h"
 #include "util/color/rgbcolor.h"
 
+class AnalysisDao;
+
 /// Reading rekordbox ANLZ side-files onto a Track: beat grid, hot cues, loops,
 /// memory cues and the track colour.
 ///
@@ -50,7 +52,11 @@ int timingOffsetForFile(const QString& location);
 /// *anlzPath* is the `.DAT`; the `.EXT` is derived from it. Callers that have
 /// both files locally should use this rather than calling readAnalyze directly,
 /// so the "grids only from the legacy file" rule lives in one place.
-void applyAnalysis(TrackPointer track, const QString& anlzPath);
+/// *pAnalysisDao* is optional and used only to persist an imported waveform; see
+/// rekordboxwaveform.h. Without it the waveform still applies for this session.
+void applyAnalysis(TrackPointer track,
+        const QString& anlzPath,
+        AnalysisDao* pAnalysisDao = nullptr);
 
 } // namespace rekordbox
 } // namespace mixxx

@@ -10,6 +10,7 @@
 #include <fstream>
 
 #include "library/rekordbox/rekordboxconstants.h"
+#include "library/rekordbox/rekordboxwaveform.h"
 #include "track/beats.h"
 #include "track/cue.h"
 #include "track/track.h"
@@ -424,7 +425,9 @@ int timingOffsetForFile(const QString& location) {
     return timingOffset;
 }
 
-void applyAnalysis(TrackPointer track, const QString& anlzPath) {
+void applyAnalysis(TrackPointer track,
+        const QString& anlzPath,
+        AnalysisDao* pAnalysisDao) {
     if (!track || anlzPath.isEmpty()) {
         return;
     }
@@ -438,6 +441,9 @@ void applyAnalysis(TrackPointer track, const QString& anlzPath) {
         // grid comes from the .DAT and everything else from the .EXT.
         readAnalyzeFile(track, sampleRate, timingOffset, true, anlzPath);
         readAnalyzeFile(track, sampleRate, timingOffset, false, anlzPathExt);
+        // The waveform too, which is what otherwise makes Mixxx decode the whole
+        // file after everything else has already been imported.
+        importWaveforms(track, anlzPathExt, pAnalysisDao);
     } else {
         readAnalyzeFile(track, sampleRate, timingOffset, false, anlzPath);
     }

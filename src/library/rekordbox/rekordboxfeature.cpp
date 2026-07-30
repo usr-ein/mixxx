@@ -20,6 +20,7 @@
 #include "library/coverart.h"
 #include "library/rekordbox/rekordboxanalysis.h"
 #include "library/rekordbox/rekordboxconstants.h"
+#include "library/dao/analysisdao.h"
 #include "library/trackcollection.h"
 #include "library/trackcollectionmanager.h"
 #include "library/treeitem.h"
@@ -1015,7 +1016,8 @@ TrackPointer RekordboxPlaylistModel::getTrack(const QModelIndex& index) const {
 
     mixxx::rekordbox::applyAnalysis(track,
             getFieldVariant(index, ColumnCache::COLUMN_REKORDBOX_ANALYZE_PATH)
-                    .toString());
+                    .toString(),
+            &m_pTrackCollectionManager->internalCollection()->getAnalysisDAO());
 
     // Assume that the key of the file the has been analyzed in Recordbox is correct
     // and prevent the AnalyzerKey from re-analyzing.
