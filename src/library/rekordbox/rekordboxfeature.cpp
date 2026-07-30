@@ -28,6 +28,7 @@
 #include "track/beats.h"
 #include "track/cue.h"
 #include "track/keyfactory.h"
+#include "track/keyutils.h"
 #include "track/track.h"
 #include "util/color/color.h"
 #include "util/db/dbconnectionpooled.h"
@@ -70,6 +71,13 @@ bool createLibraryTable(QSqlDatabase& database, const QString& tableName) {
             "    bitrate TEXT,"
             "    bpm FLOAT,"
             "    key TEXT,"
+            // Camelot notation *and* Camelot sorting both key off this, not off
+            // the key text: ColumnCache builds an ORDER BY over key_id from the
+            // notation preference. Without the column that clause names a field
+            // the table does not have, the SELECT fails outright, and the whole
+            // list comes back empty -- which is what switching the deck to
+            // Camelot did to every Rekordbox medium.
+            "    key_id INTEGER,"
             "    rating INTEGER,"
             "    analyze_path TEXT,"
             "    device TEXT,"
@@ -367,6 +375,9 @@ void insertTrack(
     query.bindValue(":comment", comment);
     query.bindValue(":tracknumber", tracknumber);
     query.bindValue(":key", key);
+    // Parsed from the text, which is all a pdb gives us. An unrecognised
+    // spelling yields INVALID and sorts with the other unknowns.
+    query.bindValue(":key_id", static_cast<int>(KeyUtils::guessKeyFromText(key)));
     query.bindValue(":bpm", bpm);
     query.bindValue(":bitrate", bitrate);
     query.bindValue(":analyze_path", anlzPath);
@@ -487,12 +498,12 @@ RekordboxDeviceParseResult parseDeviceDB(mixxx::DbConnectionPoolPtr dbConnection
     query.prepare("INSERT OR REPLACE INTO " + kRekordboxLibraryTable +
             " (rb_id, artist, title, album, year,"
             "genre,comment,tracknumber,bpm, bitrate,duration, location,"
-            "rating,key,analyze_path,device,color,artwork_path,"
+            "rating,key,key_id,analyze_path,device,color,artwork_path,"
             "coverart_source,coverart_type,coverart_location,coverart_digest)"
             " VALUES (:rb_id, :artist, "
             ":title, :album, :year,:genre,"
             ":comment, :tracknumber,:bpm, :bitrate,:duration, :location,"
-            ":rating,:key,:analyze_path,:device,:color,:artwork_path,"
+            ":rating,:key,:key_id,:analyze_path,:device,:color,:artwork_path,"
             ":coverart_source,:coverart_type,:coverart_location,:coverart_digest)");
     // A column list that has drifted out of step with its placeholders fails
     // once per row with only a debug-level warning, and presents as an empty
@@ -1105,6 +1116,7 @@ RekordboxFeature::RekordboxFeature(
             LIBRARYTABLE_BITRATE,
             LIBRARYTABLE_BPM,
             LIBRARYTABLE_KEY,
+            LIBRARYTABLE_KEY_ID,
             LIBRARYTABLE_COLOR,
             REKORDBOX_ANALYZE_PATH,
             // Ours, read by name to find the medium's own cover file.
