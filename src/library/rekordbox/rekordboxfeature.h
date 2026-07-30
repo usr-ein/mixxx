@@ -26,6 +26,8 @@
 
 #include <QFuture>
 #include <QFutureWatcher>
+#include <QHash>
+#include <QPointer>
 #include <QStringListModel>
 #include <QtConcurrentRun>
 #include <fstream>
@@ -49,12 +51,20 @@ class ControlPushButton;
 /// a model's items may only be mutated on the GUI thread, bracketed by
 /// begin/endInsertRows(). So the worker builds under a detached staging item
 /// and RekordboxFeature::onTracksFound() splices the result in.
+class WLibraryTextBrowser;
+
 struct RekordboxDeviceParseResult {
     /// Label of the device this came from, used to find its row again -- the
     /// device may well have been unmounted while we were parsing.
     QString device;
     /// The device's "all tracks" playlist, or empty if the parse failed.
     QString devicePlaylist;
+    /// What the device holds, for the summary shown when the device node itself
+    /// is selected. Counted during the parse, where the maps are already to
+    /// hand, rather than by querying the table again afterwards.
+    int trackCount = 0;
+    int artistCount = 0;
+    int albumCount = 0;
     /// Shared rather than unique so the result stays copyable, which is what
     /// QFuture wants, and so an unconsumed result still frees its subtree.
     std::shared_ptr<TreeItem> pStagingRoot;
@@ -103,10 +113,19 @@ class RekordboxFeature : public BaseExternalLibraryFeature {
 
   private:
     QString formatRootViewHtml() const;
+    /// The summary page for one device: its name and what is on it.
+    QString formatDeviceViewHtml(const QString& device) const;
+    /// Show that summary, or the root page if the device is unknown.
+    void showDeviceView(const QString& device);
     std::unique_ptr<BaseSqlTableModel> createPlaylistModelForPlaylist(
             const QVariant& data) override;
 
     parented_ptr<TreeItemModel> m_pSidebarModel;
+    /// Device label -> its counts, for the summary page. Populated as each
+    /// device is parsed and kept until it is unmounted.
+    QHash<QString, RekordboxDeviceParseResult> m_deviceSummaries;
+    /// The view the summary is drawn into, shared with the root page.
+    QPointer<WLibraryTextBrowser> m_pTextBrowser;
     parented_ptr<RekordboxPlaylistModel> m_pRekordboxPlaylistModel;
 
     QFutureWatcher<QList<TreeItem*>> m_devicesFutureWatcher;

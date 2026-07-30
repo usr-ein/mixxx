@@ -4,6 +4,7 @@
 #include <rekordbox_anlz.h>
 #include <rekordbox_pdb.h>
 
+#include <QCryptographicHash>
 #include <QMap>
 #include <QMessageBox>
 #include <QSettings>
@@ -16,6 +17,7 @@
 #include "library/dao/trackschema.h"
 #include "library/library.h"
 #include "library/queryutil.h"
+#include "library/coverart.h"
 #include "library/rekordbox/rekordboxanalysis.h"
 #include "library/rekordbox/rekordboxconstants.h"
 #include "library/trackcollection.h"
@@ -71,6 +73,18 @@ bool createLibraryTable(QSqlDatabase& database, const QString& tableName) {
             "    analyze_path TEXT,"
             "    device TEXT,"
             "    color INTEGER,"
+            // The cover-art columns BaseSqlTableModel reads directly. Populating
+            // them means the table shows covers from the model alone, with no
+            // Track object -- which is what makes the Cover column available at
+            // all. `coverart` itself is what the column binds to; without it the
+            // column is not offered however well populated the others are.
+            "    artwork_path TEXT,"
+            "    coverart TEXT,"
+            "    coverart_source INTEGER,"
+            "    coverart_type INTEGER,"
+            "    coverart_location TEXT,"
+            "    coverart_color INTEGER,"
+            "    coverart_digest BLOB,"
             // Neither `location` nor `analyze_path` can be UNIQUE on its own:
             // two devices holding clones of the same Rekordbox media -- which
             // is routine, and is how a two-player setup is usually prepared --
@@ -320,6 +334,7 @@ void insertTrack(
         QMap<uint32_t, QString>& albumsMap,
         QMap<uint32_t, QString>& genresMap,
         QMap<uint32_t, QString>& keysMap,
+        QMap<uint32_t, QString>& artworkMap,
         const QString& devicePath,
         const QString& device,
         int audioFilesCount) {
@@ -359,6 +374,30 @@ void insertTrack(
             mixxx::RgbColor::toQVariant(
                     mixxx::rekordbox::colorFromID(
                             static_cast<int>(track->color_id()))));
+
+    // Cover art. The image lives under PIONEER/ on the medium, nowhere near the
+    // audio file, so without an explicit location Mixxx guesses from the audio
+    // file's own directory and finds nothing.
+    const QString artworkPath = artworkMap.value(track->artwork_id());
+    query.bindValue(":artwork_path", artworkPath);
+    if (artworkPath.isEmpty()) {
+        query.bindValue(":coverart_source", static_cast<int>(CoverInfo::UNKNOWN));
+        query.bindValue(":coverart_type", static_cast<int>(CoverInfo::NONE));
+        query.bindValue(":coverart_location", QString());
+        query.bindValue(":coverart_digest", QByteArray());
+    } else {
+        query.bindValue(":coverart_source", static_cast<int>(CoverInfo::GUESSED));
+        query.bindValue(":coverart_type", static_cast<int>(CoverInfo::FILE));
+        query.bindValue(":coverart_location", QString(devicePath + artworkPath));
+        // Without a cache key BaseSqlTableModel::getCoverInfo() returns an empty
+        // CoverInfo -- it reads type, source and location only
+        // `if (coverInfo.hasCacheKey())` -- so the column stays blank however
+        // correct the location is. The key is opaque: CoverArtCache uses it to
+        // index its pixmap cache and loads the image from coverLocation, so
+        // deriving it from the path is fine, and paths are unique per image.
+        query.bindValue(":coverart_digest",
+                QCryptographicHash::hash(artworkPath.toUtf8(), QCryptographicHash::Sha1));
+    }
 
     if (!query.exec()) {
         LOG_FAILED_QUERY(query);
@@ -447,10 +486,20 @@ RekordboxDeviceParseResult parseDeviceDB(mixxx::DbConnectionPoolPtr dbConnection
     query.prepare("INSERT OR REPLACE INTO " + kRekordboxLibraryTable +
             " (rb_id, artist, title, album, year,"
             "genre,comment,tracknumber,bpm, bitrate,duration, location,"
-            "rating,key,analyze_path,device,color) VALUES (:rb_id, :artist, "
+            "rating,key,analyze_path,device,color,artwork_path,"
+            "coverart_source,coverart_type,coverart_location,coverart_digest)"
+            " VALUES (:rb_id, :artist, "
             ":title, :album, :year,:genre,"
             ":comment, :tracknumber,:bpm, :bitrate,:duration, :location,"
-            ":rating,:key,:analyze_path,:device,:color)");
+            ":rating,:key,:analyze_path,:device,:color,:artwork_path,"
+            ":coverart_source,:coverart_type,:coverart_location,:coverart_digest)");
+    // A column list that has drifted out of step with its placeholders fails
+    // once per row with only a debug-level warning, and presents as an empty
+    // library. Caught here instead.
+    VERIFY_OR_DEBUG_ASSERT(query.lastError().type() == QSqlError::NoError) {
+        LOG_FAILED_QUERY(query) << "could not prepare the track insert";
+        return RekordboxDeviceParseResult();
+    }
 
     int audioFilesCount = 0;
 
@@ -482,12 +531,15 @@ RekordboxDeviceParseResult parseDeviceDB(mixxx::DbConnectionPoolPtr dbConnection
     // Attempt was made to also recover HISTORY
     // playlists (which are found on removable Rekordbox devices), however
     // they didn't appear to contain valid row_ref_t structures.
-    constexpr int totalTables = 8;
+    constexpr int totalTables = 9;
 
+    // Artwork before tracks: a track row carries an artwork *id*, and the path
+    // it resolves to has to be in the map by the time insertTrack runs.
     rekordbox_pdb_t::page_type_t tableOrder[totalTables] = {
             rekordbox_pdb_t::PAGE_TYPE_KEYS,
             rekordbox_pdb_t::PAGE_TYPE_GENRES,
             rekordbox_pdb_t::PAGE_TYPE_ARTISTS,
+            rekordbox_pdb_t::PAGE_TYPE_ARTWORK,
             rekordbox_pdb_t::PAGE_TYPE_ALBUMS,
             rekordbox_pdb_t::PAGE_TYPE_PLAYLIST_ENTRIES,
             rekordbox_pdb_t::PAGE_TYPE_TRACKS,
@@ -498,6 +550,8 @@ RekordboxDeviceParseResult parseDeviceDB(mixxx::DbConnectionPoolPtr dbConnection
     QMap<uint32_t, QString> genresMap;
     QMap<uint32_t, QString> artistsMap;
     QMap<uint32_t, QString> albumsMap;
+    /// Artwork id -> its path on the medium, relative to the volume root.
+    QMap<uint32_t, QString> artworkMap;
     QMap<uint32_t, QString> playlistNameMap;
     QMap<uint32_t, bool> playlistIsFolderMap;
     QMap<uint32_t, QMap<uint32_t, uint32_t>> playlistTreeMap;
@@ -537,6 +591,13 @@ RekordboxDeviceParseResult parseDeviceDB(mixxx::DbConnectionPoolPtr dbConnection
                                                         rowRef->body());
                                         artistsMap[artist->id()] = getText(artist->name());
                                     } break;
+                                    case rekordbox_pdb_t::PAGE_TYPE_ARTWORK: {
+                                        auto* artwork =
+                                                static_cast<rekordbox_pdb_t::artwork_row_t*>(
+                                                        rowRef->body());
+                                        artworkMap[artwork->id()] =
+                                                getText(artwork->path());
+                                    } break;
                                     case rekordbox_pdb_t::PAGE_TYPE_ALBUMS: {
                                         auto* album =
                                                 static_cast<rekordbox_pdb_t::album_row_t*>(
@@ -563,6 +624,7 @@ RekordboxDeviceParseResult parseDeviceDB(mixxx::DbConnectionPoolPtr dbConnection
                                                 albumsMap,
                                                 genresMap,
                                                 keysMap,
+                                                artworkMap,
                                                 devicePath,
                                                 device,
                                                 audioFilesCount);
@@ -606,12 +668,29 @@ RekordboxDeviceParseResult parseDeviceDB(mixxx::DbConnectionPoolPtr dbConnection
         }
     }
 
+    // What the device holds, for the summary the device node now shows. Counted
+    // from the maps that are already to hand rather than by querying the table
+    // back: an artist or album with no tracks cannot occur in a pdb, so the map
+    // sizes are the counts.
+    result.trackCount = audioFilesCount;
+    result.artistCount = artistsMap.size();
+    result.albumCount = albumsMap.size();
+
     if (audioFilesCount > 0 || folderOrPlaylistFound) {
         // Recursively build the playlist/folder subtree under a detached
         // staging item. Everything below it is invisible to the model until
         // onTracksFound() splices it in on the GUI thread, so appendChild()
         // is safe from here down.
         result.pStagingRoot = std::make_shared<TreeItem>();
+
+        // "All tracks" first, ahead of the curated playlists. It is the device
+        // playlist that the device node itself used to open; giving it a row of
+        // its own frees the device node to show a summary instead, and means
+        // everything on the stick is one click away rather than reachable only
+        // by selecting the device before it has been expanded.
+        result.pStagingRoot->appendChild(QObject::tr("All tracks"),
+                QVariant(QList<QString>{devicePath, IS_NOT_RECORDBOX_DEVICE}));
+
         buildPlaylistTree(database,
                 result.pStagingRoot.get(),
                 0,
@@ -954,6 +1033,20 @@ TrackPointer RekordboxPlaylistModel::getTrack(const QModelIndex& index) const {
     track->setColor(mixxx::RgbColor::fromQVariant(
             getFieldVariant(index, ColumnCache::COLUMN_LIBRARYTABLE_COLOR)));
 
+    // Point the Track at the medium's own cover file. Without this Mixxx guesses
+    // from the audio file's directory, which on a rekordbox medium holds no
+    // image at all -- the art lives under PIONEER/.
+    const QString coverLocation =
+            getFieldVariant(index, ColumnCache::COLUMN_LIBRARYTABLE_COVERART_LOCATION)
+                    .toString();
+    if (!coverLocation.isEmpty() && QFile::exists(coverLocation)) {
+        CoverInfoRelative cover;
+        cover.type = CoverInfo::FILE;
+        cover.source = CoverInfo::GUESSED;
+        cover.coverLocation = coverLocation;
+        track->setCoverInfo(cover);
+    }
+
     return track;
 }
 
@@ -961,11 +1054,19 @@ bool RekordboxPlaylistModel::isColumnHiddenByDefault(int column) {
     if (column == fieldIndex(ColumnCache::COLUMN_LIBRARYTABLE_BITRATE)) {
         return true;
     }
+    if (column == fieldIndex(ColumnCache::COLUMN_LIBRARYTABLE_COVERART)) {
+        // Shown by default, unlike in the main library: a rekordbox medium
+        // always carries its own art and the paths come straight out of the pdb,
+        // so the column has something in it the moment a playlist opens -- which
+        // is not true of a freshly scanned local folder.
+        return false;
+    }
     return BaseSqlTableModel::isColumnHiddenByDefault(column);
 }
 
 bool RekordboxPlaylistModel::isColumnInternal(int column) {
     return column == fieldIndex(ColumnCache::COLUMN_REKORDBOX_ANALYZE_PATH) ||
+            column == fieldIndex(QStringLiteral("artwork_path")) ||
             BaseExternalPlaylistModel::isColumnInternal(column);
 }
 
@@ -1003,7 +1104,17 @@ RekordboxFeature::RekordboxFeature(
             LIBRARYTABLE_BPM,
             LIBRARYTABLE_KEY,
             LIBRARYTABLE_COLOR,
-            REKORDBOX_ANALYZE_PATH};
+            REKORDBOX_ANALYZE_PATH,
+            // Ours, read by name to find the medium's own cover file.
+            QStringLiteral("artwork_path"),
+            // coverart is what the Cover column binds to; without it the column
+            // is not offered at all, however well populated the rest are.
+            LIBRARYTABLE_COVERART,
+            LIBRARYTABLE_COVERART_SOURCE,
+            LIBRARYTABLE_COVERART_TYPE,
+            LIBRARYTABLE_COVERART_LOCATION,
+            LIBRARYTABLE_COVERART_COLOR,
+            LIBRARYTABLE_COVERART_DIGEST};
 
     const QStringList searchColumns = {
             LIBRARYTABLE_ARTIST,
@@ -1068,6 +1179,10 @@ void RekordboxFeature::bindLibraryWidget(WLibrary* pLibraryWidget,
         KeyboardEventFilter* keyboard) {
     Q_UNUSED(keyboard);
     parented_ptr<WLibraryTextBrowser> pEdit = make_parented<WLibraryTextBrowser>(pLibraryWidget);
+    // Kept so the device summary can be written into the same view. A QPointer
+    // because the widget belongs to the library widget, not to us, and outlives
+    // neither reliably.
+    m_pTextBrowser = pEdit;
     pEdit->setHtml(formatRootViewHtml());
     pEdit->setOpenLinks(false);
     connect(pEdit, &WLibraryTextBrowser::anchorClicked, this, &RekordboxFeature::htmlLinkClicked);
@@ -1199,22 +1314,25 @@ void RekordboxFeature::activateChild(const QModelIndex& index) {
              << " playlist: " << playlist << " doParseDeviceDB: " << doParseDeviceDB;
 
     if (doParseDeviceDB) {
+        // The device node stays a device for the whole session -- it used to be
+        // rewritten into a playlist after the first activation, which is what
+        // made re-selecting it open a track list. Whether it has been read is
+        // now a question about our own state, not about the tree item, so
+        // "already parsed" and "is a device" stop being the same bit.
+        if (m_deviceSummaries.contains(item->getLabel())) {
+            showDeviceView(item->getLabel());
+            return;
+        }
         qDebug() << "Parse Rekordbox Device DB: " << playlist;
 
         // Read everything the worker needs off the item here, on the GUI
-        // thread, and hand it over by value. Passing the item itself would
-        // race the setData() below, and would let the worker mutate a tree
-        // the model owns.
+        // thread, and hand it over by value. Passing the item itself would let
+        // the worker mutate a tree the model owns.
         m_tracksFuture = QtConcurrent::run(parseDeviceDB,
                 static_cast<Library*>(parent())->dbConnectionPool(),
                 item->getLabel(),
                 playlist);
         m_tracksFutureWatcher.setFuture(m_tracksFuture);
-
-        // This device is now a playlist element, future activations should treat is
-        // as such
-        data[1] = QVariant(IS_NOT_RECORDBOX_DEVICE);
-        item->setData(QVariant(data));
     } else {
         qDebug() << "Activate Rekordbox Playlist: " << playlist;
         m_pRekordboxPlaylistModel->setPlaylist(playlist);
@@ -1246,6 +1364,7 @@ void RekordboxFeature::onRekordboxDevicesFound() {
 
         transaction.commit();
 
+        m_deviceSummaries.clear();
         if (root->childRows() > 0) {
             // Devices have since been unmounted
             m_pSidebarModel->removeRows(0, root->childRows());
@@ -1342,8 +1461,42 @@ void RekordboxFeature::onTracksFound() {
         return;
     }
 
-    qDebug() << "Show Rekordbox Device Playlist: " << result.devicePlaylist;
+    // The summary, not the track list: "All tracks" is a child row now, and
+    // landing on a few thousand rows because you expanded a device is exactly
+    // the navigation the summary replaces.
+    m_deviceSummaries.insert(result.device, result);
+    showDeviceView(result.device);
+}
 
-    m_pRekordboxPlaylistModel->setPlaylist(result.devicePlaylist);
-    emit showTrackModel(m_pRekordboxPlaylistModel);
+QString RekordboxFeature::formatDeviceViewHtml(const QString& device) const {
+    const auto summary = m_deviceSummaries.constFind(device);
+    if (summary == m_deviceSummaries.constEnd()) {
+        return formatRootViewHtml();
+    }
+    QString html;
+    html += QStringLiteral("<h2>%1</h2>").arg(device.toHtmlEscaped());
+    html += QStringLiteral("<table cellpadding='4'>");
+    const QList<QPair<QString, int>> rows = {
+            {tr("Tracks"), summary->trackCount},
+            {tr("Artists"), summary->artistCount},
+            {tr("Albums"), summary->albumCount},
+    };
+    for (const auto& row : rows) {
+        html += QStringLiteral(
+                "<tr><td><b>%1</b></td><td align='right'>%2</td></tr>")
+                        .arg(row.first, QString::number(row.second));
+    }
+    html += QStringLiteral("</table>");
+    html += QStringLiteral("<p>%1</p>")
+                    .arg(tr("Expand this device to browse its playlists, or open "
+                            "\"All tracks\" for everything on it."));
+    return html;
+}
+
+void RekordboxFeature::showDeviceView(const QString& device) {
+    if (m_pTextBrowser) {
+        m_pTextBrowser->setHtml(formatDeviceViewHtml(device));
+    }
+    emit switchToView(QStringLiteral("REKORDBOXHOME"));
+    emit disableSearch();
 }

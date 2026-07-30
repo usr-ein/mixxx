@@ -441,6 +441,26 @@ void applyAnalysis(TrackPointer track, const QString& anlzPath) {
     } else {
         readAnalyzeFile(track, sampleRate, timingOffset, false, anlzPath);
     }
+
+    // Mixxx's main cue is where the track loads and where CUE returns to. Above,
+    // it is set from the first *memory* cue -- but plenty of rekordbox libraries
+    // have none at all. Two tracks pulled off a real stick: first beat at 23 ms,
+    // hot cue A at 23 ms, memory cues empty. Nothing then tells the main cue
+    // where to go, so it keeps whatever default it had and the track loads a
+    // fraction before the downbeat.
+    //
+    // So fall back to the first beat, which is what a CDJ does with a gridded
+    // track and what a DJ expects from a load. Only when rekordbox supplied
+    // nothing: a memory cue is a deliberate choice and outranks this.
+    if (!track->findCueByType(CueType::MainCue)) {
+        const auto pBeats = track->getBeats();
+        if (pBeats) {
+            const audio::FramePos firstBeat = pBeats->firstBeat();
+            if (firstBeat.isValid()) {
+                track->setMainCuePosition(firstBeat);
+            }
+        }
+    }
 }
 
 } // namespace rekordbox
