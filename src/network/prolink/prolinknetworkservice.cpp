@@ -23,6 +23,10 @@ const mixxx::Logger kLogger("ProLinkNetworkService");
 /// exit would be worse than leaking a thread.
 constexpr int kThreadQuitTimeoutMs = 2000;
 
+/// Longest one queued file may take before the queue is assumed stuck. Well
+/// above a large track over NFS, and far below anything a user would wait out.
+constexpr int kQueueStallTimeoutMs = 150000;
+
 /// Our own address on the interface a device's announcements arrived on.
 ///
 /// Not cosmetic on the deck, which has eth0 on the CDJ network and wlan0 on the
@@ -289,6 +293,25 @@ void ProLinkNetworkService::pumpFileQueue() {
     if (m_fileBusy || m_fileQueue.isEmpty() || !m_pDiscovery) {
         return;
     }
+    // A stalled queue is silent by nature -- work simply stops -- so it gets a
+    // watchdog rather than being trusted. If a request neither completes nor
+    // fails within this, something below dropped a callback and the queue would
+    // otherwise sit idle with hundreds of entries behind it.
+    if (!m_pQueueWatchdog) {
+        m_pQueueWatchdog = new QTimer(this);
+        m_pQueueWatchdog->setSingleShot(true);
+        m_pQueueWatchdog->setInterval(kQueueStallTimeoutMs);
+        connect(m_pQueueWatchdog, &QTimer::timeout, this, [this]() {
+            if (!m_fileBusy) {
+                return;
+            }
+            kLogger.warning() << "file queue stalled with" << m_fileQueue.size()
+                              << "requests left; releasing it";
+            m_fileBusy = false;
+            pumpFileQueue();
+        });
+    }
+    m_pQueueWatchdog->start();
     m_fileBusy = true;
     const FileRequest request = m_fileQueue.takeFirst();
     QMetaObject::invokeMethod(
@@ -310,6 +333,13 @@ void ProLinkNetworkService::runFileRequest(const FileRequest& request) {
                 this,
                 [this, localPath, error] {
                     m_fileBusy = false;
+                    if (!error.isEmpty()) {
+                        // Logged here rather than left to the caller: most
+                        // fetches are fire-and-forget prefetches whose results
+                        // nobody looks at, and an unlogged failure there is
+                        // indistinguishable from one that never ran.
+                        kLogger.warning() << "fetch of" << localPath << "failed:" << error;
+                    }
                     emit fileFetched(localPath, error);
                     pumpFileQueue();
                 },

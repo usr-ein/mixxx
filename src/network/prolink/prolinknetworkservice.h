@@ -21,6 +21,7 @@ class ProLinkDiscovery;
 } // namespace mixxx
 
 class ControlPushButton;
+class QTimer;
 
 namespace mixxx {
 namespace prolink {
@@ -186,6 +187,7 @@ class ProLinkNetworkService : public QObject {
     /// mount per medium, one request at a time.
     QList<FileRequest> m_fileQueue;
     bool m_fileBusy = false;
+    QTimer* m_pQueueWatchdog = nullptr;
     /// Keyed mac|slot. Lives on the network thread.
     QHash<QString, MountedMedium> m_mounts;
 

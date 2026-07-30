@@ -1,5 +1,6 @@
 #include "network/prolink/rpc/rpcclient.h"
 
+#include <QMetaObject>
 #include <QNetworkDatagram>
 #include <QRandomGenerator>
 #include <QTimer>
@@ -92,7 +93,29 @@ bool RpcClient::call(quint16 port,
         quint32 procedure,
         const QByteArray& arguments,
         Callback callback) {
+    // Every call must produce exactly one callback, whatever happens. Returning
+    // false without invoking it looks harmless -- callers can check the return
+    // value -- but nothing above does, and a dropped callback leaves the whole
+    // chain waiting forever: the transfer never finishes, the request never
+    // reports, and the serial queue behind it stalls with no error anywhere.
+    // Posted rather than called inline so a failure cannot re-enter the caller
+    // mid-call.
+    auto failLater = [this, callback](const QString& reason) {
+        kLogger.warning() << "RPC call not sent:" << reason;
+        QMetaObject::invokeMethod(
+                this,
+                [callback] {
+                    if (callback) {
+                        Result result;
+                        result.timedOut = true;
+                        callback(result);
+                    }
+                },
+                Qt::QueuedConnection);
+    };
+
     if (!isOpen() && !open()) {
+        failLater(QStringLiteral("socket is not open"));
         return false;
     }
 
@@ -109,8 +132,9 @@ bool RpcClient::call(quint16 port,
     pending.callback = std::move(callback);
 
     if (m_pSocket->writeDatagram(pending.datagram, m_peer, port) < 0) {
-        kLogger.warning() << "could not send RPC call to" << m_peer << port << ":"
-                          << m_pSocket->errorString();
+        failLater(QStringLiteral("%1 to %2:%3")
+                          .arg(m_pSocket->errorString(), m_peer.toString())
+                          .arg(port));
         return false;
     }
 
