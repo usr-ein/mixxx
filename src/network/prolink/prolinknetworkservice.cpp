@@ -341,6 +341,7 @@ void ProLinkNetworkService::runFileRequest(const FileRequest& request) {
                        << request.remotePath;
         auto stale = m_mounts.take(key);
         if (stale.pClient) {
+            stale.pClient->forgetDirectoryHandles();
             stale.pClient->deleteLater();
         }
         FileRequest again = request;

@@ -235,8 +235,7 @@ void NfsV2Client::lookup(const QByteArray& directoryHandle,
 void NfsV2Client::resolvePath(const QByteArray& rootHandle,
         const QString& path,
         std::function<void(const Outcome<QByteArray>&)> callback) {
-    const QStringList components =
-            path.split(QLatin1Char('/'), Qt::SkipEmptyParts);
+    QStringList components = path.split(QLatin1Char('/'), Qt::SkipEmptyParts);
     if (components.isEmpty()) {
         Outcome<QByteArray> outcome;
         outcome.ok = true;
@@ -244,6 +243,33 @@ void NfsV2Client::resolvePath(const QByteArray& rootHandle,
         callback(outcome);
         return;
     }
+
+    // Resolve from the deepest ancestor we already hold a handle for, so a
+    // second file in the same directory costs one LOOKUP rather than four. See
+    // m_directoryHandles for why the saving is not merely about speed.
+    const QString directory = components.mid(0, components.size() - 1).join(QLatin1Char('/'));
+    const QString leaf = components.last();
+    const auto cached = m_directoryHandles.constFind(directory);
+    if (!directory.isEmpty() && cached != m_directoryHandles.constEnd()) {
+        const QByteArray directoryHandle = *cached;
+        lookup(directoryHandle,
+                leaf,
+                [this, rootHandle, path, directory, callback](
+                        const Outcome<QByteArray>& outcome) {
+                    if (outcome.ok) {
+                        callback(outcome);
+                        return;
+                    }
+                    // The cached handle has aged out. Drop it and walk the whole
+                    // path once; only if that fails too is the file really gone.
+                    m_directoryHandles.remove(directory);
+                    const QStringList fresh =
+                            path.split(QLatin1Char('/'), Qt::SkipEmptyParts);
+                    resolvePathStep(rootHandle, fresh, 0, callback);
+                });
+        return;
+    }
+
     resolvePathStep(rootHandle, components, 0, callback);
 }
 
@@ -262,6 +288,9 @@ void NfsV2Client::resolvePathStep(const QByteArray& handle,
                     callback(step);
                     return;
                 }
+                // Every component but the last is a directory, so remember it.
+                m_directoryHandles.insert(
+                        components.mid(0, index + 1).join(QLatin1Char('/')), step.value);
                 resolvePathStep(step.value, components, index + 1, callback);
             });
 }

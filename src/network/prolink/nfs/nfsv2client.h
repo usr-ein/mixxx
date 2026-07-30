@@ -1,6 +1,7 @@
 #pragma once
 
 #include <QByteArray>
+#include <QHash>
 #include <QHostAddress>
 #include <QObject>
 #include <QString>
@@ -115,6 +116,12 @@ class NfsV2Client : public QObject {
 
     void abortAll();
 
+    /// Forget cached directory handles, after a mount is replaced or a handle
+    /// has gone stale.
+    void forgetDirectoryHandles() {
+        m_directoryHandles.clear();
+    }
+
     quint16 mountdPort() const {
         return m_mountdPort;
     }
@@ -131,6 +138,16 @@ class NfsV2Client : public QObject {
             const QStringList& components,
             int index,
             std::function<void(const Outcome<QByteArray>&)> callback);
+
+    /// Directory path -> its filehandle, for this mount.
+    ///
+    /// A player keeps a bounded table of the handles it has issued and starts
+    /// answering NFSERR_STALE once that table churns. Re-walking
+    /// PIONEER/Artwork/000NN from the root for every file mints four fresh
+    /// handles per fetch -- roughly 2300 across one medium's covers -- and
+    /// exhausts it. A real CDJ uses four distinct directory handles across
+    /// forty-eight lookups, which is the behaviour this cache reproduces.
+    QHash<QString, QByteArray> m_directoryHandles;
 
     rpc::RpcClient m_rpc;
     quint16 m_mountdPort = 0;
