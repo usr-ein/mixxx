@@ -124,15 +124,16 @@ void WaveformWidgetRenderer::onPreRender(VSyncThread* vsyncThread) {
     }
 
     //Fetch parameters before rendering in order the display all sub-renderers with the same values
-    double rateRatio = m_pRateRatioCO->get();
-
     m_gain = m_pGainControlObject->get();
 
     // Compute visual sample to pixel ratio
     // Allow waveform to spread one visual sample across a hundred pixels
     // NOTE: The hundred pixel limit is totally arbitrary. Theoretically,
     // there should be no limit to how far the waveforms can be zoomed in.
-    double visualSamplePerPixel = m_zoomFactor * rateRatio / m_scaleFactor;
+    // TriMixxx fork: constant-scale waveform. Dropping the * rateRatio factor
+    // stops the waveform + beatgrid compressing as tempo rises; the display
+    // keeps a fixed scale and scrolls faster instead (CDJ/vinyl behaviour).
+    double visualSamplePerPixel = m_zoomFactor / m_scaleFactor;
     m_visualSamplePerPixel = math_max(0.01, visualSamplePerPixel);
 
     TrackPointer pTrack = m_pTrack;
