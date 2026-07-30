@@ -138,6 +138,7 @@ ProLinkFeature::ProLinkFeature(Library* pLibrary, UserSettingsPointer pConfig)
             // file, since Mixxx would otherwise guess from the audio file's
             // directory and a rekordbox medium keeps its art under PIONEER/.
             QStringLiteral("artwork_path"),
+            LIBRARYTABLE_COVERART,
             LIBRARYTABLE_COVERART_SOURCE,
             LIBRARYTABLE_COVERART_TYPE,
             LIBRARYTABLE_COVERART_LOCATION,

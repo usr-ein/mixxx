@@ -1415,8 +1415,15 @@ void WTrackTableView::loadSelectedTrackToGroup(const QString& group, bool play) 
     auto index = indices.at(0);
     auto* pTrackModel = getTrackModel();
     TrackPointer pTrack;
-    if (pTrackModel && (pTrack = pTrackModel->getTrack(index))) {
-        emit loadTrackToPlayer(pTrack, group, play);
+    if (pTrackModel) {
+        // Same intent signal as the double-click path: this is a deliberate
+        // load, not one of the many incidental getTrack() calls. Skin buttons
+        // and controller mappings arrive here rather than through
+        // slotMouseDoubleClicked, so both need it.
+        pTrackModel->willLoadTrack(index);
+        if ((pTrack = pTrackModel->getTrack(index))) {
+            emit loadTrackToPlayer(pTrack, group, play);
+        }
     }
 }
 

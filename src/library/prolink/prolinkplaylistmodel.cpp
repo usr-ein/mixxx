@@ -111,6 +111,13 @@ bool ProLinkPlaylistModel::isColumnHiddenByDefault(int column) {
     if (column == fieldIndex(ColumnCache::COLUMN_LIBRARYTABLE_BITRATE)) {
         return true;
     }
+    if (column == fieldIndex(ColumnCache::COLUMN_LIBRARYTABLE_COVERART)) {
+        // Shown by default, unlike in the main library. A rekordbox medium
+        // always carries its own art and it is prefetched with the database, so
+        // the column has something in it from the moment the playlist opens --
+        // which is not true of a freshly scanned local folder.
+        return false;
+    }
     return BaseSqlTableModel::isColumnHiddenByDefault(column);
 }
 

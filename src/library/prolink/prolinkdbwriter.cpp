@@ -62,6 +62,10 @@ bool createProLinkTables(QSqlDatabase& database) {
             // Track object -- which is the whole point: a Track cannot exist
             // until its audio has been downloaded, and the covers should be
             // visible while browsing.
+            // `coverart` itself is what the Cover column is bound to; without
+            // it the column is not offered at all, however well populated the
+            // three below are.
+            "    coverart TEXT,"
             "    coverart_source INTEGER,"
             "    coverart_type INTEGER,"
             "    coverart_location TEXT,"
