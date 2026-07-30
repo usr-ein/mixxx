@@ -173,10 +173,29 @@ void WProLinkPhaseMeter::paintEvent(QPaintEvent* pEvent) {
     const bool ourTrackRunning = m_pBpm->get() > 0.0 && fileBpm > 0.0 && duration > 0.0;
     double ourPhase = -1.0;
     if (ourTrackRunning) {
+        // Two sources, and they must not be allowed to disagree.
+        //
+        // `beat_distance` is the engine's own sub-beat phase and is exact. The
+        // beat *index* has to come from the playhead, because nothing counts
+        // bars. But the two are independent estimates of the same quantity:
+        // the grid does not start at zero -- a real track's first beat is 23 ms
+        // in -- so floor(beatsElapsed) flips to the next integer at a slightly
+        // different instant than beat_distance wraps to 0. For that moment the
+        // index says beat 3 while the fraction still says 0.98, the marker
+        // leaps a whole beat forward, and a frame later it leaps back. That is
+        // the jumping.
+        //
+        // Subtracting the fraction before rounding pins the index to whatever
+        // beat_distance currently believes: the difference is near-integral by
+        // construction, so the index can only change at the exact moment the
+        // fraction wraps, and the two can no longer contradict each other.
         const double trackSeconds = m_pPlayPosition->get() * duration;
         const double beatsElapsed = trackSeconds * fileBpm / 60.0;
+        const auto beatIndex =
+                static_cast<long long>(std::llround(beatsElapsed - ourBeatDistance));
         const int beatInBar =
-                static_cast<int>(std::floor(beatsElapsed)) % kBeatsPerBar;
+                static_cast<int>(((beatIndex % kBeatsPerBar) + kBeatsPerBar) %
+                        kBeatsPerBar);
         ourPhase = (beatInBar + ourBeatDistance) / kBeatsPerBar;
     }
 
