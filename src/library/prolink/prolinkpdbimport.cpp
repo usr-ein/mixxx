@@ -157,6 +157,34 @@ PdbContents parsePdb(const QByteArray& data) {
                                 case rekordbox_pdb_t::PAGE_TYPE_ALBUMS: {
                                     auto* pRow = static_cast<rekordbox_pdb_t::album_row_t*>(
                                             rowRef->body());
+                                    // Only subtype 0x80 rows have their name at
+                                    // `ofs_name`.
+                                    //
+                                    // artist_row picks between a near and a far
+                                    // offset on its subtype:
+                                    //   pos: row_base + (subtype == 0x64 ?
+                                    //                    ofs_name_far : ofs_name_near)
+                                    // album_row has no such conditional in the
+                                    // schema -- it always uses the 1-byte
+                                    // ofs_name -- yet real media carry album rows
+                                    // of another subtype. On one 274-row table,
+                                    // 273 were 0x80 and one was 0x84 with
+                                    // ofs_name = 0, so its "name" was decoded
+                                    // from the row header itself and then
+                                    // overwrote a real album under the id read
+                                    // from the same misaligned bytes.
+                                    //
+                                    // Skipping the row loses that album's name
+                                    // rather than corrupting a different one,
+                                    // which is the better failure: one track
+                                    // shows a blank album instead of mojibake.
+                                    // Reading it properly needs the far offset
+                                    // adding to the shared crate-digger schema,
+                                    // which the Rekordbox feature also uses.
+                                    constexpr quint16 kAlbumSubtypeNearName = 0x80;
+                                    if (pRow->_unnamed0() != kAlbumSubtypeNearName) {
+                                        break;
+                                    }
                                     albums[pRow->id()] = textOf(pRow->name());
                                 } break;
                                 case rekordbox_pdb_t::PAGE_TYPE_PLAYLIST_ENTRIES: {

@@ -146,6 +146,57 @@ TEST_F(ProLinkPdbTest, TrackFieldsAreUsable) {
     }
 }
 
+/// Non-ASCII names must survive the DeviceSQL string decoding.
+///
+/// Both albums and artists store these in the UTF-16LE form (selector 0x90), so
+/// they exercise the same branch -- which makes a disagreement between the two
+/// a schema problem rather than an encoding one.
+TEST_F(ProLinkPdbTest, DecodesNonAsciiArtistsAndAlbums) {
+    const PdbContents contents = mixxx::prolink::parsePdb(m_data);
+    ASSERT_TRUE(contents.ok);
+
+    QSet<QString> artists;
+    QSet<QString> albums;
+    for (const PdbTrack& track : contents.tracks) {
+        artists.insert(track.artist);
+        albums.insert(track.album);
+    }
+
+    // Track artists only. "Разные исполнители" ("Various Artists") is on this
+    // medium too but is an *album* artist with no tracks of its own, so looking
+    // for it here would be testing the fixture rather than the decoder.
+    for (const QString& expected : {QString::fromUtf8("Chlär"),
+                 QString::fromUtf8("Rene Wise & Rødhåd")}) {
+        EXPECT_TRUE(artists.contains(expected))
+                << "missing artist " << expected.toUtf8().constData();
+    }
+    for (const QString& expected : {QString::fromUtf8("Acidité"),
+                 QString::fromUtf8("Pascià"),
+                 QString::fromUtf8("GOODBYE SALÒ"),
+                 QString::fromUtf8("Europaträume"),
+                 QString::fromUtf8("3ISBÄR")}) {
+        EXPECT_TRUE(albums.contains(expected))
+                << "missing album " << expected.toUtf8().constData();
+    }
+}
+
+/// Album rows of a subtype whose name offset the schema cannot resolve are
+/// skipped rather than decoded from the wrong place. See the comment in
+/// prolinkpdbimport.cpp: a mis-decoded row also lands under a mis-read id and
+/// overwrites a real album, so one bad row corrupts a good one.
+TEST_F(ProLinkPdbTest, SkipsAlbumRowsItCannotAddress) {
+    const PdbContents contents = mixxx::prolink::parsePdb(m_data);
+    ASSERT_TRUE(contents.ok);
+
+    // No album name may contain an unpaired surrogate or a replacement
+    // character: both mean bytes were read as text that were not text.
+    for (const PdbTrack& track : contents.tracks) {
+        EXPECT_FALSE(track.album.contains(QChar(0xFFFD)))
+                << "album mojibake on track " << track.title.toUtf8().constData()
+                << ": " << track.album.toUtf8().constData();
+    }
+}
+
 TEST(ProLinkPdbErrorTest, RejectsGarbageWithoutThrowing) {
     // A pdb arrives over the network from a device we do not control, so a
     // malformed one has to be an error value rather than an exception escaping
