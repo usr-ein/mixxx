@@ -20,12 +20,15 @@ struct PdbTrack {
     QString album;
     QString genre;
     QString key;
+    QString label;
+    QString color;
     QString comment;
     QString filePath;
     QString analyzePath;
     /// Cover image on the medium, resolved from the ARTWORK table via
     /// `artworkId`. Empty when the track has no art.
     QString artworkPath;
+    QString dateAdded;
     quint32 year = 0;
     quint32 durationSeconds = 0;
     quint32 bitrate = 0;
@@ -34,12 +37,33 @@ struct PdbTrack {
     /// up one part in ten thousand off.
     quint32 tempoCentiBpm = 0;
     quint32 rating = 0;
-    quint32 colorId = 0;
     quint32 artworkId = 0;
+    quint32 sampleRate = 0;
+    quint32 fileSize = 0;
+    quint32 trackNumber = 0;
+    quint32 discNumber = 0;
+    quint32 playCount = 0;
     /// Container from row offset 0x5a: mp3 1, m4a 4, flac 5, wav 11, aiff 12.
     /// dysentery calls this `unknown6`; 651 rows on one medium had no exceptions
     /// (F34).
     quint32 fileType = 0;
+
+    /// The raw foreign keys, kept alongside the resolved names above.
+    ///
+    /// Serving needs both. A dbserver metadata item carries the **referenced
+    /// row's** id — artist 122, album 86 — not the track's own, because that is
+    /// how a player offers "more by this artist" from the metadata panel.
+    /// Sending the track id there is wrong in a way that still renders
+    /// perfectly, so it survives casual inspection (F32).
+    quint32 artistId = 0;
+    quint32 albumId = 0;
+    quint32 genreId = 0;
+    quint32 keyId = 0;
+    quint32 labelId = 0;
+    quint32 colorId = 0;
+
+    /// The `.EXT` companion of `analyzePath`, by extension swap.
+    QString analyzeExtPath() const;
 };
 
 /// A playlist or folder in the tree.
@@ -60,6 +84,24 @@ struct PdbContents {
     QList<PdbTrack> tracks;
     /// Keyed by id, so the tree can be walked by parent.
     QMap<quint32, PdbPlaylist> playlists;
+
+    /// The side tables, id to name, kept rather than only folded into the
+    /// tracks.
+    ///
+    /// Consuming a library needs the names; **serving** one needs the tables
+    /// themselves. A deck browsing us asks for the list of artists before it
+    /// asks for any track, and a drill-down narrows by id at each level — so
+    /// "every artist on this medium" has to be answerable without walking the
+    /// tracks and deduplicating strings, which would lose the ids the next
+    /// request is keyed on.
+    QHash<quint32, QString> artists;
+    QHash<quint32, QString> albums;
+    QHash<quint32, QString> genres;
+    QHash<quint32, QString> keys;
+    QHash<quint32, QString> labels;
+    QHash<quint32, QString> colors;
+    /// Artwork id to its path on the medium.
+    QHash<quint32, QString> artwork;
 
     int folderCount() const;
     int playlistCount() const;

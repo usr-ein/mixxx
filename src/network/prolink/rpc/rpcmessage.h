@@ -69,6 +69,18 @@ bool parseReply(const QByteArray& datagram, Reply* pReply);
 /// A fresh nonce for the AUTH_UNIX stamp.
 quint32 randomStamp();
 
+// -- the serve direction -------------------------------------------------------
+
+/// Encode an accepted reply: header, AUTH_NULL verifier, status, then *results*.
+///
+/// The only piece of the serve direction that lives here, because it is the only
+/// piece that *writes*. Incoming calls are parsed by the generated Kaitai reader
+/// from `prolinks-compat/ksy/prolink_rpc.ksy`, which also carries the typed
+/// argument bodies, so there is no hand-written call parser to drift from it.
+QByteArray buildReply(quint32 xid,
+        const QByteArray& results = QByteArray(),
+        AcceptStat status = AcceptStat::Success);
+
 } // namespace rpc
 } // namespace prolink
 } // namespace mixxx

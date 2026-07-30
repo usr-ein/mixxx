@@ -5,7 +5,7 @@
 #include <QFile>
 #include <QSet>
 
-#include "library/prolink/prolinkpdbimport.h"
+#include "network/prolink/prolinkpdb.h"
 #include "test/mixxxtest.h"
 
 namespace {

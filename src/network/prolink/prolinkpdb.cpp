@@ -1,4 +1,4 @@
-#include "library/prolink/prolinkpdbimport.h"
+#include "network/prolink/prolinkpdb.h"
 
 #include <QByteArray>
 #include <QStringDecoder>
@@ -66,6 +66,17 @@ int PdbContents::playlistCount() const {
     return playlists.size() - folderCount();
 }
 
+QString PdbTrack::analyzeExtPath() const {
+    if (analyzePath.isEmpty()) {
+        return QString();
+    }
+    const int dot = analyzePath.lastIndexOf(QLatin1Char('.'));
+    if (dot < 0) {
+        return QString();
+    }
+    return analyzePath.left(dot) + QStringLiteral(".EXT");
+}
+
 PdbContents parsePdb(const QByteArray& data) {
     PdbContents contents;
 
@@ -105,17 +116,21 @@ PdbContents parsePdb(const QByteArray& data) {
                 rekordbox_pdb_t::PAGE_TYPE_GENRES,
                 rekordbox_pdb_t::PAGE_TYPE_ARTISTS,
                 rekordbox_pdb_t::PAGE_TYPE_ALBUMS,
+                rekordbox_pdb_t::PAGE_TYPE_LABELS,
+                rekordbox_pdb_t::PAGE_TYPE_COLORS,
                 rekordbox_pdb_t::PAGE_TYPE_ARTWORK,
                 rekordbox_pdb_t::PAGE_TYPE_PLAYLIST_ENTRIES,
                 rekordbox_pdb_t::PAGE_TYPE_TRACKS,
                 rekordbox_pdb_t::PAGE_TYPE_PLAYLIST_TREE,
         };
 
-        QHash<quint32, QString> keys;
-        QHash<quint32, QString> genres;
-        QHash<quint32, QString> artists;
-        QHash<quint32, QString> albums;
-        QHash<quint32, QString> artwork;
+        QHash<quint32, QString>& keys = contents.keys;
+        QHash<quint32, QString>& genres = contents.genres;
+        QHash<quint32, QString>& artists = contents.artists;
+        QHash<quint32, QString>& albums = contents.albums;
+        QHash<quint32, QString>& labels = contents.labels;
+        QHash<quint32, QString>& colors = contents.colors;
+        QHash<quint32, QString>& artwork = contents.artwork;
         // playlist id -> entry index -> track id. A map, not a list, because
         // entry indices are one-based and need not arrive in order.
         QMap<quint32, QMap<quint32, quint32>> playlistEntries;
@@ -189,6 +204,16 @@ PdbContents parsePdb(const QByteArray& data) {
                                     }
                                     albums[pRow->id()] = textOf(pRow->name());
                                 } break;
+                                case rekordbox_pdb_t::PAGE_TYPE_LABELS: {
+                                    auto* pRow = static_cast<rekordbox_pdb_t::label_row_t*>(
+                                            rowRef->body());
+                                    labels[pRow->id()] = textOf(pRow->name());
+                                } break;
+                                case rekordbox_pdb_t::PAGE_TYPE_COLORS: {
+                                    auto* pRow = static_cast<rekordbox_pdb_t::color_row_t*>(
+                                            rowRef->body());
+                                    colors[pRow->id()] = textOf(pRow->name());
+                                } break;
                                 case rekordbox_pdb_t::PAGE_TYPE_ARTWORK: {
                                     auto* pRow = static_cast<
                                             rekordbox_pdb_t::artwork_row_t*>(
@@ -213,16 +238,29 @@ PdbContents parsePdb(const QByteArray& data) {
                                     track.album = albums.value(pRow->album_id());
                                     track.genre = genres.value(pRow->genre_id());
                                     track.key = keys.value(pRow->key_id());
+                                    track.label = labels.value(pRow->label_id());
+                                    track.color = colors.value(pRow->color_id());
                                     track.comment = textOf(pRow->comment());
                                     track.filePath = textOf(pRow->file_path());
                                     track.analyzePath = textOf(pRow->analyze_path());
+                                    track.dateAdded = textOf(pRow->date_added());
                                     track.year = pRow->year();
                                     track.durationSeconds = pRow->duration();
                                     track.bitrate = pRow->bitrate();
                                     track.tempoCentiBpm = pRow->tempo();
                                     track.rating = pRow->rating();
-                                    track.colorId = pRow->color_id();
                                     track.artworkId = pRow->artwork_id();
+                                    track.sampleRate = pRow->sample_rate();
+                                    track.fileSize = pRow->file_size();
+                                    track.trackNumber = pRow->track_number();
+                                    track.discNumber = pRow->disc_number();
+                                    track.playCount = pRow->play_count();
+                                    track.artistId = pRow->artist_id();
+                                    track.albumId = pRow->album_id();
+                                    track.genreId = pRow->genre_id();
+                                    track.keyId = pRow->key_id();
+                                    track.labelId = pRow->label_id();
+                                    track.colorId = pRow->color_id();
                                     // Row offset 0x5a. The schema leaves it
                                     // unnamed -- hence _unnamed29, the 30th
                                     // field in the seq -- and documents it as

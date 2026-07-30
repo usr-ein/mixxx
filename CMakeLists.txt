@@ -1080,10 +1080,16 @@ add_library(mixxx-lib STATIC EXCLUDE_FROM_ALL
   src/network/prolink/rpc/rpcclient.cpp
   src/network/prolink/rpc/rpcmessage.cpp
   src/network/prolink/rpc/xdrbuffer.cpp
+  src/network/prolink/server/prolinkanalysiswire.cpp
+  src/network/prolink/server/prolinkdbserverd.cpp
+  src/network/prolink/server/prolinknfsserver.cpp
+  src/network/prolink/server/prolinkservedmedium.cpp
+  src/network/prolink/server/prolinkvfs.cpp
   src/network/prolink/prolinknetworkservice.cpp
   src/network/prolink/prolinkbeatlistener.cpp
   src/network/prolink/prolinkmediaquery.cpp
   src/network/prolink/prolinkpacket.cpp
+  src/network/prolink/prolinkpdb.cpp
   src/network/prolink/prolinkvirtualcdj.cpp
   src/network/webtask.cpp
   src/preferences/colorpaletteeditor.cpp
@@ -2470,7 +2476,6 @@ if(PROLINK)
     src/library/prolink/dlgprolinkfetch.cpp
     src/library/prolink/prolinkdbwriter.cpp
     src/library/prolink/prolinkfeature.cpp
-    src/library/prolink/prolinkpdbimport.cpp
     src/library/prolink/prolinkplaylistmodel.cpp
     src/library/prolink/prolinktrackfetcher.cpp)
   target_compile_definitions(mixxx-lib PUBLIC __PROLINK__)
@@ -2748,6 +2753,8 @@ endif()
 add_library(prolink_protocol STATIC EXCLUDE_FROM_ALL
   src/network/prolink/generated/prolink_dbserver.cpp
   src/network/prolink/generated/prolink_djl.cpp
+  src/network/prolink/generated/prolink_rpc.cpp
+  src/network/prolink/generated/prolink_status.cpp
 )
 target_include_directories(prolink_protocol SYSTEM PUBLIC src/network/prolink/generated)
 target_link_libraries(mixxx-lib PRIVATE prolink_protocol)

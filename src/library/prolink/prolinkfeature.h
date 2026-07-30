@@ -7,7 +7,7 @@
 #include <memory>
 
 #include "library/baseexternallibraryfeature.h"
-#include "library/prolink/prolinkpdbimport.h"
+#include "network/prolink/prolinkpdb.h"
 #include "library/treeitemmodel.h"
 #include "network/prolink/prolinkdevice.h"
 #include "network/prolink/prolinkmediaquery.h"

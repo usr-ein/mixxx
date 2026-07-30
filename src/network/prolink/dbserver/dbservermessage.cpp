@@ -319,6 +319,60 @@ Message makeGetArtwork(quint32 transactionId, quint32 descriptor, quint32 artwor
             {Field::u32(descriptor), Field::u32(artworkId)});
 }
 
+QString menuLabel(const QString& text) {
+    return QChar(0xFFFA) + text + QChar(0xFFFB);
+}
+
+Message makeMenuItem(quint32 parentId,
+        quint32 mainId,
+        const QString& label1,
+        const QString& label2,
+        quint32 itemType,
+        quint32 artworkId,
+        quint32 playlistPosition,
+        quint32 flags) {
+    // The label lengths are in bytes and include the terminating NUL, so an
+    // n-character label announces 2(n+1).
+    const auto byteLength = [](const QString& text) {
+        return static_cast<quint32>((text.size() + 1) * 2);
+    };
+    return Message(0, // stamped by the caller with the render's id
+            MessageType::MenuItem,
+            {
+                    Field::u32(parentId),
+                    Field::u32(mainId),
+                    Field::u32(byteLength(label1)),
+                    Field::string(label1),
+                    Field::u32(byteLength(label2)),
+                    Field::string(label2),
+                    Field::u32(itemType),
+                    Field::u32(flags),
+                    Field::u32(artworkId),
+                    Field::u32(playlistPosition),
+                    Field::u32(flags ? 0x100 : 0),
+                    Field::u32(0),
+            });
+}
+
+void stampTransactionId(Message* pMessage, quint32 transactionId) {
+    if (pMessage) {
+        *pMessage = Message(transactionId,
+                static_cast<MessageType>(pMessage->type()),
+                pMessage->args());
+    }
+}
+
+void setArgument(Message* pMessage, int index, quint32 value) {
+    if (!pMessage || index < 0 || index >= pMessage->args().size()) {
+        return;
+    }
+    QList<Field> args = pMessage->args();
+    args[index] = Field::u32(value);
+    *pMessage = Message(pMessage->transactionId(),
+            static_cast<MessageType>(pMessage->type()),
+            args);
+}
+
 } // namespace dbserver
 } // namespace prolink
 } // namespace mixxx

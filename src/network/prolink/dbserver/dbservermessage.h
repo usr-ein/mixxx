@@ -47,14 +47,156 @@ enum class ArgType : quint8 {
     UInt32 = 0x06,
 };
 
-/// Only the message types this client actually sends or expects.
+/// Message types, in both directions: what we send as a client, and what a real
+/// player sends us as a server.
 enum class MessageType : quint16 {
     Introduce = 0x0000,
+    /// Sent by a real CDJ after it has finished with a menu, 23 times in one
+    /// browse session, reusing the transaction id of the `RenderMenu` it
+    /// follows — and drawing **no reply at all**. Most likely "release that
+    /// menu's state". Answering it risks desynchronising a client that is not
+    /// listening for one.
+    MenuClose = 0x0001,
     Disconnect = 0x0100,
+
+    MenuRoot = 0x1000,
+    MenuGenre = 0x1001,
+    MenuArtist = 0x1002,
+    MenuAlbum = 0x1003,
+    MenuTrack = 0x1004,
+    MenuLabel = 0x100A,
+    MenuTime = 0x1010,
+    MenuBitrate = 0x1011,
+    MenuHistory = 0x1012,
+    MenuKey = 0x1014,
+    MenuPlaylist = 0x1105,
+    MenuSearch = 0x1300,
+    /// "Which sort orders does this menu offer?" The reply is the list a deck
+    /// shows under SORT, and it is the same twelve whatever argument 2 names.
+    MenuSort = 0x1400,
+
+    GetMetadata = 0x2002,
     GetArtwork = 0x2003,
+    GetWaveformPreview = 0x2004,
+    GetTrackInfo = 0x2102,
+    GetCuePoints = 0x2104,
+    GetGenericMetadata = 0x2202,
+    GetBeatGrid = 0x2204,
+    /// Undocumented, and the likely gate on playback: a real deck answers with
+    /// 1604 bytes, exactly the size of a `PVBR` payload — the MP3
+    /// variable-bitrate seek index. Without a time-to-byte-offset table a player
+    /// cannot seek in the file, which is what a load that resolves the path and
+    /// then never issues a single READ looks like.
+    GetVbrIndex = 0x2504,
+    GetWaveformDetail = 0x2904,
+
+    RenderMenu = 0x3000,
+    /// Undocumented. A player sends it mid-load, between `GetTrackInfo` and the
+    /// analysis fetches, and a real deck answers with a bare `Success` echoing
+    /// the type.
+    Unknown3100 = 0x3100,
+    /// Undocumented, two arguments, sent once during playback. Like
+    /// `Unknown3E03` it appears only when a player is browsing a *foreign*
+    /// device, and no capture shows a real answer — so ours is modelled on the
+    /// `0x3100` acknowledgement. **Guessed**, but erroring on an unknown request
+    /// is what stopped browsing dead in F25.
+    Unknown3D03 = 0x3D03,
+    /// Undocumented, sent immediately after `Introduce` by a player browsing a
+    /// foreign device — it does not appear between two CDJs. Answering it with
+    /// an error makes the player fetch the root menu and then disconnect without
+    /// drilling in, which is how F25 presented: every category listed, every one
+    /// of them empty.
+    Unknown3E03 = 0x3E03,
+
     Success = 0x4000,
+    MenuHeader = 0x4001,
     Artwork = 0x4002,
     Error = 0x4003,
+    MenuItem = 0x4101,
+    MenuFooter = 0x4201,
+    WaveformPreview = 0x4402,
+    VbrIndex = 0x4502,
+    BeatGrid = 0x4602,
+    CuePoints = 0x4702,
+    WaveformDetail = 0x4A02,
+    /// The reply to `Unknown3E03`, observed as `[0x3e03, 0, our number, ""]`.
+    Unknown4B02 = 0x4B02,
+};
+
+/// Menu-item kinds, carried in argument 7 of a `MenuItem`.
+///
+/// CDJ-3000s pack extra information into the two high bytes, so mask with
+/// 0xffff before comparing.
+enum class ItemType : quint32 {
+    Path = 0x0000,
+    Folder = 0x0001,
+    Album = 0x0002,
+    /// The title in a `GetMetadata` reply — but the **container** in a
+    /// `GetTrackInfo` reply, where the label is empty and the id holds a
+    /// rekordbox file type. The same byte means different things in the two
+    /// replies (F35).
+    TrackTitle = 0x0004,
+    Genre = 0x0006,
+    Artist = 0x0007,
+    Playlist = 0x0008,
+    Rating = 0x000A,
+    Duration = 0x000B,
+    Tempo = 0x000D,
+    Label = 0x000E,
+    Key = 0x000F,
+    Bitrate = 0x0010,
+    Year = 0x0011,
+    Color = 0x0013,
+    Comment = 0x0023,
+    HistoryPlaylist = 0x0024,
+    DateAdded = 0x002E,
+    /// The sixth item of a `GetTrackInfo` reply. Observed as a constant 1 across
+    /// MP3, AAC, WAV and AIFF in a real deck-to-deck load, so it is *not* the
+    /// container — that is item 1. Meaning still unknown (F35).
+    Unknown2F = 0x002F,
+    /// Heads a filtered list when there is more than one entry: id 0xffffffff,
+    /// label `ALL` wrapped like a category. Choosing it sends 0xffffffff as that
+    /// level's filter, meaning "do not narrow here".
+    All = 0x00A0,
+    SortDefault = 0x00A1,
+    SortAlphabet = 0x00A2,
+    PlayCount = 0x002A,
+    MenuGenre = 0x0080,
+    MenuArtist = 0x0081,
+    MenuAlbum = 0x0082,
+    MenuTrack = 0x0083,
+    MenuPlaylist = 0x0084,
+    MenuBpm = 0x0085,
+    MenuRating = 0x0086,
+    MenuLabel = 0x0089,
+    MenuKey = 0x008B,
+    MenuDateAdded = 0x008C,
+    MenuBitrate = 0x0093,
+    MenuPlayCount = 0x0097,
+};
+
+/// Argument 1 of a track-list request.
+///
+/// Also selects the **second column** returned in each item, which is why
+/// `Default` is not simply "unsorted": sort by BPM and the BPM appears beside
+/// every title (F43).
+enum class SortOrder : quint32 {
+    Default = 0x00,
+    Title = 0x01,
+    Artist = 0x02,
+    Album = 0x03,
+    Bpm = 0x04,
+    Rating = 0x05,
+    Genre = 0x06,
+    Comment = 0x07,
+    Time = 0x08,
+    Remixer = 0x09,
+    Label = 0x0A,
+    OriginalArtist = 0x0B,
+    Key = 0x0C,
+    Bitrate = 0x0D,
+    PlayCount = 0x10,
+    DateAdded = 0x11,
 };
 
 /// Byte `M` of a request descriptor: which part of the player's display the
@@ -176,6 +318,45 @@ QByteArray portQuery();
 Message makeIntroduce(int requesterNumber);
 Message makeDisconnect();
 Message makeGetArtwork(quint32 transactionId, quint32 descriptor, quint32 artworkId);
+
+// -- the serve direction -------------------------------------------------------
+
+/// Wrap a root-menu category label the way real hardware does.
+///
+/// Real players wrap these in U+FFFA (interlinear annotation anchor) and U+FFFB
+/// (terminator) — `￺PLAYLIST￻`. Presumably a marker letting the player
+/// substitute a localised string for a category it recognises. A bare label
+/// renders perfectly well, and the deck then **declines to open the category**
+/// (F26).
+QString menuLabel(const QString& text);
+
+/// Build a `0x4101` menu item — one row of a browse.
+///
+/// Always twelve arguments in a fixed order. Arguments 2 and 4 are the *byte*
+/// lengths of the two labels, which is twice the character count plus the NUL,
+/// and getting them wrong is one of the ways a player refuses to render a list.
+///
+/// **Argument 10 tracks argument 7.** Across all 1,700 menu items in the
+/// reference captures the two are never independent: an item carrying
+/// `flags = 0x01000000` also carries 0x100 here, and an item with zero flags has
+/// zero here. Both are non-zero only on the two kinds of item that name a track.
+/// Deriving it removes the chance of setting one and forgetting the other.
+Message makeMenuItem(quint32 parentId,
+        quint32 mainId,
+        const QString& label1,
+        const QString& label2 = QString(),
+        quint32 itemType = static_cast<quint32>(ItemType::TrackTitle),
+        quint32 artworkId = 0,
+        quint32 playlistPosition = 0,
+        quint32 flags = 0x01000000);
+
+/// Overwrite a built item's transaction id. Items are built without one and
+/// stamped with the render's, so a client can correlate a whole page.
+void stampTransactionId(Message* pMessage, quint32 transactionId);
+
+/// Overwrite argument *index* of a built item. Used for the playlist position,
+/// which is only known once the list has been assembled.
+void setArgument(Message* pMessage, int index, quint32 value);
 
 } // namespace dbserver
 } // namespace prolink

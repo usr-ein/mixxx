@@ -102,6 +102,7 @@ enum class NfsStat : quint32 {
     Io = 5,
     NxIo = 6,
     Acces = 13,
+    NotDir = 20,
     IsDir = 21,
     /// The filehandle no longer refers to anything — what a player returns after
     /// its media has been swapped. Treated as "re-mount and retry once" rather

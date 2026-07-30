@@ -91,6 +91,18 @@ bool parseReply(const QByteArray& datagram, Reply* pReply) {
     return reader.isValid();
 }
 
+QByteArray buildReply(quint32 xid, const QByteArray& results, AcceptStat status) {
+    XdrWriter writer;
+    writer.u32(xid);
+    writer.u32(static_cast<quint32>(MsgType::Reply));
+    writer.u32(static_cast<quint32>(ReplyStat::Accepted));
+    // Our verifier: AUTH_NULL, empty body. Same as every player's.
+    writer.u32(static_cast<quint32>(AuthFlavor::Null));
+    writer.opaqueVar(QByteArray());
+    writer.u32(static_cast<quint32>(status));
+    return writer.data() + results;
+}
+
 QString Reply::errorString() const {
     if (isOk()) {
         return QString();

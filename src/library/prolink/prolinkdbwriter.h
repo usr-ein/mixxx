@@ -3,7 +3,7 @@
 #include <QSqlDatabase>
 #include <QString>
 
-#include "library/prolink/prolinkpdbimport.h"
+#include "network/prolink/prolinkpdb.h"
 #include "network/prolink/prolinkdefs.h"
 
 namespace mixxx {
