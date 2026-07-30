@@ -1,6 +1,7 @@
 #include "widget/wlibrarysidebar.h"
 
 #include <QHeaderView>
+#include <QScrollBar>
 #include <QUrl>
 #include <QtDebug>
 
@@ -28,6 +29,105 @@ WLibrarySidebar::WLibrarySidebar(QWidget* parent)
     header()->setStretchLastSection(false);
     header()->setSectionResizeMode(QHeaderView::ResizeToContents);
     header()->setHorizontalScrollMode(QAbstractItemView::ScrollPerPixel);
+    // The line above sets the scroll mode on the HEADER, which is a view in its
+    // own right; the tree keeps its own. Set the tree's too, or its horizontal
+    // scrollbar is measured in columns: range(0, columnCount - visibleCount),
+    // which for a one-column tree is range(0, 0). Sideways scrolling would then
+    // be impossible no matter how far an item overflows.
+    setHorizontalScrollMode(QAbstractItemView::ScrollPerPixel);
+
+    // A wider or narrower tree means a different sizeHint, and an expand can
+    // push the selected row sideways. Both need re-checking when that happens.
+    connect(this, &QTreeView::expanded, this, &WLibrarySidebar::slotContentChanged);
+    connect(this, &QTreeView::collapsed, this, &WLibrarySidebar::slotContentChanged);
+}
+
+void WLibrarySidebar::setModel(QAbstractItemModel* pModel) {
+    QTreeView::setModel(pModel);
+    if (!pModel) {
+        return;
+    }
+    // Features populate asynchronously (Rekordbox finds USB drives, ProLink
+    // finds players), so the widest item is rarely the widest one at startup.
+    connect(pModel,
+            &QAbstractItemModel::rowsInserted,
+            this,
+            &WLibrarySidebar::slotContentChanged);
+    connect(pModel,
+            &QAbstractItemModel::rowsRemoved,
+            this,
+            &WLibrarySidebar::slotContentChanged);
+    connect(pModel,
+            &QAbstractItemModel::modelReset,
+            this,
+            &WLibrarySidebar::slotContentChanged);
+    connect(pModel,
+            &QAbstractItemModel::dataChanged,
+            this,
+            &WLibrarySidebar::slotContentChanged);
+}
+
+QSize WLibrarySidebar::sizeHint() const {
+    const QSize base = QTreeView::sizeHint();
+    // Includes each row's icon, its label and the indentation of its depth.
+    const int contentWidth = sizeHintForColumn(0);
+    if (contentWidth <= 0) {
+        // No model, or nothing laid out yet.
+        return base;
+    }
+    // Chrome is MEASURED, not reconstructed from frameWidth(): the skin adds
+    // padding through the stylesheet, and stylesheet padding never appears in
+    // frameWidth(). Falls back to the frame alone before the first layout,
+    // when width() and the viewport are not yet meaningful.
+    const int chrome = qMax(width() - viewport()->width(), 2 * frameWidth());
+    return QSize(contentWidth + chrome, base.height());
+}
+
+void WLibrarySidebar::slotContentChanged() {
+    updateGeometry();
+    ensureCurrentItemVisible();
+}
+
+void WLibrarySidebar::currentChanged(const QModelIndex& current, const QModelIndex& previous) {
+    QTreeView::currentChanged(current, previous);
+    ensureCurrentItemVisible();
+}
+
+void WLibrarySidebar::ensureCurrentItemVisible() {
+    const QModelIndex index = currentIndex();
+    if (!index.isValid()) {
+        return;
+    }
+    QScrollBar* pScrollBar = horizontalScrollBar();
+    const int viewportWidth = viewport()->width();
+    if (!pScrollBar || viewportWidth <= 0) {
+        return;
+    }
+    const QRect itemRect = visualRect(index);
+    if (!itemRect.isValid()) {
+        return;
+    }
+
+    // visualRect() is in viewport coordinates and already carries the row's
+    // indentation, but its width is the rest of the COLUMN, not the label. Take
+    // the width from the delegate instead, or "fully visible" would mean "the
+    // column is visible" and a long label would still sit clipped.
+    const int scrollOffset = pScrollBar->value();
+    const int itemLeft = itemRect.left() + scrollOffset;
+    const int itemRight = itemLeft + sizeHintForIndex(index).width();
+
+    int target = scrollOffset;
+    if (itemRight > target + viewportWidth) {
+        target = itemRight - viewportWidth;
+    }
+    // Second, and deliberately after the right edge: an item too wide to fit
+    // has to lose its tail rather than its head, because the start of the name
+    // is what tells you which item it is.
+    if (itemLeft < target) {
+        target = itemLeft;
+    }
+    // setValue() clamps to the bar's own range, so an over-scroll is harmless.
+    pScrollBar->setValue(target);
 }
 
 void WLibrarySidebar::contextMenuEvent(QContextMenuEvent *event) {
