@@ -3,6 +3,7 @@
 #include <QSqlError>
 #include <QSqlQuery>
 
+#include "library/coverart.h"
 #include "library/dao/trackschema.h"
 #include "library/queryutil.h"
 #include "util/logger.h"
@@ -55,6 +56,17 @@ bool createProLinkTables(QSqlDatabase& database) {
             "    analyze_path TEXT,"
             "    device TEXT,"
             "    color INTEGER,"
+            "    artwork_path TEXT,"
+            // The cover-art columns BaseSqlTableModel reads directly. Populating
+            // them means the table shows covers from the model alone, with no
+            // Track object -- which is the whole point: a Track cannot exist
+            // until its audio has been downloaded, and the covers should be
+            // visible while browsing.
+            "    coverart_source INTEGER,"
+            "    coverart_type INTEGER,"
+            "    coverart_location TEXT,"
+            "    coverart_color INTEGER,"
+            "    coverart_digest BLOB,"
             "    UNIQUE(device, rb_id)"
             ")").arg(kProLinkLibraryTable));
     if (!query.exec()) {
@@ -142,10 +154,12 @@ int writeMedium(QSqlDatabase& database,
     insertTrack.prepare(QStringLiteral(
             "INSERT OR REPLACE INTO %1 "
             "(rb_id, artist, title, album, year, genre, tracknumber, location, "
-            " comment, duration, bitrate, bpm, key, rating, analyze_path, device, color) "
+            " comment, duration, bitrate, bpm, key, rating, analyze_path, device, "
+            " color, artwork_path, coverart_source, coverart_type, coverart_location) "
             "VALUES (:rb_id, :artist, :title, :album, :year, :genre, :tracknumber, "
             " :location, :comment, :duration, :bitrate, :bpm, :key, :rating, "
-            " :analyze_path, :device, :color)")
+            " :analyze_path, :device, :color, :artwork_path, :coverart_source, "
+            " :coverart_type, :coverart_location)")
                                 .arg(kProLinkLibraryTable));
 
     // rb_id -> our row id, so playlist entries can be resolved without a query
@@ -176,6 +190,29 @@ int writeMedium(QSqlDatabase& database,
                 QString(localRoot + track.analyzePath));
         insertTrack.bindValue(QStringLiteral(":device"), deviceKey);
         insertTrack.bindValue(QStringLiteral(":color"), QVariant());
+        // Kept as the *remote* path: it is what has to be asked for, and the
+        // local location is derivable from it. Storing the local one instead
+        // would mean reconstructing the remote path by stripping a prefix,
+        // which is exactly the reconciliation the concatenation scheme avoids.
+        insertTrack.bindValue(QStringLiteral(":artwork_path"), track.artworkPath);
+        // Written now, pointing at a file the prefetch has not necessarily
+        // delivered yet. Mixxx tolerates a cover location that does not resolve
+        // -- it simply draws nothing -- so the row is correct in advance and the
+        // art appears as it lands, rather than needing the rows rewritten.
+        if (track.artworkPath.isEmpty()) {
+            insertTrack.bindValue(QStringLiteral(":coverart_source"),
+                    static_cast<int>(CoverInfo::UNKNOWN));
+            insertTrack.bindValue(QStringLiteral(":coverart_type"),
+                    static_cast<int>(CoverInfo::NONE));
+            insertTrack.bindValue(QStringLiteral(":coverart_location"), QString());
+        } else {
+            insertTrack.bindValue(QStringLiteral(":coverart_source"),
+                    static_cast<int>(CoverInfo::GUESSED));
+            insertTrack.bindValue(QStringLiteral(":coverart_type"),
+                    static_cast<int>(CoverInfo::FILE));
+            insertTrack.bindValue(QStringLiteral(":coverart_location"),
+                    QString(localRoot + track.artworkPath));
+        }
         if (!insertTrack.exec()) {
             LOG_FAILED_QUERY(insertTrack);
             continue;

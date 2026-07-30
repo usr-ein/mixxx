@@ -23,6 +23,9 @@ struct PdbTrack {
     QString comment;
     QString filePath;
     QString analyzePath;
+    /// Cover image on the medium, resolved from the ARTWORK table via
+    /// `artworkId`. Empty when the track has no art.
+    QString artworkPath;
     quint32 year = 0;
     quint32 durationSeconds = 0;
     quint32 bitrate = 0;

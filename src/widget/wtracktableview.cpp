@@ -426,6 +426,9 @@ void WTrackTableView::slotMouseDoubleClicked(const QModelIndex& index) {
     if (doubleClickAction == DlgPrefLibrary::TrackDoubleClickAction::LoadToDeck &&
             pTrackModel->hasCapabilities(
                     TrackModel::Capability::LoadToDeck)) {
+        // Distinguishes "the user wants this track" from the incidental
+        // getTrack() calls made while drawing and sorting. Default is a no-op.
+        pTrackModel->willLoadTrack(index);
         TrackPointer pTrack = pTrackModel->getTrack(index);
         if (pTrack) {
             emit loadTrack(pTrack);

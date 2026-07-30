@@ -4,6 +4,7 @@
 #include <QUrl>
 
 #include <QDir>
+#include <QSet>
 #include <QSqlDatabase>
 #include <QStandardPaths>
 
@@ -16,6 +17,7 @@
 #include "library/trackcollection.h"
 #include "library/trackcollectionmanager.h"
 #include "library/treeitem.h"
+#include "util/logger.h"
 #include "library/queryutil.h"
 #include "moc_prolinkfeature.cpp"
 #include "network/prolink/prolinknetworkservice.h"
@@ -28,6 +30,7 @@ using mixxx::prolink::ProLinkDevice;
 using mixxx::prolink::ProLinkNetworkService;
 
 namespace {
+const mixxx::Logger kLogger("ProLinkFeature");
 const QString kConfigGroup = QStringLiteral("[ProLink]");
 const QString kViewName = QStringLiteral("PROLINKHOME");
 
@@ -130,7 +133,16 @@ ProLinkFeature::ProLinkFeature(Library* pLibrary, UserSettingsPointer pConfig)
             LIBRARYTABLE_BPM,
             LIBRARYTABLE_KEY,
             LIBRARYTABLE_COLOR,
-            REKORDBOX_ANALYZE_PATH};
+            REKORDBOX_ANALYZE_PATH,
+            // Ours alone; the model reads it by name to find the medium's cover
+            // file, since Mixxx would otherwise guess from the audio file's
+            // directory and a rekordbox medium keeps its art under PIONEER/.
+            QStringLiteral("artwork_path"),
+            LIBRARYTABLE_COVERART_SOURCE,
+            LIBRARYTABLE_COVERART_TYPE,
+            LIBRARYTABLE_COVERART_LOCATION,
+            LIBRARYTABLE_COVERART_COLOR,
+            LIBRARYTABLE_COVERART_DIGEST};
     QStringList searchColumns = {LIBRARYTABLE_ARTIST,
             LIBRARYTABLE_TITLE,
             LIBRARYTABLE_ALBUM,
@@ -143,8 +155,10 @@ ProLinkFeature::ProLinkFeature(Library* pLibrary, UserSettingsPointer pConfig)
             std::move(columns),
             std::move(searchColumns),
             false);
+    m_pFetcher = make_parented<ProLinkTrackFetcher>(m_pNetwork.get(), this);
     m_pPlaylistModel = make_parented<ProLinkPlaylistModel>(
             this, pLibrary->trackCollectionManager(), m_trackSource);
+    m_pPlaylistModel->setFetcher(m_pFetcher);
 
     // Recreate the temporary tables from empty. They hold a cache of somebody
     // else's USB stick and are worthless once it is unplugged, so carrying them
@@ -178,6 +192,7 @@ std::unique_ptr<BaseSqlTableModel> ProLinkFeature::createPlaylistModelForPlaylis
         const QVariant& data) {
     auto pModel = std::make_unique<ProLinkPlaylistModel>(
             this, m_pLibrary->trackCollectionManager(), m_trackSource);
+    pModel->setFetcher(m_pFetcher);
     pModel->setPlaylist(data.toString());
     return pModel;
 }
@@ -263,6 +278,9 @@ void ProLinkFeature::activateChild(const QModelIndex& index) {
                 QStringLiteral("%1|%2")
                         .arg(mixxx::prolink::deviceKeyFor(mac, slot),
                                 pItem->getLabel().section(QStringLiteral(" ("), 0, 0));
+        m_pPlaylistModel->setMedium(mac,
+                slot,
+                QDir(cacheRootPath()).filePath(mixxx::prolink::deviceKeyFor(mac, slot)));
         m_pPlaylistModel->setPlaylist(playlistName);
         emit showTrackModel(m_pPlaylistModel);
         return;
@@ -359,7 +377,41 @@ void ProLinkFeature::onDatabaseFetched(const QByteArray& mac,
     m_trackSource->buildIndex();
 
     showPlaylists(mac, slot);
+    prefetchArtwork(mac, slot);
     refreshStatusPage();
+}
+
+void ProLinkFeature::prefetchArtwork(const QByteArray& mac, MediaSlot slot) {
+    const Medium& medium = m_media.value(mediumKey(mac, slot));
+    if (medium.state != Medium::State::Ready) {
+        return;
+    }
+    const QString localRoot =
+            QDir(cacheRootPath()).filePath(mixxx::prolink::deviceKeyFor(mac, slot));
+
+    // Distinct paths only: an album's tracks all share one image, so a 651-track
+    // medium has a few hundred covers at most, and fetching per track would ask
+    // for the same file a dozen times.
+    QSet<QString> wanted;
+    for (const mixxx::prolink::PdbTrack& track : medium.contents.tracks) {
+        if (!track.artworkPath.isEmpty()) {
+            wanted.insert(track.artworkPath);
+        }
+    }
+    if (wanted.isEmpty()) {
+        return;
+    }
+
+    // Queued, not awaited. Covers are tens of kilobytes each and the NFS client
+    // serialises them behind one another anyway; they appear as they land. This
+    // deliberately shares the link with the CDJs' own playback, so it is worth
+    // knowing it is bounded: a few hundred small files, once per medium, never
+    // repeated because fetchOptional skips anything already on disk.
+    for (const QString& remote : wanted) {
+        m_pFetcher->fetchOptional(mac, slot, remote, localRoot + remote);
+    }
+    kLogger.info() << "queued" << wanted.size() << "cover images for"
+                   << mediumKey(mac, slot);
 }
 
 void ProLinkFeature::showPlaylists(const QByteArray& mac, MediaSlot slot) {

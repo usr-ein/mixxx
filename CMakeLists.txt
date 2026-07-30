@@ -2457,7 +2457,8 @@ if(PROLINK)
     src/library/prolink/prolinkdbwriter.cpp
     src/library/prolink/prolinkfeature.cpp
     src/library/prolink/prolinkpdbimport.cpp
-    src/library/prolink/prolinkplaylistmodel.cpp)
+    src/library/prolink/prolinkplaylistmodel.cpp
+    src/library/prolink/prolinktrackfetcher.cpp)
   target_compile_definitions(mixxx-lib PUBLIC __PROLINK__)
 endif()
 

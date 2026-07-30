@@ -14,6 +14,7 @@
 #include "util/parented_ptr.h"
 
 #include "library/prolink/prolinkplaylistmodel.h"
+#include "library/prolink/prolinktrackfetcher.h"
 
 class Library;
 class BaseTrackCache;
@@ -116,10 +117,13 @@ class ProLinkFeature : public BaseExternalLibraryFeature {
     void addSlotNodes(int deviceRow, const QByteArray& mac);
     /// Splice a medium's playlists under its slot node.
     void showPlaylists(const QByteArray& mac, mixxx::prolink::MediaSlot slot);
+    /// Queue every distinct cover image on a medium.
+    void prefetchArtwork(const QByteArray& mac, mixxx::prolink::MediaSlot slot);
     int rowForSlot(int deviceRow, mixxx::prolink::MediaSlot slot) const;
 
     parented_ptr<TreeItemModel> m_pSidebarModel;
     parented_ptr<ProLinkPlaylistModel> m_pPlaylistModel;
+    parented_ptr<ProLinkTrackFetcher> m_pFetcher;
     QSharedPointer<BaseTrackCache> m_trackSource;
     std::unique_ptr<mixxx::prolink::ProLinkNetworkService> m_pNetwork;
 

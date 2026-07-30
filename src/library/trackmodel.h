@@ -104,6 +104,19 @@ class TrackModel {
 
     // Deserialize and return the track at the given QModelIndex
     // or TrackRef in this result set.
+    /// Called immediately before a track is fetched *in order to be loaded*,
+    /// as opposed to the many incidental getTrack() calls the views and
+    /// delegates make while drawing and sorting.
+    ///
+    /// Only a model that has to do real work to make a track available needs
+    /// this. ProLink does: its tracks live on another device, and it must not
+    /// start a download every time the table asks about a row -- but it must
+    /// start one when the user actually asks for the track. Nothing else can
+    /// tell those two apart from inside getTrack().
+    virtual void willLoadTrack(const QModelIndex& index) {
+        Q_UNUSED(index);
+    }
+
     virtual TrackPointer getTrack(const QModelIndex& index) const = 0;
     virtual TrackPointer getTrackByRef(const TrackRef& trackRef) const = 0;
 

@@ -3,9 +3,11 @@
 #include <QSharedPointer>
 
 #include "library/baseexternalplaylistmodel.h"
+#include "network/prolink/prolinkdefs.h"
 
 class BaseTrackCache;
 class TrackCollectionManager;
+class ProLinkTrackFetcher;
 
 /// The track table shown when a ProLink playlist is selected.
 ///
@@ -37,7 +39,38 @@ class ProLinkPlaylistModel : public BaseExternalPlaylistModel {
             TrackCollectionManager* pTrackCollectionManager,
             QSharedPointer<BaseTrackCache> trackSource);
 
+    /// The fetcher used to make a track local on demand. Not owned.
+    void setFetcher(ProLinkTrackFetcher* pFetcher) {
+        m_pFetcher = pFetcher;
+    }
+
+    /// Which medium the currently shown playlist came from, and where its files
+    /// live locally. Set alongside setPlaylist().
+    void setMedium(const QByteArray& mac,
+            mixxx::prolink::MediaSlot slot,
+            const QString& localRoot) {
+        m_mac = mac;
+        m_slot = slot;
+        m_remotePathPrefix = localRoot;
+    }
+
+
+
+    void willLoadTrack(const QModelIndex& index) override;
     TrackPointer getTrack(const QModelIndex& index) const override;
     bool isColumnHiddenByDefault(int column) override;
     bool isColumnInternal(int column) override;
+
+  private:
+    QString artworkPathForRow(const QModelIndex& index) const;
+
+    ProLinkTrackFetcher* m_pFetcher = nullptr;
+    QByteArray m_mac;
+    mixxx::prolink::MediaSlot m_slot = mixxx::prolink::MediaSlot::Usb;
+    /// Local root for this medium; a track's remote path is its location with
+    /// this prefix removed, which is exact because the location was built by
+    /// concatenating the two in the first place.
+    QString m_remotePathPrefix;
+    /// Mutable because getTrack() is const and must consume the arm.
+    mutable bool m_bFetchOnMiss = false;
 };

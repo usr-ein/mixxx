@@ -105,6 +105,7 @@ PdbContents parsePdb(const QByteArray& data) {
                 rekordbox_pdb_t::PAGE_TYPE_GENRES,
                 rekordbox_pdb_t::PAGE_TYPE_ARTISTS,
                 rekordbox_pdb_t::PAGE_TYPE_ALBUMS,
+                rekordbox_pdb_t::PAGE_TYPE_ARTWORK,
                 rekordbox_pdb_t::PAGE_TYPE_PLAYLIST_ENTRIES,
                 rekordbox_pdb_t::PAGE_TYPE_TRACKS,
                 rekordbox_pdb_t::PAGE_TYPE_PLAYLIST_TREE,
@@ -114,6 +115,7 @@ PdbContents parsePdb(const QByteArray& data) {
         QHash<quint32, QString> genres;
         QHash<quint32, QString> artists;
         QHash<quint32, QString> albums;
+        QHash<quint32, QString> artwork;
         // playlist id -> entry index -> track id. A map, not a list, because
         // entry indices are one-based and need not arrive in order.
         QMap<quint32, QMap<quint32, quint32>> playlistEntries;
@@ -187,6 +189,12 @@ PdbContents parsePdb(const QByteArray& data) {
                                     }
                                     albums[pRow->id()] = textOf(pRow->name());
                                 } break;
+                                case rekordbox_pdb_t::PAGE_TYPE_ARTWORK: {
+                                    auto* pRow = static_cast<
+                                            rekordbox_pdb_t::artwork_row_t*>(
+                                            rowRef->body());
+                                    artwork[pRow->id()] = textOf(pRow->path());
+                                } break;
                                 case rekordbox_pdb_t::PAGE_TYPE_PLAYLIST_ENTRIES: {
                                     auto* pRow = static_cast<
                                             rekordbox_pdb_t::playlist_entry_row_t*>(
@@ -226,6 +234,7 @@ PdbContents parsePdb(const QByteArray& data) {
                                     // makes a deck fetch a file, try to decode
                                     // an AAC as an MP3, and give up.
                                     track.fileType = pRow->_unnamed29();
+                                    track.artworkPath = artwork.value(pRow->artwork_id());
                                     contents.tracks.append(track);
                                 } break;
                                 case rekordbox_pdb_t::PAGE_TYPE_PLAYLIST_TREE: {
