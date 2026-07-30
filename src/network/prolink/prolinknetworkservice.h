@@ -3,13 +3,26 @@
 #include <QList>
 #include <QObject>
 #include <QThread>
+#include <memory>
 
+#include "network/prolink/nfs/nfsfiletransfer.h"
 #include "network/prolink/prolinkdevice.h"
 
 namespace mixxx {
 namespace prolink {
 
+namespace nfs {
+class NfsFileTransfer;
+}
+
 class ProLinkDiscovery;
+} // namespace prolink
+} // namespace mixxx
+
+class ControlPushButton;
+
+namespace mixxx {
+namespace prolink {
 
 /// The single object the rest of Mixxx talks to about Pro DJ Link.
 ///
@@ -67,6 +80,17 @@ class ProLinkNetworkService : public QObject {
     /// removal grace period.
     void refresh();
 
+    /// Pull `export.pdb` off the first player that has one, and log what
+    /// happened: byte count, SHA-1, elapsed time, throughput.
+    ///
+    /// This is a diagnostic, not the real import path -- nothing is parsed or
+    /// kept. It exists because it is the strongest check available on the whole
+    /// RPC/NFS stack and it needs no GUI: the digest it logs can be compared
+    /// against the same file read off the physically ejected stick, and
+    /// byte-identical is the only acceptable answer. Triggered by the
+    /// `[ProLink],pull_db` control.
+    void pullDatabase(MediaSlot slot = MediaSlot::Usb);
+
   signals:
     void deviceFound(const mixxx::prolink::ProLinkDevice& device);
     void deviceChanged(const mixxx::prolink::ProLinkDevice& device);
@@ -81,6 +105,9 @@ class ProLinkNetworkService : public QObject {
     void onDeviceLost(const QByteArray& mac);
 
   private:
+    void pullDatabaseOnNetworkThread(const ProLinkDevice& device, MediaSlot slot);
+    void reportPull(const nfs::NfsFileTransfer::Result& result);
+
     /// Raw and parented to `this`, not parented_ptr: created lazily in start(),
     /// and parented_ptr is deliberately non-assignable.
     QThread* m_pThread = nullptr;
@@ -90,6 +117,12 @@ class ProLinkNetworkService : public QObject {
     /// GUI-thread mirror of the peer table, kept in step by the three slots
     /// above. Duplicating it is cheaper and far safer than locking the real one.
     QList<ProLinkDevice> m_devices;
+
+    /// `[ProLink],pull_db` -- fires the diagnostic above. Owned here rather than
+    /// by the library feature so the two layers stay independent, and so this
+    /// works even if the feature is not shown.
+    std::unique_ptr<ControlPushButton> m_pPullDbControl;
+
     bool m_listening = false;
     QString m_lastError;
 };

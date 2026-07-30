@@ -1,8 +1,13 @@
 #include "network/prolink/prolinknetworkservice.h"
 
+#include <QCryptographicHash>
 #include <QMetaObject>
+#include <QNetworkInterface>
 
 #include "moc_prolinknetworkservice.cpp"
+#include "control/controlpushbutton.h"
+#include "network/prolink/nfs/nfsfiletransfer.h"
+#include "network/prolink/nfs/nfsv2client.h"
 #include "network/prolink/prolinkdiscovery.h"
 #include "util/logger.h"
 
@@ -13,13 +18,40 @@ const mixxx::Logger kLogger("ProLinkNetworkService");
 /// so exceeding this means something is genuinely wedged, and hanging Mixxx's
 /// exit would be worse than leaking a thread.
 constexpr int kThreadQuitTimeoutMs = 2000;
+
+/// Our own address on the interface a device's announcements arrived on.
+///
+/// Not cosmetic on the deck, which has eth0 on the CDJ network and wlan0 on the
+/// house LAN: bind the wrong one and the kernel routes link-local traffic out
+/// the wrong NIC, after which every RPC times out with nothing to point at.
+QHostAddress localAddressFor(const mixxx::prolink::ProLinkDevice& device) {
+    const QNetworkInterface iface = QNetworkInterface::interfaceFromName(device.interfaceName);
+    for (const QNetworkAddressEntry& entry : iface.addressEntries()) {
+        if (entry.ip().protocol() == QAbstractSocket::IPv4Protocol) {
+            return entry.ip();
+        }
+    }
+    // Falling back to Any is better than refusing: on a single-homed host it is
+    // correct, and on a multi-homed one it at least tries.
+    return QHostAddress(QHostAddress::AnyIPv4);
+}
 } // namespace
 
 namespace mixxx {
 namespace prolink {
 
 ProLinkNetworkService::ProLinkNetworkService(QObject* parent)
-        : QObject(parent) {
+        : QObject(parent),
+          m_pPullDbControl(std::make_unique<ControlPushButton>(
+                  ConfigKey(QStringLiteral("[ProLink]"), QStringLiteral("pull_db")))) {
+    connect(m_pPullDbControl.get(),
+            &ControlPushButton::valueChanged,
+            this,
+            [this](double value) {
+                if (value > 0) {
+                    pullDatabase();
+                }
+            });
 }
 
 ProLinkNetworkService::~ProLinkNetworkService() {
@@ -134,6 +166,121 @@ void ProLinkNetworkService::refresh() {
             m_pDiscovery,
             [pDiscovery] { pDiscovery->forgetStaleDevices(); },
             Qt::QueuedConnection);
+}
+
+void ProLinkNetworkService::pullDatabase(MediaSlot slot) {
+    // Pick the first player, since this is a diagnostic rather than a chooser.
+    // Restricted to 1-4: a mixer announces itself too and has no media.
+    ProLinkDevice target;
+    for (const ProLinkDevice& device : m_devices) {
+        if (device.isPlayer() && !device.isStale()) {
+            target = device;
+            break;
+        }
+    }
+    if (!target.isValid()) {
+        kLogger.warning() << "pull_db: no player on the network to pull from";
+        return;
+    }
+    if (!m_pDiscovery) {
+        return;
+    }
+    // Hop onto the network thread: everything below opens sockets.
+    ProLinkDiscovery* pAnchor = m_pDiscovery;
+    const ProLinkDevice device = target;
+    QMetaObject::invokeMethod(
+            pAnchor,
+            [this, device, slot] { pullDatabaseOnNetworkThread(device, slot); },
+            Qt::QueuedConnection);
+}
+
+void ProLinkNetworkService::pullDatabaseOnNetworkThread(
+        const ProLinkDevice& device, MediaSlot slot) {
+    const QString exportPath = exportPathForSlot(slot);
+    kLogger.info() << "pull_db: mounting" << exportPath << "on" << device.label()
+                   << device.address.toString();
+
+    // Bound to the discovery object so they live and die on this thread. Both
+    // are deleted when the transfer completes, via deleteLater on this thread's
+    // own event loop -- which is running, unlike at shutdown.
+    auto* pNfs = new nfs::NfsV2Client(device.address, localAddressFor(device), m_pDiscovery);
+    auto* pTransfer = new nfs::NfsFileTransfer(pNfs, m_pDiscovery);
+
+    pNfs->mount(exportPath,
+            [this, pNfs, pTransfer, exportPath](
+                    const nfs::NfsV2Client::Outcome<QByteArray>& mounted) {
+                if (!mounted.ok) {
+                    kLogger.warning() << "pull_db:" << mounted.error;
+                    pTransfer->deleteLater();
+                    pNfs->deleteLater();
+                    return;
+                }
+                kLogger.info() << "pull_db: mounted, mountd" << pNfs->mountdPort()
+                               << "nfsd" << pNfs->nfsdPort();
+
+                const QString pdbPath =
+                        QStringLiteral("PIONEER/rekordbox/export.pdb");
+                pNfs->resolvePath(mounted.value,
+                        pdbPath,
+                        [this, pNfs, pTransfer, exportPath, pdbPath](
+                                const nfs::NfsV2Client::Outcome<QByteArray>& file) {
+                            if (!file.ok) {
+                                kLogger.warning() << "pull_db:" << file.error;
+                                pTransfer->deleteLater();
+                                pNfs->deleteLater();
+                                return;
+                            }
+                            pNfs->getAttributes(file.value,
+                                    [this, pNfs, pTransfer, exportPath, file](
+                                            const nfs::NfsV2Client::Outcome<
+                                                    nfs::FileAttributes>& attrs) {
+                                        if (!attrs.ok) {
+                                            kLogger.warning() << "pull_db:" << attrs.error;
+                                            pTransfer->deleteLater();
+                                            pNfs->deleteLater();
+                                            return;
+                                        }
+                                        kLogger.info() << "pull_db: export.pdb is"
+                                                       << attrs.value.size << "bytes";
+                                        pTransfer->fetch(file.value,
+                                                attrs.value.size,
+                                                [this, pNfs, pTransfer, exportPath](
+                                                        const nfs::NfsFileTransfer::
+                                                                Result& result) {
+                                                    reportPull(result);
+                                                    pNfs->unmount(exportPath);
+                                                    pTransfer->deleteLater();
+                                                    pNfs->deleteLater();
+                                                });
+                                    });
+                        });
+            });
+}
+
+void ProLinkNetworkService::reportPull(const nfs::NfsFileTransfer::Result& result) {
+    if (!result.ok) {
+        kLogger.warning() << "pull_db FAILED after" << result.reads
+                          << "reads:" << result.error;
+        return;
+    }
+    // SHA-1 rather than a full parse: the point is to compare against the same
+    // file read off the physically ejected stick, and byte-identical is the only
+    // acceptable answer.
+    //
+    // Note the two header bytes a player rewrites as it operates -- a play count
+    // or a history entry lands in the sequence counter at 0x14 (F13) -- so a
+    // digest taken minutes apart can legitimately differ in those. Compare the
+    // whole file first; if only bytes 0x10..0x18 differ, that is the player
+    // writing its own bookkeeping, not a transfer error.
+    const QByteArray digest =
+            QCryptographicHash::hash(result.data, QCryptographicHash::Sha1).toHex();
+    const double seconds = result.elapsedMs / 1000.0;
+    const double kib = result.data.size() / 1024.0;
+    kLogger.info() << "pull_db OK:" << result.data.size() << "bytes in"
+                   << result.reads << "reads," << result.shortReads << "short,"
+                   << result.elapsedMs << "ms,"
+                   << (seconds > 0 ? qRound(kib / seconds) : 0) << "KiB/s";
+    kLogger.info() << "pull_db sha1:" << digest;
 }
 
 void ProLinkNetworkService::onDeviceFound(const ProLinkDevice& device) {

@@ -128,5 +128,17 @@ enum class MediaSlot : quint8 {
 constexpr char kExportSd[] = "/B/";
 constexpr char kExportUsb[] = "/C/";
 
+/// The export a player serves for *slot*, or empty for a slot that has none.
+inline const char* exportPathForSlot(MediaSlot slot) {
+    switch (slot) {
+    case MediaSlot::Sd:
+        return kExportSd;
+    case MediaSlot::Usb:
+        return kExportUsb;
+    default:
+        return "";
+    }
+}
+
 } // namespace prolink
 } // namespace mixxx
