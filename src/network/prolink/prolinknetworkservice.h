@@ -3,6 +3,7 @@
 #include <QHash>
 #include <QList>
 #include <QObject>
+#include <QSet>
 #include <QThread>
 #include <memory>
 
@@ -14,6 +15,9 @@ namespace prolink {
 
 namespace nfs {
 class NfsFileTransfer;
+}
+namespace dbserver {
+class DbServerClient;
 }
 
 class ProLinkDiscovery;
@@ -113,6 +117,20 @@ class ProLinkNetworkService : public QObject {
             const QString& localPath,
             bool priority = false);
 
+    /// Fetch one cover image by its rekordbox artwork id, over dbserver.
+    ///
+    /// **Not over NFS**, deliberately. A real CDJ never asks NFS for an image
+    /// (F49), and doing it anyway fails in a way that looks like a protocol
+    /// mystery: the player's filehandle table churns under the extra lookups and
+    /// it starts answering NFSERR_STALE to handles a millisecond old. dbserver
+    /// answers by id, so no handle is minted and nothing accumulates.
+    ///
+    /// Silently does nothing if *localPath* already exists.
+    void fetchArtwork(const QByteArray& mac,
+            MediaSlot slot,
+            quint32 artworkId,
+            const QString& localPath);
+
   signals:
     void deviceFound(const mixxx::prolink::ProLinkDevice& device);
     void deviceChanged(const mixxx::prolink::ProLinkDevice& device);
@@ -127,6 +145,9 @@ class ProLinkNetworkService : public QObject {
             const QString& error);
     /// Result of fetchFile(). *error* is empty on success.
     void fileFetched(const QString& localPath, const QString& error);
+    /// Result of fetchArtwork(). *error* is empty on success, including the
+    /// success where the track simply has no art and nothing was written.
+    void artworkFetched(const QString& localPath, const QString& error);
     /// Bytes so far and total, for whatever is waiting on that file.
     void fileFetchProgress(const QString& localPath, quint32 done, quint32 total);
 
@@ -159,6 +180,23 @@ class ProLinkNetworkService : public QObject {
             const QByteArray& data,
             const QString& error);
     void reportPull(const nfs::NfsFileTransfer::Result& result);
+
+    /// A device number we may claim when talking to *target*'s dbserver.
+    ///
+    /// The server validates it: 1-4, belonging to a device actually on the
+    /// network, and not the player being asked. We do not announce, so there is
+    /// no number of our own to use and one has to be borrowed from another
+    /// player — which is exactly what a two-deck rig provides. Returns 0 when
+    /// there is nobody to borrow from, in which case artwork is unavailable
+    /// until we announce (Phase B step 10).
+    int pickRequesterNumber(const ProLinkDevice& target) const;
+    /// Get or create the dbserver connection for one player. Network thread.
+    dbserver::DbServerClient* dbClientFor(const ProLinkDevice& device, int requesterNumber);
+    void runArtworkRequest(const ProLinkDevice& device,
+            MediaSlot slot,
+            quint32 artworkId,
+            const QString& localPath,
+            int requesterNumber);
 
     /// Raw and parented to `this`, not parented_ptr: created lazily in start(),
     /// and parented_ptr is deliberately non-assignable.
@@ -193,6 +231,15 @@ class ProLinkNetworkService : public QObject {
     QTimer* m_pQueueWatchdog = nullptr;
     /// Keyed mac|slot. Lives on the network thread.
     QHash<QString, MountedMedium> m_mounts;
+
+    /// One dbserver connection per player, keyed on MAC hex, living on the
+    /// network thread and parented into it. Both slots share it: which medium a
+    /// request is about is the descriptor's slot byte, not the connection (F37).
+    QHash<QString, dbserver::DbServerClient*> m_dbClients;
+    /// Cover fetches already asked for, keyed on local path, so the same image
+    /// is not queued twice. An album's tracks share one cover, so without this a
+    /// 651-track medium would ask for a few hundred images a dozen times each.
+    QSet<QString> m_artworkInFlight;
 
     bool m_listening = false;
     QString m_lastError;

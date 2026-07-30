@@ -48,11 +48,21 @@ class ProLinkTrackFetcher : public QObject {
             const QString& remotePath,
             const QString& localPath);
 
-    /// Best-effort companion fetch. Failure is not reported: a missing cover or
+    /// Best-effort companion fetch over NFS. Failure is not reported: a missing
     /// beatgrid costs a feature, not the load.
     void fetchOptional(const QByteArray& mac,
             mixxx::prolink::MediaSlot slot,
             const QString& remotePath,
+            const QString& localPath);
+
+    /// Best-effort cover fetch, by rekordbox artwork id and over **dbserver**.
+    ///
+    /// Not fetchOptional() with an image path: a real CDJ never asks NFS for an
+    /// image, and doing it anyway exhausts the player's filehandle table and
+    /// starts failing with NFSERR_STALE (F49).
+    void fetchArtwork(const QByteArray& mac,
+            mixxx::prolink::MediaSlot slot,
+            quint32 artworkId,
             const QString& localPath);
 
     bool isBusy() const {

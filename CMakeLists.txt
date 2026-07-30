@@ -1071,6 +1071,8 @@ add_library(mixxx-lib STATIC EXCLUDE_FROM_ALL
   src/network/networktask.cpp
   src/network/prolink/prolinkdiscovery.cpp
   src/util/posixsignalhandler.cpp
+  src/network/prolink/dbserver/dbserverclient.cpp
+  src/network/prolink/dbserver/dbservermessage.cpp
   src/network/prolink/nfs/nfsfiletransfer.cpp
   src/network/prolink/nfs/nfsv2client.cpp
   src/network/prolink/rpc/rpcclient.cpp
@@ -2134,6 +2136,7 @@ if(BUILD_TESTING)
     src-mixxx-test
     src/test/analyserwaveformtest.cpp
     src/test/analyzersilence_test.cpp
+    src/test/prolink_dbserver_test.cpp
     src/test/prolink_pdb_test.cpp
     src/test/prolink_rpc_test.cpp
     src/test/prolink_xdr_test.cpp
@@ -2734,6 +2737,7 @@ endif()
 # rekordbox_metadata is one: generated Kaitai code is warning-noisy, and this
 # keeps -Wno-switch off the hand-written ProLink code next to it.
 add_library(prolink_protocol STATIC EXCLUDE_FROM_ALL
+  src/network/prolink/generated/prolink_dbserver.cpp
   src/network/prolink/generated/prolink_djl.cpp
 )
 target_include_directories(prolink_protocol SYSTEM PUBLIC src/network/prolink/generated)

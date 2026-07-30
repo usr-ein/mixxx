@@ -10,6 +10,7 @@
 #include "moc_prolinknetworkservice.cpp"
 #include "control/controlpushbutton.h"
 #include "util/cmdlineargs.h"
+#include "network/prolink/dbserver/dbserverclient.h"
 #include "network/prolink/nfs/nfsfiletransfer.h"
 #include "network/prolink/nfs/nfsv2client.h"
 #include "network/prolink/prolinkdiscovery.h"
@@ -173,6 +174,10 @@ void ProLinkNetworkService::shutdown() {
     m_fileQueue.clear();
     m_fileBusy = false;
     m_mounts.clear();
+    m_artworkInFlight.clear();
+    // The clients themselves are children of m_pDiscovery and go with it below;
+    // only our index of them is dropped here.
+    m_dbClients.clear();
 
     m_pThread->quit();
     const bool exited = m_pThread->wait(kThreadQuitTimeoutMs);
@@ -287,6 +292,127 @@ void ProLinkNetworkService::fetchFile(const QByteArray& mac,
         m_fileQueue.append(request);
     }
     pumpFileQueue();
+}
+
+int ProLinkNetworkService::pickRequesterNumber(const ProLinkDevice& target) const {
+    // Prefer a real player. The documented rule is that the number must belong
+    // to a device actually on the network and must not be the player being
+    // asked, so borrowing the other deck's number is the safe answer -- and on
+    // the two-deck rig there always is one.
+    for (const ProLinkDevice& device : m_devices) {
+        if (device.mac == target.mac || !device.online || !device.isPlayer()) {
+            continue;
+        }
+        if (device.deviceNumber >= kMinPlayerNumber &&
+                device.deviceNumber <= kMaxPlayerNumber) {
+            return device.deviceNumber;
+        }
+    }
+
+    // Nobody to borrow from: one player on the network, or the only other one is
+    // a mixer. Rather than refuse, take the lowest number in range that is not
+    // the target's and try it. The "must be present on the network" half of the
+    // rule is second-hand -- it comes from Beat Link's notes, not from anything
+    // we have watched a deck enforce -- so this is worth an attempt, and a
+    // refusal here is one clear error rather than a silent absence of covers.
+    for (int number = kMinPlayerNumber; number <= kMaxPlayerNumber; ++number) {
+        if (number != target.deviceNumber) {
+            kLogger.info() << "no other player to borrow a device number from;"
+                           << "claiming" << number << "to" << target.label()
+                           << "-- unverified, watch for a refusal";
+            return number;
+        }
+    }
+    return 0;
+}
+
+void ProLinkNetworkService::fetchArtwork(const QByteArray& mac,
+        MediaSlot slot,
+        quint32 artworkId,
+        const QString& localPath) {
+    if (artworkId == 0 || localPath.isEmpty() || QFile::exists(localPath)) {
+        return;
+    }
+    if (m_artworkInFlight.contains(localPath)) {
+        return;
+    }
+
+    ProLinkDevice target;
+    for (const ProLinkDevice& device : m_devices) {
+        if (device.mac == mac) {
+            target = device;
+            break;
+        }
+    }
+    if (!target.isValid() || !target.online || !m_pDiscovery) {
+        emit artworkFetched(localPath, tr("player is no longer on the network"));
+        return;
+    }
+
+    const int requesterNumber = pickRequesterNumber(target);
+    if (requesterNumber == 0) {
+        // Not a failure worth a per-image error: it is a property of the network
+        // (only one player on it) and it will be the same answer for every cover
+        // on the medium. Reported once, by the caller counting these.
+        emit artworkFetched(localPath,
+                tr("no other player to borrow a device number from"));
+        return;
+    }
+
+    m_artworkInFlight.insert(localPath);
+    const ProLinkDevice device = target;
+    QMetaObject::invokeMethod(
+            m_pDiscovery,
+            [this, device, slot, artworkId, localPath, requesterNumber] {
+                runArtworkRequest(device, slot, artworkId, localPath, requesterNumber);
+            },
+            Qt::QueuedConnection);
+}
+
+dbserver::DbServerClient* ProLinkNetworkService::dbClientFor(
+        const ProLinkDevice& device, int requesterNumber) {
+    const QString key = QString::fromLatin1(device.mac.toHex());
+    auto existing = m_dbClients.constFind(key);
+    if (existing != m_dbClients.constEnd()) {
+        // The borrowed number can change under us -- the deck we took it from
+        // can be renumbered or leave -- and the server bound it at Introduce, so
+        // the client re-handshakes rather than sending requests under a number
+        // the peer no longer accepts.
+        (*existing)->setRequesterNumber(requesterNumber);
+        return *existing;
+    }
+    auto* pClient = new dbserver::DbServerClient(device.address,
+            localAddressFor(device),
+            requesterNumber,
+            m_pDiscovery);
+    m_dbClients.insert(key, pClient);
+    return pClient;
+}
+
+void ProLinkNetworkService::runArtworkRequest(const ProLinkDevice& device,
+        MediaSlot slot,
+        quint32 artworkId,
+        const QString& localPath,
+        int requesterNumber) {
+    dbClientFor(device, requesterNumber)
+            ->requestArtwork(slot,
+                    artworkId,
+                    [this, localPath](
+                            bool ok, const QByteArray& image, const QString& error) {
+                        // A track with no art answers with an empty blob. That
+                        // is a success: nothing to write, and no error to report
+                        // for a cover that does not exist.
+                        const QString outcome = !ok ? error
+                                : image.isEmpty()   ? QString()
+                                                    : writeFetchedFile(localPath, image);
+                        QMetaObject::invokeMethod(
+                                this,
+                                [this, localPath, outcome] {
+                                    m_artworkInFlight.remove(localPath);
+                                    emit artworkFetched(localPath, outcome);
+                                },
+                                Qt::QueuedConnection);
+                    });
 }
 
 void ProLinkNetworkService::pumpFileQueue() {
@@ -634,6 +760,25 @@ void ProLinkNetworkService::onDeviceLost(const QByteArray& mac) {
             break;
         }
     }
+
+    // Drop its dbserver connection. Not merely tidiness: the session carries a
+    // borrowed device number, and a player that comes back has to be introduced
+    // to again anyway. Done on the network thread, which is the only thread that
+    // touches the map.
+    if (m_pDiscovery) {
+        const QString key = QString::fromLatin1(mac.toHex());
+        QMetaObject::invokeMethod(
+                m_pDiscovery,
+                [this, key] {
+                    auto* pClient = m_dbClients.take(key);
+                    if (pClient) {
+                        pClient->abortAll(tr("player left the network"));
+                        pClient->deleteLater();
+                    }
+                },
+                Qt::QueuedConnection);
+    }
+
     emit deviceLost(mac);
 }
 

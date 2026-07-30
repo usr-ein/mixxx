@@ -58,6 +58,11 @@ bool createProLinkTables(QSqlDatabase& database) {
             "    device TEXT,"
             "    color INTEGER,"
             "    artwork_path TEXT,"
+            // The id is what the image is *requested* by -- dbserver answers
+            // GET_ARTWORK by id and never sees a path -- while the path is where
+            // the result is cached. Both are needed, and neither derives from
+            // the other.
+            "    artwork_id INTEGER,"
             // The cover-art columns BaseSqlTableModel reads directly. Populating
             // them means the table shows covers from the model alone, with no
             // Track object -- which is the whole point: a Track cannot exist
@@ -160,12 +165,12 @@ int writeMedium(QSqlDatabase& database,
             "INSERT OR REPLACE INTO %1 "
             "(rb_id, artist, title, album, year, genre, tracknumber, location, "
             " comment, duration, bitrate, bpm, key, rating, analyze_path, device, "
-            " color, artwork_path, coverart_source, coverart_type, coverart_location, "
-            " coverart_digest) "
+            " color, artwork_path, artwork_id, coverart_source, coverart_type, "
+            " coverart_location, coverart_digest) "
             "VALUES (:rb_id, :artist, :title, :album, :year, :genre, :tracknumber, "
             " :location, :comment, :duration, :bitrate, :bpm, :key, :rating, "
-            " :analyze_path, :device, :color, :artwork_path, :coverart_source, "
-            " :coverart_type, :coverart_location, :coverart_digest)")
+            " :analyze_path, :device, :color, :artwork_path, :artwork_id, "
+            " :coverart_source, :coverart_type, :coverart_location, :coverart_digest)")
                                 .arg(kProLinkLibraryTable));
     // prepare() returning false is how a malformed statement announces itself,
     // and ignoring it is how a column list that had drifted out of step with its
@@ -209,6 +214,7 @@ int writeMedium(QSqlDatabase& database,
         // would mean reconstructing the remote path by stripping a prefix,
         // which is exactly the reconciliation the concatenation scheme avoids.
         insertTrack.bindValue(QStringLiteral(":artwork_path"), track.artworkPath);
+        insertTrack.bindValue(QStringLiteral(":artwork_id"), track.artworkId);
         // Written now, pointing at a file the prefetch has not necessarily
         // delivered yet. Mixxx tolerates a cover location that does not resolve
         // -- it simply draws nothing -- so the row is correct in advance and the

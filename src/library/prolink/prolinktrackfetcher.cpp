@@ -143,7 +143,18 @@ void ProLinkTrackFetcher::fetchOptional(const QByteArray& mac,
         return;
     }
     // Fire and forget: the result lands whenever it lands, and nothing waits for
-    // it. A cover that arrives after the track is loaded still gets used the
-    // next time the row is drawn.
+    // it.
     m_pNetwork->fetchFile(mac, slot, remotePath, localPath);
+}
+
+void ProLinkTrackFetcher::fetchArtwork(const QByteArray& mac,
+        mixxx::prolink::MediaSlot slot,
+        quint32 artworkId,
+        const QString& localPath) {
+    if (artworkId == 0 || localPath.isEmpty() || QFile::exists(localPath)) {
+        return;
+    }
+    // Over dbserver rather than NFS, and fire-and-forget: a cover that arrives
+    // after the track is loaded still gets used the next time the row is drawn.
+    m_pNetwork->fetchArtwork(mac, slot, artworkId, localPath);
 }

@@ -63,6 +63,9 @@ class ProLinkPlaylistModel : public BaseExternalPlaylistModel {
 
   private:
     QString artworkPathForRow(const QModelIndex& index) const;
+    /// The rekordbox artwork id, which is what dbserver answers by. 0 when the
+    /// track has no art.
+    quint32 artworkIdForRow(const QModelIndex& index) const;
 
     ProLinkTrackFetcher* m_pFetcher = nullptr;
     QByteArray m_mac;

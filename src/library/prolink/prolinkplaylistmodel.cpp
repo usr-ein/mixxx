@@ -30,6 +30,14 @@ QString ProLinkPlaylistModel::artworkPathForRow(const QModelIndex& index) const 
     return index.sibling(index.row(), column).data().toString();
 }
 
+quint32 ProLinkPlaylistModel::artworkIdForRow(const QModelIndex& index) const {
+    const int column = fieldIndex(QStringLiteral("artwork_id"));
+    if (column < 0) {
+        return 0;
+    }
+    return index.sibling(index.row(), column).data().toUInt();
+}
+
 void ProLinkPlaylistModel::willLoadTrack(const QModelIndex& index) {
     Q_UNUSED(index);
     // Armed for the single getTrack() that follows, and cleared by it. Anything
@@ -77,12 +85,13 @@ TrackPointer ProLinkPlaylistModel::getTrack(const QModelIndex& index) const {
 
         // Cover art, best effort and not waited for -- a missing cover costs a
         // thumbnail, not the load. It is requested after the audio so the track
-        // starts playing at the earliest possible moment.
+        // starts playing at the earliest possible moment. Normally already on
+        // disk from the prefetch; this is the retry for one that was not.
         const QString artworkRemote = artworkPathForRow(index);
         if (!artworkRemote.isEmpty()) {
-            m_pFetcher->fetchOptional(m_mac,
+            m_pFetcher->fetchArtwork(m_mac,
                     m_slot,
-                    artworkRemote,
+                    artworkIdForRow(index),
                     m_remotePathPrefix + artworkRemote);
         }
     }
@@ -125,6 +134,11 @@ bool ProLinkPlaylistModel::isColumnInternal(int column) {
     // analyze_path is ours to use, not the user's to look at. ColumnCache keys
     // on the plain column name, so a prolink_library table with an analyze_path
     // column gets the mapping for free -- no columncache change needed.
+    //
+    // The two artwork columns are ours as well: they say where a cover lives and
+    // what to ask for it by, which is bookkeeping rather than track information.
     return column == fieldIndex(ColumnCache::COLUMN_REKORDBOX_ANALYZE_PATH) ||
+            column == fieldIndex(QStringLiteral("artwork_path")) ||
+            column == fieldIndex(QStringLiteral("artwork_id")) ||
             BaseExternalPlaylistModel::isColumnInternal(column);
 }

@@ -138,6 +138,9 @@ ProLinkFeature::ProLinkFeature(Library* pLibrary, UserSettingsPointer pConfig)
             // file, since Mixxx would otherwise guess from the audio file's
             // directory and a rekordbox medium keeps its art under PIONEER/.
             QStringLiteral("artwork_path"),
+            // Also ours: dbserver answers GET_ARTWORK by id and never sees a
+            // path, so the id has to travel with the row that needs the image.
+            QStringLiteral("artwork_id"),
             LIBRARYTABLE_COVERART,
             LIBRARYTABLE_COVERART_SOURCE,
             LIBRARYTABLE_COVERART_TYPE,
@@ -390,29 +393,37 @@ void ProLinkFeature::prefetchArtwork(const QByteArray& mac, MediaSlot slot) {
     const QString localRoot =
             QDir(cacheRootPath()).filePath(mixxx::prolink::deviceKeyFor(mac, slot));
 
-    // Distinct paths only: an album's tracks all share one image, so a 651-track
+    // Distinct ids only: an album's tracks all share one image, so a 651-track
     // medium has a few hundred covers at most, and fetching per track would ask
-    // for the same file a dozen times.
-    QSet<QString> wanted;
+    // for the same image a dozen times.
+    //
+    // Requested by id and cached at the pdb's own path: dbserver knows only the
+    // id, and the database rows already point coverart_location at the path, so
+    // the two have to be carried together.
+    QHash<quint32, QString> wanted;
     for (const mixxx::prolink::PdbTrack& track : medium.contents.tracks) {
-        if (!track.artworkPath.isEmpty()) {
-            wanted.insert(track.artworkPath);
+        if (track.artworkId != 0 && !track.artworkPath.isEmpty()) {
+            wanted.insert(track.artworkId, track.artworkPath);
         }
     }
     if (wanted.isEmpty()) {
         return;
     }
 
-    // Queued, not awaited. Covers are tens of kilobytes each and the NFS client
-    // serialises them behind one another anyway; they appear as they land. This
-    // deliberately shares the link with the CDJs' own playback, so it is worth
-    // knowing it is bounded: a few hundred small files, once per medium, never
-    // repeated because fetchOptional skips anything already on disk.
-    for (const QString& remote : wanted) {
-        m_pFetcher->fetchOptional(mac, slot, remote, localRoot + remote);
+    // Queued, not awaited: they appear as they land. Bounded at a few hundred
+    // small requests, once per medium, and never repeated because fetchArtwork
+    // skips anything already on disk.
+    //
+    // **Over dbserver, not NFS.** Two full CDJ load-and-play captures contain
+    // LOOKUPs for audio files and not one image; asking NFS for covers anyway
+    // works for the first hundred or so and then fails wholesale, because
+    // walking PIONEER/Artwork/000NN per image churns the player's filehandle
+    // table until it answers NFSERR_STALE to handles a millisecond old (F49).
+    for (auto it = wanted.constBegin(); it != wanted.constEnd(); ++it) {
+        m_pFetcher->fetchArtwork(mac, slot, it.key(), localRoot + it.value());
     }
     kLogger.info() << "queued" << wanted.size() << "cover images for"
-                   << mediumKey(mac, slot);
+                   << mediumKey(mac, slot) << "over dbserver";
 }
 
 void ProLinkFeature::showPlaylists(const QByteArray& mac, MediaSlot slot) {
