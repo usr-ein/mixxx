@@ -3,10 +3,20 @@
 #include <QMenu>
 #include <QUrl>
 
+#include <QDir>
+#include <QSqlDatabase>
+#include <QStandardPaths>
+
 #include "control/controlobject.h"
 #include "control/controlpushbutton.h"
+#include "library/basetrackcache.h"
+#include "library/dao/trackschema.h"
 #include "library/library.h"
+#include "library/prolink/prolinkdbwriter.h"
+#include "library/trackcollection.h"
+#include "library/trackcollectionmanager.h"
 #include "library/treeitem.h"
+#include "library/queryutil.h"
 #include "moc_prolinkfeature.cpp"
 #include "network/prolink/prolinknetworkservice.h"
 #include "widget/wlibrary.h"
@@ -68,7 +78,7 @@ QString slotLabel(MediaSlot slot) {
 } // namespace
 
 ProLinkFeature::ProLinkFeature(Library* pLibrary, UserSettingsPointer pConfig)
-        : LibraryFeature(pLibrary, pConfig, QStringLiteral("prolink")),
+        : BaseExternalLibraryFeature(pLibrary, pConfig, QStringLiteral("prolink")),
           m_pSidebarModel(make_parented<TreeItemModel>(this)),
           m_pNetwork(std::make_unique<ProLinkNetworkService>()),
           m_pRefreshControl(std::make_unique<ControlPushButton>(
@@ -103,8 +113,69 @@ ProLinkFeature::ProLinkFeature(Library* pLibrary, UserSettingsPointer pConfig)
             this,
             &ProLinkFeature::onDatabaseFetched);
 
+    // The columns the track table can show. analyze_path rides along because
+    // ColumnCache keys on the plain column name, so it maps for free.
+    QStringList columns = {LIBRARYTABLE_ID,
+            LIBRARYTABLE_ARTIST,
+            LIBRARYTABLE_TITLE,
+            LIBRARYTABLE_ALBUM,
+            LIBRARYTABLE_YEAR,
+            LIBRARYTABLE_GENRE,
+            LIBRARYTABLE_TRACKNUMBER,
+            TRACKLOCATIONSTABLE_LOCATION,
+            LIBRARYTABLE_COMMENT,
+            LIBRARYTABLE_RATING,
+            LIBRARYTABLE_DURATION,
+            LIBRARYTABLE_BITRATE,
+            LIBRARYTABLE_BPM,
+            LIBRARYTABLE_KEY,
+            LIBRARYTABLE_COLOR,
+            REKORDBOX_ANALYZE_PATH};
+    QStringList searchColumns = {LIBRARYTABLE_ARTIST,
+            LIBRARYTABLE_TITLE,
+            LIBRARYTABLE_ALBUM,
+            LIBRARYTABLE_GENRE,
+            TRACKLOCATIONSTABLE_LOCATION,
+            LIBRARYTABLE_COMMENT};
+    m_trackSource = QSharedPointer<BaseTrackCache>::create(m_pTrackCollection,
+            mixxx::prolink::kProLinkLibraryTable,
+            QString(LIBRARYTABLE_ID),
+            std::move(columns),
+            std::move(searchColumns),
+            false);
+    m_pPlaylistModel = make_parented<ProLinkPlaylistModel>(
+            this, pLibrary->trackCollectionManager(), m_trackSource);
+
+    // Recreate the temporary tables from empty. They hold a cache of somebody
+    // else's USB stick and are worthless once it is unplugged, so carrying them
+    // across a restart would only produce rows pointing at media that may not
+    // be on the network any more.
+    QSqlDatabase database = m_pTrackCollection->database();
+    ScopedTransaction transaction(database);
+    mixxx::prolink::dropProLinkTables(database);
+    mixxx::prolink::createProLinkTables(database);
+    transaction.commit();
+
     m_pSidebarModel->setRootItem(TreeItem::newRoot(this));
     m_pNetwork->start();
+}
+
+std::unique_ptr<BaseSqlTableModel> ProLinkFeature::createPlaylistModelForPlaylist(
+        const QVariant& data) {
+    auto pModel = std::make_unique<ProLinkPlaylistModel>(
+            this, m_pLibrary->trackCollectionManager(), m_trackSource);
+    pModel->setPlaylist(data.toString());
+    return pModel;
+}
+
+void ProLinkFeature::appendTrackIdsFromRightClickIndex(
+        QList<TrackId>* pTrackIds, QString* pPlaylist) {
+    // Right-click actions (export, add to Auto DJ) need real local files, and
+    // nothing has been fetched yet. Left empty rather than half-implemented:
+    // handing back ids whose files do not exist would put broken rows wherever
+    // they were sent.
+    Q_UNUSED(pTrackIds);
+    Q_UNUSED(pPlaylist);
 }
 
 ProLinkFeature::~ProLinkFeature() {
@@ -169,9 +240,20 @@ void ProLinkFeature::activateChild(const QModelIndex& index) {
         return;
     }
 
-    // A playlist, or anything we do not recognise. Track tables are the next
-    // increment; until then the status page lists what was parsed, which at
-    // least shows the fetch and parse worked.
+    if (kind == kKindPlaylist && payload.size() > kPayloadPlaylist) {
+        const auto slot = static_cast<MediaSlot>(payload.at(kPayloadSlot).toInt());
+        // The name the rows were written under: namespaced by medium, because
+        // the playlists table has a UNIQUE name and two sticks can both hold a
+        // "Warmup".
+        const QString playlistName =
+                QStringLiteral("%1|%2")
+                        .arg(mixxx::prolink::deviceKeyFor(mac, slot),
+                                pItem->getLabel().section(QStringLiteral(" ("), 0, 0));
+        m_pPlaylistModel->setPlaylist(playlistName);
+        emit showTrackModel(m_pPlaylistModel);
+        return;
+    }
+
     showStatusPage();
 }
 
@@ -238,6 +320,24 @@ void ProLinkFeature::onDatabaseFetched(const QByteArray& mac,
     }
     medium.state = Medium::State::Ready;
     medium.error.clear();
+
+    // Where the medium's files will live once fetched. The rows carry the
+    // location now so the table can be browsed before anything is downloaded;
+    // the path is the player's own, concatenated verbatim onto a local root, so
+    // the two trees never have to be reconciled.
+    const QString localRoot =
+            QDir(QStandardPaths::writableLocation(QStandardPaths::CacheLocation))
+                    .filePath(QStringLiteral("prolink/") +
+                            mixxx::prolink::deviceKeyFor(mac, slot));
+    QSqlDatabase database = m_pTrackCollection->database();
+    ScopedTransaction transaction(database);
+    mixxx::prolink::writeMedium(database,
+            medium.contents,
+            mixxx::prolink::deviceKeyFor(mac, slot),
+            localRoot);
+    transaction.commit();
+    m_trackSource->buildIndex();
+
     showPlaylists(mac, slot);
     refreshStatusPage();
 }

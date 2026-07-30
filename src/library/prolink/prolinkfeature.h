@@ -6,14 +6,17 @@
 #include <QString>
 #include <memory>
 
-#include "library/libraryfeature.h"
+#include "library/baseexternallibraryfeature.h"
 #include "library/prolink/prolinkpdbimport.h"
 #include "library/treeitemmodel.h"
 #include "network/prolink/prolinkdevice.h"
 #include "preferences/usersettings.h"
 #include "util/parented_ptr.h"
 
+#include "library/prolink/prolinkplaylistmodel.h"
+
 class Library;
+class BaseTrackCache;
 class ControlPushButton;
 class ControlObject;
 class WLibraryTextBrowser;
@@ -36,7 +39,7 @@ class ProLinkNetworkService;
 /// Everything here runs on the GUI thread. The network layer lives behind
 /// `ProLinkNetworkService` on its own thread and reaches us only through queued
 /// signals carrying value types.
-class ProLinkFeature : public LibraryFeature {
+class ProLinkFeature : public BaseExternalLibraryFeature {
     Q_OBJECT
 
   public:
@@ -51,6 +54,12 @@ class ProLinkFeature : public LibraryFeature {
     static bool isSupported() {
         return true;
     }
+
+  protected:
+    std::unique_ptr<BaseSqlTableModel> createPlaylistModelForPlaylist(
+            const QVariant& data) override;
+    void appendTrackIdsFromRightClickIndex(QList<TrackId>* pTrackIds,
+            QString* pPlaylist) override;
 
   public slots:
     void activate() override;
@@ -108,6 +117,8 @@ class ProLinkFeature : public LibraryFeature {
     int rowForSlot(int deviceRow, mixxx::prolink::MediaSlot slot) const;
 
     parented_ptr<TreeItemModel> m_pSidebarModel;
+    parented_ptr<ProLinkPlaylistModel> m_pPlaylistModel;
+    QSharedPointer<BaseTrackCache> m_trackSource;
     std::unique_ptr<mixxx::prolink::ProLinkNetworkService> m_pNetwork;
 
     std::unique_ptr<ControlPushButton> m_pRefreshControl;

@@ -2454,8 +2454,10 @@ endif()
 option(PROLINK "Support for the Pioneer Pro DJ Link network protocol" ON)
 if(PROLINK)
   target_sources(mixxx-lib PRIVATE
+    src/library/prolink/prolinkdbwriter.cpp
     src/library/prolink/prolinkfeature.cpp
-    src/library/prolink/prolinkpdbimport.cpp)
+    src/library/prolink/prolinkpdbimport.cpp
+    src/library/prolink/prolinkplaylistmodel.cpp)
   target_compile_definitions(mixxx-lib PUBLIC __PROLINK__)
 endif()
 
