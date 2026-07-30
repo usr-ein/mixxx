@@ -71,6 +71,13 @@ class WLibrary : public QStackedWidget, public WBaseWidget {
   protected:
     bool event(QEvent* pEvent) override;
     void keyPressEvent(QKeyEvent* event) override;
+    /// Put the focus on the track table whenever the library becomes visible.
+    ///
+    /// Coming back from a loaded track, the focus was wherever it had been left,
+    /// which is the sidebar: so the first thing a DJ wants to do -- pick the
+    /// next track -- began by having to move focus out of the tree. The list is
+    /// what you came back for.
+    void showEvent(QShowEvent* pEvent) override;
 
   private:
     QT_RECURSIVE_MUTEX m_mutex;

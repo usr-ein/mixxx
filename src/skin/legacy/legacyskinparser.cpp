@@ -60,6 +60,7 @@
 #include "widget/wnumberrate.h"
 #include "widget/woverview.h"
 #include "widget/wprolinkphasemeter.h"
+#include "widget/wtempopanel.h"
 #include "widget/wpixmapstore.h"
 #include "widget/wpushbutton.h"
 #include "widget/wraterange.h"
@@ -559,6 +560,8 @@ QList<QWidget*> LegacySkinParser::parseNode(const QDomElement& node) {
         result = wrapWidget(parseBeatSpinBox(node));
     } else if (nodeName == "NumberRate") {
         result = wrapWidget(parseNumberRate(node));
+    } else if (nodeName == "TempoPanel") {
+        result = wrapWidget(parseTempoPanel(node));
     } else if (nodeName == "RateRange") {
         result = wrapWidget(parseRateRange(node));
     } else if (nodeName == "NumberPos") {
@@ -1240,6 +1243,15 @@ QWidget* LegacySkinParser::parseStarRating(const QDomElement& node) {
     }
 
     return pStarRating;
+}
+
+QWidget* LegacySkinParser::parseTempoPanel(const QDomElement& node) {
+    auto* pPanel = new WTempoPanel(m_pParent, lookupNodeGroup(node));
+    commonWidgetSetup(node, pPanel);
+    pPanel->setup(node, *m_pContext);
+    pPanel->installEventFilter(m_pKeyboard);
+    pPanel->Init();
+    return pPanel;
 }
 
 QWidget* LegacySkinParser::parseRateRange(const QDomElement& node) {

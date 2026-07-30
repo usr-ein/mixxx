@@ -18,37 +18,15 @@ constexpr int kBeatsPerBar = 4;
 /// matching that is as smooth as the data gets.
 constexpr int kRepaintIntervalMs = 33;
 
-/// Within this fraction of a beat, the two are called aligned and both rows go
-/// green. A twentieth of a beat is about 20 ms at 130 BPM -- comfortably below
-/// what anyone hears as flam, and tight enough that it means something.
-constexpr double kInSyncTolerance = 0.05;
-
-/// Width of the label column. The ticks start after it, so text and beat marks
-/// never share a pixel.
-constexpr double kLabelWidth = 78.0;
+/// The player number is drawn *over* the top row rather than beside it. In the
+/// top bar there is no width to spare for a label column, and "which player"
+/// is the only thing a label was telling us that the rows do not.
 
 /// Beat marks are blocks rather than hairlines: this is read at a glance from
 /// arm's length, and a one-pixel line disappears against a waveform.
 constexpr int kDownbeatWidth = 9;
 constexpr int kBeatWidth = 5;
 
-/// Frames the phase error must stay on one side of the threshold before the
-/// in-sync colour follows it. Six at 30 Hz is a fifth of a second: long enough
-/// that a deck hovering on the boundary does not flash, short enough to feel
-/// immediate.
-constexpr int kSyncLatchFrames = 6;
-
-/// Phase difference wrapped to -0.5..0.5, so being a hair *behind* the downbeat
-/// reads as a small negative rather than as almost a whole beat ahead.
-double wrapPhase(double difference) {
-    difference = std::fmod(difference, 1.0);
-    if (difference > 0.5) {
-        difference -= 1.0;
-    } else if (difference < -0.5) {
-        difference += 1.0;
-    }
-    return difference;
-}
 } // namespace
 
 WProLinkPhaseMeter::WProLinkPhaseMeter(QWidget* pParent, const QString& group)
@@ -92,7 +70,6 @@ void WProLinkPhaseMeter::setup(const QDomNode& node, const SkinContext& context)
     };
     readColour("MasterColor", &m_masterColour);
     readColour("DeckColor", &m_ourColour);
-    readColour("InSyncColor", &m_inSyncColour);
 }
 
 void WProLinkPhaseMeter::paintRow(QPainter* pPainter,
@@ -100,17 +77,7 @@ void WProLinkPhaseMeter::paintRow(QPainter* pPainter,
         double phase,
         const QColor& colour,
         const QString& label) {
-    // The label sits in its own column so nothing ever overlaps the ticks --
-    // this is a thing to be read at a glance from arm's length, and a beat tick
-    // hidden behind text is worse than no tick.
-    const QRectF labelRect(rect.left(), rect.top(), kLabelWidth, rect.height());
-    const QRectF barRect(rect.left() + kLabelWidth,
-            rect.top(),
-            rect.width() - kLabelWidth,
-            rect.height());
-
-    pPainter->setPen(QColor(0x99, 0x99, 0x99));
-    pPainter->drawText(labelRect, Qt::AlignLeft | Qt::AlignVCenter, label);
+    const QRectF barRect = rect;
 
     // The baseline, always drawn, so an idle row still reads as a row.
     pPainter->setPen(QColor(0x33, 0x33, 0x33));
@@ -118,6 +85,7 @@ void WProLinkPhaseMeter::paintRow(QPainter* pPainter,
             QPointF(barRect.right(), barRect.center().y()));
 
     if (phase < 0.0) {
+        drawOverlayLabel(pPainter, barRect, label);
         return;
     }
 
@@ -150,6 +118,28 @@ void WProLinkPhaseMeter::paintRow(QPainter* pPainter,
         pPainter->drawLine(QPointF(x, barRect.top() + inset),
                 QPointF(x, barRect.bottom() - inset));
     }
+
+    drawOverlayLabel(pPainter, barRect, label);
+}
+
+void WProLinkPhaseMeter::drawOverlayLabel(
+        QPainter* pPainter, const QRectF& rect, const QString& label) {
+    if (label.isEmpty()) {
+        return;
+    }
+    // Over the ticks, at the left, with a slab of background behind it so a
+    // tick passing underneath cannot make it unreadable.
+    QFont small = font();
+    small.setPixelSize(static_cast<int>(rect.height() * 0.62));
+    small.setBold(true);
+    pPainter->setFont(small);
+
+    const QRectF textRect(rect.left() + 2, rect.top(), rect.width() - 4, rect.height());
+    const QRectF box = pPainter->boundingRect(
+            textRect, Qt::AlignLeft | Qt::AlignVCenter, label);
+    pPainter->fillRect(box.adjusted(-3, 0, 3, 0), QColor(0x0c, 0x0c, 0x0c));
+    pPainter->setPen(QColor(0xdd, 0xdd, 0xdd));
+    pPainter->drawText(textRect, Qt::AlignLeft | Qt::AlignVCenter, label);
 }
 
 void WProLinkPhaseMeter::paintEvent(QPaintEvent* pEvent) {
@@ -160,7 +150,6 @@ void WProLinkPhaseMeter::paintEvent(QPaintEvent* pEvent) {
 
     const int masterDevice = static_cast<int>(m_pMasterDevice->get());
     const double masterPhase = m_pMasterBarPhase->get();
-    const double masterBpm = m_pMasterBpm->get();
 
     // Our own bar phase, from the *playhead* rather than from counting beats.
     // The elapsed track time times the file's tempo is which beat we are on, so
@@ -199,42 +188,22 @@ void WProLinkPhaseMeter::paintEvent(QPaintEvent* pEvent) {
         ourPhase = (beatInBar + ourBeatDistance) / kBeatsPerBar;
     }
 
-    // Aligned when the *beat* phases agree. Comparing bar phases would demand
-    // the bars line up too, which our arbitrary downbeat cannot promise.
-    //
-    // Latched rather than taken frame by frame: a deck matched by hand sits
-    // right on the threshold, and recolouring the moment it crosses made the
-    // whole meter flash. It has to hold for a few frames either way to count.
-    if (masterPhase >= 0.0 && ourPhase >= 0.0) {
-        const double masterBeatPhase = std::fmod(masterPhase * kBeatsPerBar, 1.0);
-        const bool close =
-                std::abs(wrapPhase(masterBeatPhase - ourBeatDistance)) < kInSyncTolerance;
-        m_inSyncFrames = close ? m_inSyncFrames + 1 : 0;
-        m_outOfSyncFrames = close ? 0 : m_outOfSyncFrames + 1;
-        if (m_inSyncFrames >= kSyncLatchFrames) {
-            m_inSync = true;
-        } else if (m_outOfSyncFrames >= kSyncLatchFrames) {
-            m_inSync = false;
-        }
-    } else {
-        m_inSync = false;
-        m_inSyncFrames = 0;
-        m_outOfSyncFrames = 0;
-    }
-    const bool inSync = m_inSync;
-
-    const QColor masterColour = inSync ? m_inSyncColour : m_masterColour;
-    const QColor ourColour = inSync ? m_inSyncColour : m_ourColour;
+    // **Each row keeps its own colour, always.** Recolouring an aligned pair was
+    // a distraction rather than information: the rows lining up already says
+    // they are aligned, and a colour that changes underneath makes the meter
+    // look like it is switching modes.
 
     const double margin = 4.0;
     const double rowHeight = (height() - 3 * margin) / 2.0;
     const QRectF masterRect(margin, margin, width() - 2 * margin, rowHeight);
     const QRectF ourRect(margin, margin * 2 + rowHeight, width() - 2 * margin, rowHeight);
 
-    const QString masterLabel = masterDevice > 0
-            ? tr("Deck %1").arg(masterDevice)
-            : tr("No master");
-    paintRow(&painter, masterRect, masterPhase, masterColour, masterLabel);
-    paintRow(&painter, ourRect, ourPhase, ourColour, tr("This Deck"));
+    // Only the top row is labelled, with the number of the player it is
+    // following. The bottom row is always this deck, so saying so costs width
+    // and tells nobody anything.
+    const QString masterLabel =
+            masterDevice > 0 ? QString::number(masterDevice) : QStringLiteral("-");
+    paintRow(&painter, masterRect, masterPhase, m_masterColour, masterLabel);
+    paintRow(&painter, ourRect, ourPhase, m_ourColour, QString());
 
 }

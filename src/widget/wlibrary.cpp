@@ -141,6 +141,18 @@ void WLibrary::slotSelectTrackInActiveTrackView(const TrackId& trackId) {
     }
 }
 
+void WLibrary::showEvent(QShowEvent* pEvent) {
+    QStackedWidget::showEvent(pEvent);
+    WTrackTableView* pTracksView = getCurrentTrackTableView();
+    if (!pTracksView) {
+        // A feature whose view is not a track table -- the ProLink status page,
+        // say. Nothing to focus, and stealing focus would be worse than leaving
+        // it where the user put it.
+        return;
+    }
+    pTracksView->setFocus();
+}
+
 void WLibrary::saveCurrentViewState() const {
     WTrackTableView* pTracksView = getCurrentTrackTableView();
     if (!pTracksView) {

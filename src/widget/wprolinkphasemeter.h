@@ -51,6 +51,8 @@ class WProLinkPhaseMeter : public WWidget {
             double phase,
             const QColor& colour,
             const QString& label);
+    /// The player number, over the ticks rather than beside them.
+    void drawOverlayLabel(QPainter* pPainter, const QRectF& rect, const QString& label);
 
     const QString m_group;
 
@@ -64,15 +66,9 @@ class WProLinkPhaseMeter : public WWidget {
     std::unique_ptr<ControlProxy> m_pDuration;
     std::unique_ptr<ControlProxy> m_pPlayPosition;
 
-    /// Consecutive frames the two have agreed, or disagreed, for. The in-sync
-    /// colour only changes once one of them is convincing: toggling it the
-    /// instant the phase error crosses the threshold made the whole meter
-    /// flash, because a hand-matched deck sits right on that boundary.
-    int m_inSyncFrames = 0;
-    int m_outOfSyncFrames = 0;
-    bool m_inSync = false;
-
+    /// Fixed per row, deliberately. An earlier version turned both green when
+    /// the decks agreed; it read as the meter changing meaning rather than the
+    /// decks changing relationship, and the rows lining up already says it.
     QColor m_masterColour{0xff, 0x66, 0x00};
     QColor m_ourColour{0x44, 0xcc, 0xff};
-    QColor m_inSyncColour{0x44, 0xff, 0x88};
 };
