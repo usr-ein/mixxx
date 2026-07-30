@@ -2696,6 +2696,26 @@ elseif(CMAKE_CXX_COMPILER_ID MATCHES "MSVC")
     target_compile_options(rekordbox_metadata PRIVATE /w44063)
 endif()
 
+# Pro DJ Link wire formats, generated from prolinks-compat/ksy/*.ksy by that
+# directory's regenerate.sh. Checked in exactly as rekordbox_metadata above is,
+# so building Mixxx never needs a JVM.
+#
+# Its own target rather than plain sources on mixxx-lib, for the same reason
+# rekordbox_metadata is one: generated Kaitai code is warning-noisy, and this
+# keeps -Wno-switch off the hand-written ProLink code next to it.
+add_library(prolink_protocol STATIC EXCLUDE_FROM_ALL
+  src/network/prolink/generated/prolink_djl.cpp
+)
+target_include_directories(prolink_protocol SYSTEM PUBLIC src/network/prolink/generated)
+target_link_libraries(mixxx-lib PRIVATE prolink_protocol)
+
+#silence "enumeration values not handled in switch" in generated code
+if(CMAKE_CXX_COMPILER_ID MATCHES "GNU|Clang")
+    target_compile_options(prolink_protocol PRIVATE -Wno-switch)
+elseif(CMAKE_CXX_COMPILER_ID MATCHES "MSVC")
+    target_compile_options(prolink_protocol PRIVATE /w44063)
+endif()
+
 # Kaitai for reading Rekordbox libraries
 add_library(Kaitai STATIC EXCLUDE_FROM_ALL
   lib/kaitai/kaitai/kaitaistream.cpp
@@ -2703,6 +2723,7 @@ add_library(Kaitai STATIC EXCLUDE_FROM_ALL
 target_include_directories(Kaitai SYSTEM PUBLIC lib/kaitai)
 target_compile_definitions(Kaitai PRIVATE KS_STR_ENCODING_NONE)
 target_link_libraries(rekordbox_metadata PRIVATE Kaitai)
+target_link_libraries(prolink_protocol PRIVATE Kaitai)
 target_link_libraries(mixxx-lib PRIVATE Kaitai)
 
 # For determining MP3 timing offset cases in Rekordbox library feature
