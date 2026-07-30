@@ -39,6 +39,7 @@ class BaseSqlTableModel : public BaseTrackTableModel {
     int columnCount(const QModelIndex& parent = QModelIndex()) const final;
 
     void sort(int column, Qt::SortOrder order) final;
+    void clearSorting() final;
 
     ///////////////////////////////////////////////////////////////////////////
     // Inherited from TrackModel

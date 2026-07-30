@@ -568,6 +568,19 @@ void BaseSqlTableModel::setSort(int column, Qt::SortOrder order) {
     }
 }
 
+void BaseSqlTableModel::clearSorting() {
+    if (m_sortColumns.isEmpty()) {
+        return;
+    }
+    m_sortColumns.clear();
+    m_tableOrderBy.clear();
+    m_trackSourceOrderBy.clear();
+    // Persisted too, or the sort comes back the next time this model is built:
+    // the history is read from the model settings in setSort().
+    setModelSetting(COLUMNS_SORTING, QString());
+    select();
+}
+
 void BaseSqlTableModel::sort(int column, Qt::SortOrder order) {
     if (sDebug) {
         qDebug() << this << "sort()" << column << order;

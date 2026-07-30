@@ -239,6 +239,14 @@ class TrackModel {
         m_eDefaultSortOrder = sortOrder;
     }
 
+    /// Drop every sort and show the rows in the order the model produces them.
+    ///
+    /// Distinct from sorting by some "natural" column: a playlist has position
+    /// to fall back on, the library has nothing, and there is no column id that
+    /// means "none". Only the model can put itself back.
+    virtual void clearSorting() {
+    }
+
     virtual bool isColumnSortable(int column) const {
         Q_UNUSED(column);
         return true;

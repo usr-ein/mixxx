@@ -289,6 +289,17 @@ LibraryControl::LibraryControl(Library* pLibrary)
     m_pSortColumnToggle = std::make_unique<ControlEncoder>(ConfigKey("[Library]", "sort_column_toggle"), false);
     m_pSortFocusedColumn = std::make_unique<ControlPushButton>(
             ConfigKey("[Library]", "sort_focused_column"));
+    // "Show these rows in the order the model produces them."
+    //
+    // There is no column id that means "unsorted", and no natural column to
+    // fall back on either: a playlist has position, the library has nothing.
+    // Only the model can put itself back, so this asks it to.
+    m_pSortReset = std::make_unique<ControlPushButton>(
+            ConfigKey("[Library]", "sort_reset"));
+    connect(m_pSortReset.get(),
+            &ControlPushButton::valueChanged,
+            this,
+            &LibraryControl::slotSortReset);
 #ifdef MIXXX_USE_QML
     if (!CmdlineArgs::Instance().isQml())
 #endif
@@ -1084,6 +1095,28 @@ bool LibraryControl::currentViewHasTracks() const {
     }
     const QAbstractItemModel* pModel = pTrackTableView->model();
     return pModel && pModel->rowCount() > 0;
+}
+
+void LibraryControl::slotSortReset(double v) {
+    if (v <= 0.0 || !m_pLibraryWidget) {
+        return;
+    }
+    WTrackTableView* pTrackTableView = m_pLibraryWidget->getCurrentTrackTableView();
+    if (!pTrackTableView) {
+        return;
+    }
+    // getTrackModel() is private to the view; the model itself is public and is
+    // the same object.
+    auto* pTrackModel = dynamic_cast<TrackModel*>(pTrackTableView->model());
+    if (!pTrackModel) {
+        return;
+    }
+    pTrackModel->clearSorting();
+    // The two sort controls are global while the sort itself is per model, so
+    // leaving them holding the column we just dropped would have the next press
+    // of a sort button read its own stale state back.
+    m_pSortColumn->set(static_cast<int>(TrackModel::SortColumnId::Invalid));
+    m_pSortOrder->set(0.0);
 }
 
 void LibraryControl::slotSortColumn(double v) {
