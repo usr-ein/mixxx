@@ -49,6 +49,29 @@ DlgDeveloperTools::DlgDeveloperTools(QWidget* pParent,
             this,
             &DlgDeveloperTools::slotControlDump);
 
+    // One-click filter to the Pro DJ Link controls.
+    //
+    // The search box already does this, but the deck is a mouse-only kiosk with
+    // no keyboard attached, and [ProLink] sits in the middle of a long
+    // alphabetical list. Driving the search widget rather than the proxy model
+    // directly keeps the two in step, so the box shows what is filtered and its
+    // own clear button still works.
+    connect(controlFilterProLink,
+            &QPushButton::toggled,
+            this,
+            [this](bool checked) {
+                if (checked) {
+                    controlSearch->slotRestoreSearch(QStringLiteral("prolink"));
+                } else {
+                    controlSearch->slotClearSearch();
+                }
+                slotControlSearch(checked ? QStringLiteral("prolink") : QString());
+            });
+#ifndef __PROLINK__
+    // Built without the feature, so there is nothing for it to find.
+    controlFilterProLink->hide();
+#endif
+
     // Set up the log search box
     connect(logSearch,
             &QLineEdit::returnPressed,
