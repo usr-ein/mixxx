@@ -4,8 +4,16 @@
 
   Deliberately NOT Pioneer's Pro DJ Link logo, which is a registered trademark.
   This is a generic "two linked players" glyph: two rounded rectangles standing
-  for decks, joined by a link, drawn in currentColor so it follows the skin's
-  own sidebar colour like the other ic_library_* icons do.
+  for decks, joined by a link.
+
+  The stroke colour is HARD CODED, and must stay that way. This was drawn with
+  stroke="currentColor" on the theory that it would then follow the skin's
+  sidebar colour, but currentColor resolves against a `color` property that
+  nothing in this document (or in the QIcon that loads it) ever sets, so it fell
+  back to the initial value: black. On a dark sidebar that is an invisible icon
+  which only appears once the row is selected and paints a light background
+  behind it. #ff6600 is the colour every other ic_library_* icon uses, either
+  flat (serato, rekordbox) or as a gradient (tracks, computer).
 
   The filename is load-bearing: LibraryFeature's constructor builds the path as
   ":/images/library/ic_library_%1.svg" from the name passed to it
@@ -13,7 +21,7 @@
 -->
 <svg xmlns="http://www.w3.org/2000/svg"
      width="32" height="32" viewBox="0 0 32 32"
-     fill="none" stroke="currentColor" stroke-width="2"
+     fill="none" stroke="#ff6600" stroke-width="2"
      stroke-linecap="round" stroke-linejoin="round">
   <!-- left player -->
   <rect x="2.5" y="8.5" width="10" height="15" rx="1.5"/>
