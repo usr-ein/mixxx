@@ -8,11 +8,18 @@
 #include "moc_prolinkdiscovery.cpp"
 #include "network/prolink/prolinkpacket.h"
 #include "network/prolink/prolinkvirtualcdj.h"
+#include "network/prolink/prolinkmediaquery.h"
 #include "util/assert.h"
 #include "util/logger.h"
 
 namespace {
 const mixxx::Logger kLogger("ProLinkDiscovery");
+
+/// How often to re-ask, and how many times, before concluding a slot is empty.
+/// Five rounds over fifteen seconds covers a deck that is mid-track-load when we
+/// first ask, without asking forever about a slot that has nothing in it.
+constexpr int kMediaRetryIntervalMs = 3000;
+constexpr int kMediaQueryAttempts = 5;
 } // namespace
 
 namespace mixxx {
@@ -37,6 +44,49 @@ bool ProLinkDiscovery::start() {
                 &ProLinkVirtualCdj::stateChanged,
                 this,
                 &ProLinkDiscovery::announceStateChanged);
+
+        m_pMediaQuery = new ProLinkMediaQuery(this);
+        connect(m_pVirtualCdj,
+                &ProLinkVirtualCdj::stateChanged,
+                this,
+                [this](int, int deviceNumber, const QString&) {
+                    m_pMediaQuery->setRequesterNumber(deviceNumber);
+                    // The moment we have a number is the first moment a player
+                    // will answer us, so ask straight away rather than waiting
+                    // for the user to expand something.
+                    if (deviceNumber > 0) {
+                        queryAllMedia();
+                    }
+                });
+        connect(m_pMediaQuery,
+                &ProLinkMediaQuery::mediaInfoReceived,
+                this,
+                [this](const QHostAddress& player, MediaSlot slot, const MediaInfo& info) {
+                    // Map the responder's address back to a MAC: that is what
+                    // the library layer keys everything on, and a device number
+                    // can be reassigned mid-session.
+                    for (auto it = m_devices.constBegin(); it != m_devices.constEnd(); ++it) {
+                        if (it->address == player) {
+                            // Answered: stop asking. Marked with the cap
+                            // rather than by removing the entry -- removing it
+                            // reset the counter to zero, so the one slot that
+                            // *did* answer was the one we re-asked every three
+                            // seconds forever, while the silent ones correctly
+                            // gave up.
+                            m_mediaQueryAttempts.insert(
+                                    QStringLiteral("%1|%2")
+                                            .arg(QString::fromLatin1(it->mac.toHex()))
+                                            .arg(static_cast<int>(slot)),
+                                    kMediaQueryAttempts);
+                            emit mediaInfoFound(it->mac, slot, info);
+                            return;
+                        }
+                    }
+                });
+
+        m_pMediaRetry = new QTimer(this);
+        m_pMediaRetry->setInterval(kMediaRetryIntervalMs);
+        connect(m_pMediaRetry, &QTimer::timeout, this, [this] { queryAllMedia(); });
     }
 
     // ShareAddress | ReuseAddressHint so we coexist with anything else already
@@ -70,6 +120,12 @@ bool ProLinkDiscovery::start() {
 }
 
 void ProLinkDiscovery::stop() {
+    if (m_pMediaRetry) {
+        m_pMediaRetry->stop();
+    }
+    if (m_pMediaQuery) {
+        m_pMediaQuery->stop();
+    }
     if (m_pVirtualCdj) {
         // Before the socket closes: the announcer writes to it on a timer, and
         // a tick landing on a closed socket would log a warning per second for
@@ -260,6 +316,10 @@ void ProLinkDiscovery::startAnnouncing() {
         return;
     }
     m_pVirtualCdj->start(interfaceName, peers);
+    // Bound here rather than in start(), because it is only worth having once
+    // we are going to announce: an unannounced host receives nothing on 50002.
+    m_pMediaQuery->start();
+    m_pMediaRetry->start();
 
     // We may have already admitted ourselves: start() is the first moment our
     // own MAC is known, and on a restart our previous keep-alives can still be
@@ -277,6 +337,36 @@ int ProLinkDiscovery::announcedNumber() const {
 
 QString ProLinkDiscovery::announceStatus() const {
     return m_pVirtualCdj ? m_pVirtualCdj->stateName() : QStringLiteral("off");
+}
+
+void ProLinkDiscovery::queryAllMedia(bool force) {
+    if (!m_pMediaQuery || !m_pVirtualCdj || m_pVirtualCdj->deviceNumber() == 0) {
+        return;
+    }
+    if (force) {
+        m_mediaQueryAttempts.clear();
+    }
+    const QHostAddress ours = m_pVirtualCdj->address();
+    for (auto it = m_devices.constBegin(); it != m_devices.constEnd(); ++it) {
+        if (!it->online || !it->isPlayer()) {
+            continue;
+        }
+        // Both slots, unconditionally. There is no reply that means "empty" --
+        // a deck simply says nothing about a slot with nothing in it -- so the
+        // only way to find out is to ask and see, which is also why this is
+        // capped rather than open-ended.
+        for (const MediaSlot slot : {MediaSlot::Usb, MediaSlot::Sd}) {
+            const QString key = QStringLiteral("%1|%2")
+                                        .arg(QString::fromLatin1(it->mac.toHex()))
+                                        .arg(static_cast<int>(slot));
+            const int attempts = m_mediaQueryAttempts.value(key);
+            if (attempts >= kMediaQueryAttempts) {
+                continue;
+            }
+            m_mediaQueryAttempts.insert(key, attempts + 1);
+            m_pMediaQuery->query(it->address, ours, it->deviceNumber, slot);
+        }
+    }
 }
 
 } // namespace prolink

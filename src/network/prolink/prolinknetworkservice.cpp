@@ -131,6 +131,10 @@ void ProLinkNetworkService::start() {
             &ProLinkDiscovery::announceStateChanged,
             this,
             &ProLinkNetworkService::onAnnounceStateChanged);
+    connect(m_pDiscovery,
+            &ProLinkDiscovery::mediaInfoFound,
+            this,
+            &ProLinkNetworkService::mediaInfoFound);
 
     m_pThread->start();
 
@@ -216,7 +220,12 @@ void ProLinkNetworkService::refresh() {
     ProLinkDiscovery* pDiscovery = m_pDiscovery;
     QMetaObject::invokeMethod(
             m_pDiscovery,
-            [pDiscovery] { pDiscovery->forgetStaleDevices(); },
+            [pDiscovery] {
+                pDiscovery->forgetStaleDevices();
+                // Media can be swapped without the device going anywhere, so a
+                // refresh has to re-ask rather than trust the cached names.
+                pDiscovery->queryAllMedia(/*force*/ true);
+            },
             Qt::QueuedConnection);
 }
 

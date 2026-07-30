@@ -1,0 +1,27 @@
+<?xml version="1.0" encoding="UTF-8" standalone="no"?>
+<!--
+  USB slot node in the Pro DJ Link sidebar tree.
+
+  Colour is HARD CODED to #ff6600, like every other ic_library_* icon, and must
+  stay that way: stroke="currentColor" resolves against a `color` property that
+  nothing loading this file ever sets, so it falls back to black and the icon is
+  invisible on a dark sidebar until the row is selected. That mistake is written
+  up at length in ic_library_prolink.svg.
+
+  Drawn at 32x32 to match the rest, though it is rendered much smaller.
+-->
+<svg xmlns="http://www.w3.org/2000/svg"
+     width="32" height="32" viewBox="0 0 32 32"
+     fill="none" stroke="#ff6600" stroke-width="2"
+     stroke-linecap="round" stroke-linejoin="round">
+  <!-- the trident: a stem with three arms, which is what reads as "USB" -->
+  <path d="M16 27V7"/>
+  <!-- the arrowhead at the top of the stem -->
+  <path d="M13 10l3-4 3 4z" fill="#ff6600"/>
+  <!-- left arm, ending in a square -->
+  <path d="M16 19l-6-4v-2"/>
+  <rect x="7.5" y="9" width="5" height="4" fill="#ff6600" stroke="none"/>
+  <!-- right arm, ending in a circle -->
+  <path d="M16 23l6-4v-3"/>
+  <circle cx="22" cy="14" r="2.5" fill="#ff6600" stroke="none"/>
+</svg>

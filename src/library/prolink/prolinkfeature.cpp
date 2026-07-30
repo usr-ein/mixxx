@@ -1,5 +1,6 @@
 #include "library/prolink/prolinkfeature.h"
 
+#include <QIcon>
 #include <QMenu>
 #include <QUrl>
 
@@ -78,6 +79,34 @@ const MediaSlot kBrowsableSlots[] = {MediaSlot::Usb, MediaSlot::Sd};
 QString slotLabel(MediaSlot slot) {
     return slot == MediaSlot::Usb ? QStringLiteral("USB") : QStringLiteral("SD");
 }
+
+/// What to call a slot, given what the player said is in it.
+///
+/// A DJ knows their media by name and not by which socket it is in, so the
+/// volume label is far more useful than "USB" whenever there is one. There often
+/// is not: an unlabelled stick reports an empty name while carrying a full
+/// library, so the generic name has to stay as the fallback rather than being
+/// treated as a failure.
+///
+/// An empty slot is said to be empty. That is newly knowable -- occupancy is
+/// published only in status packets, which are unicast to announced peers
+/// (F20/F21) -- and it saves the user expanding a slot to find out.
+QString slotLabelFor(MediaSlot slot, const mixxx::prolink::MediaInfo& info, bool known) {
+    if (!known) {
+        return slotLabel(slot);
+    }
+    if (!info.isOccupied()) {
+        //: %1 is USB or SD
+        return QObject::tr("%1 (empty)").arg(slotLabel(slot));
+    }
+    return info.name.isEmpty() ? slotLabel(slot) : info.name;
+}
+
+QIcon slotIcon(MediaSlot slot) {
+    return QIcon(slot == MediaSlot::Usb
+                    ? QStringLiteral(":/images/library/ic_library_prolink_usb.svg")
+                    : QStringLiteral(":/images/library/ic_library_prolink_sd.svg"));
+}
 } // namespace
 
 ProLinkFeature::ProLinkFeature(Library* pLibrary, UserSettingsPointer pConfig)
@@ -119,6 +148,10 @@ ProLinkFeature::ProLinkFeature(Library* pLibrary, UserSettingsPointer pConfig)
             &ProLinkNetworkService::announceChanged,
             this,
             [this](int, const QString&) { refreshStatusPage(); });
+    connect(m_pNetwork.get(),
+            &ProLinkNetworkService::mediaInfoFound,
+            this,
+            &ProLinkFeature::onMediaInfo);
 
     // The columns the track table can show. analyze_path rides along because
     // ColumnCache keys on the plain column name, so it maps for free.
@@ -321,11 +354,42 @@ void ProLinkFeature::addSlotNodes(int deviceRow, const QByteArray& mac) {
     // honest; guessing would hide a slot that does have media.
     std::vector<std::unique_ptr<TreeItem>> rows;
     for (const MediaSlot slot : kBrowsableSlots) {
-        rows.push_back(std::make_unique<TreeItem>(
-                slotLabel(slot), slotNodePayload(mac, slot)));
+        const QString key = mediumKey(mac, slot);
+        auto pItem = std::make_unique<TreeItem>(
+                slotLabelFor(slot, m_mediaInfo.value(key), m_mediaInfo.contains(key)),
+                slotNodePayload(mac, slot));
+        pItem->setIcon(slotIcon(slot));
+        rows.push_back(std::move(pItem));
     }
     m_pSidebarModel->insertTreeItemRows(
             std::move(rows), 0, m_pSidebarModel->index(deviceRow, 0));
+}
+
+void ProLinkFeature::onMediaInfo(const QByteArray& mac,
+        MediaSlot slot,
+        const mixxx::prolink::MediaInfo& info) {
+    const QString key = mediumKey(mac, slot);
+    const auto known = m_mediaInfo.constFind(key);
+    if (known != m_mediaInfo.constEnd() && known->name == info.name &&
+            known->trackCount == info.trackCount) {
+        return;
+    }
+    m_mediaInfo.insert(key, info);
+
+    // Relabel in place. The node keeps its payload and its children, so a
+    // rename cannot disturb a playlist the user is part-way through browsing --
+    // which matters because the answer can arrive at any moment, including
+    // while a medium is being read.
+    const int deviceRow = rowForMac(mac);
+    const int slotRow = rowForSlot(deviceRow, slot);
+    if (slotRow < 0) {
+        return;
+    }
+    TreeItem* pSlot = m_pSidebarModel->getRootItem()->child(deviceRow)->child(slotRow);
+    pSlot->setLabel(slotLabelFor(slot, info, true));
+    const QModelIndex deviceIndex = m_pSidebarModel->index(deviceRow, 0);
+    m_pSidebarModel->triggerRepaint(m_pSidebarModel->index(slotRow, 0, deviceIndex));
+    refreshStatusPage();
 }
 
 int ProLinkFeature::rowForSlot(int deviceRow, MediaSlot slot) const {

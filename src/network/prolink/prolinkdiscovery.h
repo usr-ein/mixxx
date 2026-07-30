@@ -7,6 +7,7 @@
 #include <QString>
 
 #include "network/prolink/prolinkdevice.h"
+#include "network/prolink/prolinkmediaquery.h"
 
 class QUdpSocket;
 class QTimer;
@@ -15,6 +16,8 @@ namespace mixxx {
 namespace prolink {
 
 class ProLinkVirtualCdj;
+class ProLinkMediaQuery;
+struct MediaInfo;
 
 /// Listens on UDP 50000 and maintains the table of devices on the network.
 ///
@@ -71,9 +74,22 @@ class ProLinkDiscovery : public QObject {
     int announcedNumber() const;
     QString announceStatus() const;
 
+    /// Ask every online player what is in both of its slots. A no-op until we
+    /// have a number: a player answers on UDP 50002 only to peers that have
+    /// announced themselves (F21).
+    ///
+    /// *force* re-asks slots already answered, for the case where the DJ swaps
+    /// media without the device going anywhere.
+    void queryAllMedia(bool force = false);
+
   signals:
     /// The announcer changed state: claiming, active with a number, or failed.
     void announceStateChanged(int state, int deviceNumber, const QString& detail);
+    /// A player told us what is in one of its slots. Keyed on MAC, because the
+    /// device number in the response can be reassigned.
+    void mediaInfoFound(const QByteArray& mac,
+            mixxx::prolink::MediaSlot slot,
+            const mixxx::prolink::MediaInfo& info);
     /// A device we had not seen before, or one that had been removed and is back.
     void deviceFound(const mixxx::prolink::ProLinkDevice& device);
     /// An existing device whose number, address or online state changed. Not
@@ -98,6 +114,16 @@ class ProLinkDiscovery : public QObject {
     /// Created with the socket, started separately. Owned here because it needs
     /// that socket and must not outlive it.
     ProLinkVirtualCdj* m_pVirtualCdj = nullptr;
+    ProLinkMediaQuery* m_pMediaQuery = nullptr;
+    /// Retries the media query. One round is not enough: a player that is busy,
+    /// or that joined after we claimed our number, simply does not answer, and
+    /// there is no reply that means "empty" to distinguish from a lost one.
+    QTimer* m_pMediaRetry = nullptr;
+    /// mac|slot -> attempts made. An entry is removed once answered, and a slot
+    /// that never answers is given up on after kMediaQueryAttempts, so an empty
+    /// slot costs a handful of datagrams rather than two every few seconds for
+    /// the rest of the session.
+    QHash<QString, int> m_mediaQueryAttempts;
     /// Keyed on MAC. See the note in ProLinkDevice about why not on number.
     QHash<QByteArray, ProLinkDevice> m_devices;
     /// Which devices we have already told the world are stale, so the "went

@@ -10,6 +10,7 @@
 #include "library/prolink/prolinkpdbimport.h"
 #include "library/treeitemmodel.h"
 #include "network/prolink/prolinkdevice.h"
+#include "network/prolink/prolinkmediaquery.h"
 #include "preferences/usersettings.h"
 #include "util/parented_ptr.h"
 
@@ -67,6 +68,11 @@ class ProLinkFeature : public BaseExternalLibraryFeature {
     void activateChild(const QModelIndex& index) override;
 
   private slots:
+    /// A player told us what is in one of its slots: relabel the node with the
+    /// volume's own name.
+    void onMediaInfo(const QByteArray& mac,
+            mixxx::prolink::MediaSlot slot,
+            const mixxx::prolink::MediaInfo& info);
     void onDatabaseFetched(const QByteArray& mac,
             mixxx::prolink::MediaSlot slot,
             const QByteArray& data,
@@ -119,6 +125,12 @@ class ProLinkFeature : public BaseExternalLibraryFeature {
     void showPlaylists(const QByteArray& mac, mixxx::prolink::MediaSlot slot);
     /// Queue every distinct cover image on a medium.
     void prefetchArtwork(const QByteArray& mac, mixxx::prolink::MediaSlot slot);
+
+    /// mac|slot -> what the player said is in it, so a node rebuilt after a
+    /// device blinks out and comes back keeps what we already know rather than
+    /// reverting to "USB" until the next query. Absence of a key means "not
+    /// asked yet", which is different from an empty slot.
+    QHash<QString, mixxx::prolink::MediaInfo> m_mediaInfo;
     int rowForSlot(int deviceRow, mixxx::prolink::MediaSlot slot) const;
 
     parented_ptr<TreeItemModel> m_pSidebarModel;

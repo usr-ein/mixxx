@@ -1079,6 +1079,7 @@ add_library(mixxx-lib STATIC EXCLUDE_FROM_ALL
   src/network/prolink/rpc/rpcmessage.cpp
   src/network/prolink/rpc/xdrbuffer.cpp
   src/network/prolink/prolinknetworkservice.cpp
+  src/network/prolink/prolinkmediaquery.cpp
   src/network/prolink/prolinkpacket.cpp
   src/network/prolink/prolinkvirtualcdj.cpp
   src/network/webtask.cpp

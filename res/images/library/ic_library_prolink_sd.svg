@@ -1,0 +1,20 @@
+<?xml version="1.0" encoding="UTF-8" standalone="no"?>
+<!--
+  SD slot node in the Pro DJ Link sidebar tree. See the colour note in
+  ic_library_prolink_usb.svg: #ff6600 is hard coded deliberately.
+
+  (No double hyphens in this comment. XML forbids them inside a comment, and
+  librsvg rejects the whole file for one, which shows up as a missing icon
+  rather than as an error anybody sees.)
+-->
+<svg xmlns="http://www.w3.org/2000/svg"
+     width="32" height="32" viewBox="0 0 32 32"
+     fill="none" stroke="#ff6600" stroke-width="2"
+     stroke-linecap="round" stroke-linejoin="round">
+  <!-- The card outline, with the chamfered top-left corner that makes an SD
+       card recognisable at a glance and tells you which way round it goes. -->
+  <path d="M11 4.5h13a1.5 1.5 0 0 1 1.5 1.5v21a1.5 1.5 0 0 1-1.5 1.5H8
+           a1.5 1.5 0 0 1-1.5-1.5V9.5z"/>
+  <!-- the contact pins along the top edge -->
+  <path d="M11 8.5v4M14.5 6.5v6M18 6.5v6M21.5 6.5v6" stroke-width="1.5"/>
+</svg>

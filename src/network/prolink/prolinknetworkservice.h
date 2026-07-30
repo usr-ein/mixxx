@@ -9,6 +9,7 @@
 
 #include "network/prolink/nfs/nfsfiletransfer.h"
 #include "network/prolink/prolinkdevice.h"
+#include "network/prolink/prolinkmediaquery.h"
 
 namespace mixxx {
 namespace prolink {
@@ -149,6 +150,10 @@ class ProLinkNetworkService : public QObject {
     void listeningChanged(bool listening, const QString& error);
     /// We claimed a number, lost one, or gave up trying.
     void announceChanged(int deviceNumber, const QString& detail);
+    /// A player described one of its slots: volume name and counts.
+    void mediaInfoFound(const QByteArray& mac,
+            mixxx::prolink::MediaSlot slot,
+            const mixxx::prolink::MediaInfo& info);
     /// The result of fetchDatabase(). *error* is empty on success.
     void databaseFetched(const QByteArray& mac,
             mixxx::prolink::MediaSlot slot,
