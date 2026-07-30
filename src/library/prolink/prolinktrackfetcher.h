@@ -55,6 +55,17 @@ class ProLinkTrackFetcher : public QObject {
             const QString& remotePath,
             const QString& localPath);
 
+    /// Fetch a companion file and wait for it, tolerating failure.
+    ///
+    /// The ANLZ files need this rather than fetchOptional(): they have to be on
+    /// disk before the Track exists to apply them to, so "queue it and hope" is
+    /// not enough. They are tens of kilobytes, so the wait is usually shorter
+    /// than the progress dialog's own 250 ms delay.
+    void fetchOptionalBlocking(const QByteArray& mac,
+            mixxx::prolink::MediaSlot slot,
+            const QString& remotePath,
+            const QString& localPath);
+
     /// Best-effort cover fetch, by rekordbox artwork id and over **dbserver**.
     ///
     /// Not fetchOptional() with an image path: a real CDJ never asks NFS for an

@@ -147,6 +147,19 @@ void ProLinkTrackFetcher::fetchOptional(const QByteArray& mac,
     m_pNetwork->fetchFile(mac, slot, remotePath, localPath);
 }
 
+void ProLinkTrackFetcher::fetchOptionalBlocking(const QByteArray& mac,
+        mixxx::prolink::MediaSlot slot,
+        const QString& remotePath,
+        const QString& localPath) {
+    if (remotePath.isEmpty() || QFile::exists(localPath)) {
+        return;
+    }
+    // The return value is deliberately dropped: the caller has already decided
+    // this file is optional, and a missing beatgrid is not a failed load. The
+    // error is still logged by fetchBlocking.
+    fetchBlocking(mac, slot, remotePath, localPath);
+}
+
 void ProLinkTrackFetcher::fetchArtwork(const QByteArray& mac,
         mixxx::prolink::MediaSlot slot,
         quint32 artworkId,

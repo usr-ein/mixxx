@@ -7,6 +7,7 @@
 
 #include "library/prolink/prolinkdbwriter.h"
 #include "library/prolink/prolinktrackfetcher.h"
+#include "library/rekordbox/rekordboxanalysis.h"
 #include "moc_prolinkplaylistmodel.cpp"
 
 ProLinkPlaylistModel::ProLinkPlaylistModel(QObject* pParent,
@@ -28,6 +29,11 @@ QString ProLinkPlaylistModel::artworkPathForRow(const QModelIndex& index) const 
         return QString();
     }
     return index.sibling(index.row(), column).data().toString();
+}
+
+QString ProLinkPlaylistModel::analyzePathForRow(const QModelIndex& index) const {
+    return QDir::fromNativeSeparators(
+            getFieldString(index, ColumnCache::COLUMN_REKORDBOX_ANALYZE_PATH));
 }
 
 quint32 ProLinkPlaylistModel::artworkIdForRow(const QModelIndex& index) const {
@@ -79,25 +85,58 @@ TrackPointer ProLinkPlaylistModel::getTrack(const QModelIndex& index) const {
         const QString remotePath = m_remotePathPrefix.isEmpty()
                 ? QString()
                 : location.mid(m_remotePathPrefix.size());
+        // Everything read off the row is snapshotted here, before any nested
+        // event loop runs. `index` is not touched again until the fetches are
+        // done, because the model can be reset underneath us while one is in
+        // flight -- see ProLinkTrackFetcher's header.
+        const QString analyzeLocal = analyzePathForRow(index);
+        const QString artworkRemote = artworkPathForRow(index);
+        const quint32 artworkId = artworkIdForRow(index);
+
         if (!m_pFetcher->fetchBlocking(m_mac, m_slot, remotePath, location)) {
             return TrackPointer();
         }
 
+        // The rekordbox analysis: beat grid, hot cues, loops, memory cues. Two
+        // files, and both are wanted -- grids are only correct in the legacy
+        // .DAT while cues are better in the .EXT.
+        //
+        // Fetched synchronously, unlike the cover, because they have to be on
+        // disk before the Track exists to apply them to. They are tens of
+        // kilobytes, so they usually land inside the 250 ms before the progress
+        // ring appears at all. Failure is tolerated: a track with no grid still
+        // plays, it just arrives unanalysed.
+        if (!analyzeLocal.isEmpty() && !m_remotePathPrefix.isEmpty()) {
+            const QString analyzeRemote = analyzeLocal.mid(m_remotePathPrefix.size());
+            m_pFetcher->fetchOptionalBlocking(m_mac, m_slot, analyzeRemote, analyzeLocal);
+            const QString extRemote =
+                    analyzeRemote.left(analyzeRemote.length() - 3) + QStringLiteral("EXT");
+            const QString extLocal =
+                    analyzeLocal.left(analyzeLocal.length() - 3) + QStringLiteral("EXT");
+            m_pFetcher->fetchOptionalBlocking(m_mac, m_slot, extRemote, extLocal);
+        }
+
         // Cover art, best effort and not waited for -- a missing cover costs a
-        // thumbnail, not the load. It is requested after the audio so the track
-        // starts playing at the earliest possible moment. Normally already on
-        // disk from the prefetch; this is the retry for one that was not.
-        const QString artworkRemote = artworkPathForRow(index);
+        // thumbnail, not the load. Requested last so the track starts playing at
+        // the earliest possible moment. Normally already on disk from the
+        // prefetch; this is the retry for one that was not.
         if (!artworkRemote.isEmpty()) {
             m_pFetcher->fetchArtwork(m_mac,
                     m_slot,
-                    artworkIdForRow(index),
+                    artworkId,
                     m_remotePathPrefix + artworkRemote);
         }
     }
 
     TrackPointer pTrack = BaseExternalPlaylistModel::getTrack(index);
     if (pTrack) {
+        // Beat grid and cues, from the ANLZ files fetched above or from a
+        // previous load of the same track. Shared with the Rekordbox feature:
+        // once the files are on local disk the two cases are identical, and the
+        // beats are tagged with rekordbox's subversion so Mixxx's own analyzer
+        // will not overwrite the grid.
+        mixxx::rekordbox::applyAnalysis(pTrack, analyzePathForRow(index));
+
         const QString artworkRemote = artworkPathForRow(index);
         const QString artworkLocal = artworkRemote.isEmpty()
                 ? QString()
