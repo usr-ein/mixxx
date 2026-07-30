@@ -99,3 +99,7 @@ class ProLinkDevice {
 
 } // namespace prolink
 } // namespace mixxx
+
+// Crosses the network/GUI thread boundary in queued signals, which requires the
+// type to be a registered metatype.
+Q_DECLARE_METATYPE(mixxx::prolink::ProLinkDevice)

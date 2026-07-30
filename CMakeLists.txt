@@ -1069,6 +1069,8 @@ add_library(mixxx-lib STATIC EXCLUDE_FROM_ALL
   src/nativeeventhandlerwin.cpp
   src/network/jsonwebtask.cpp
   src/network/networktask.cpp
+  src/network/prolink/prolinkdiscovery.cpp
+  src/network/prolink/prolinknetworkservice.cpp
   src/network/prolink/prolinkpacket.cpp
   src/network/webtask.cpp
   src/preferences/colorpaletteeditor.cpp
