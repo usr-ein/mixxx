@@ -24,11 +24,14 @@ class SkinContext;
 /// **What each row is built from is not the same, and that matters.** The master
 /// row comes off the network: beat packets on UDP 50001 arrive *on* each beat
 /// and carry the beat's position in the bar, so both the phase and the bar
-/// alignment are the master's own. Our row comes from the engine's
-/// `beat_distance`, which is exact within the beat but says nothing about which
-/// beat of the bar we are on — so the bar position is counted locally from
-/// `beat_active` and is arbitrary until someone lines it up. Beat alignment is
-/// therefore trustworthy; bar alignment is a display convenience.
+/// alignment are the master's own. Our row is derived from the playhead —
+/// `beat_distance` for the sub-beat and the elapsed track time for which beat of
+/// the bar. Deriving it from *position* rather than counting `beat_active`
+/// pulses is what makes a loop behave: a one-beat loop replays the same beat,
+/// and a counter would march on through the bar as though the track had.
+/// Absolute bar alignment is still arbitrary — nothing in the engine names a
+/// downbeat — so beat alignment is trustworthy and bar alignment is a display
+/// convenience.
 class WProLinkPhaseMeter : public WWidget {
     Q_OBJECT
 
@@ -40,9 +43,6 @@ class WProLinkPhaseMeter : public WWidget {
 
   protected:
     void paintEvent(QPaintEvent* pEvent) override;
-
-  private slots:
-    void onBeatActive(double value);
 
   private:
     /// Draw one row: four beat cells with a marker at *phase*.
@@ -58,13 +58,19 @@ class WProLinkPhaseMeter : public WWidget {
     std::unique_ptr<ControlProxy> m_pMasterBarPhase;
     std::unique_ptr<ControlProxy> m_pMasterBpm;
     std::unique_ptr<ControlProxy> m_pBeatDistance;
-    std::unique_ptr<ControlProxy> m_pBeatActive;
     std::unique_ptr<ControlProxy> m_pPlay;
     std::unique_ptr<ControlProxy> m_pBpm;
+    std::unique_ptr<ControlProxy> m_pFileBpm;
+    std::unique_ptr<ControlProxy> m_pDuration;
+    std::unique_ptr<ControlProxy> m_pPlayPosition;
 
-    /// Which beat of the bar we believe we are on, 0-3. Counted from
-    /// `beat_active` because nothing in the engine tracks a bar.
-    int m_ourBeatInBar = 0;
+    /// Consecutive frames the two have agreed, or disagreed, for. The in-sync
+    /// colour only changes once one of them is convincing: toggling it the
+    /// instant the phase error crosses the threshold made the whole meter
+    /// flash, because a hand-matched deck sits right on that boundary.
+    int m_inSyncFrames = 0;
+    int m_outOfSyncFrames = 0;
+    bool m_inSync = false;
 
     QColor m_masterColour{0xff, 0x66, 0x00};
     QColor m_ourColour{0x44, 0xcc, 0xff};

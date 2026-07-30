@@ -25,7 +25,18 @@ constexpr double kInSyncTolerance = 0.05;
 
 /// Width of the label column. The ticks start after it, so text and beat marks
 /// never share a pixel.
-constexpr double kLabelWidth = 190.0;
+constexpr double kLabelWidth = 78.0;
+
+/// Beat marks are blocks rather than hairlines: this is read at a glance from
+/// arm's length, and a one-pixel line disappears against a waveform.
+constexpr int kDownbeatWidth = 9;
+constexpr int kBeatWidth = 5;
+
+/// Frames the phase error must stay on one side of the threshold before the
+/// in-sync colour follows it. Six at 30 Hz is a fifth of a second: long enough
+/// that a deck hovering on the boundary does not flash, short enough to feel
+/// immediate.
+constexpr int kSyncLatchFrames = 6;
 
 /// Phase difference wrapped to -0.5..0.5, so being a hair *behind* the downbeat
 /// reads as a small negative rather than as almost a whole beat ahead.
@@ -50,12 +61,12 @@ WProLinkPhaseMeter::WProLinkPhaseMeter(QWidget* pParent, const QString& group)
             QStringLiteral("[ProLink]"), QStringLiteral("master_bpm"), this);
     m_pBeatDistance =
             std::make_unique<ControlProxy>(m_group, QStringLiteral("beat_distance"), this);
-    m_pBeatActive =
-            std::make_unique<ControlProxy>(m_group, QStringLiteral("beat_active"), this);
     m_pPlay = std::make_unique<ControlProxy>(m_group, QStringLiteral("play"), this);
     m_pBpm = std::make_unique<ControlProxy>(m_group, QStringLiteral("bpm"), this);
-
-    m_pBeatActive->connectValueChanged(this, &WProLinkPhaseMeter::onBeatActive);
+    m_pFileBpm = std::make_unique<ControlProxy>(m_group, QStringLiteral("file_bpm"), this);
+    m_pDuration = std::make_unique<ControlProxy>(m_group, QStringLiteral("duration"), this);
+    m_pPlayPosition =
+            std::make_unique<ControlProxy>(m_group, QStringLiteral("playposition"), this);
 
     // Polled rather than driven by valueChanged: the master's phase moves
     // continuously and the marker has to move with it, so there is a repaint
@@ -82,15 +93,6 @@ void WProLinkPhaseMeter::setup(const QDomNode& node, const SkinContext& context)
     readColour("MasterColor", &m_masterColour);
     readColour("DeckColor", &m_ourColour);
     readColour("InSyncColor", &m_inSyncColour);
-}
-
-void WProLinkPhaseMeter::onBeatActive(double value) {
-    // beat_active pulses on each beat. Counting them is the only bar reference
-    // available on this side; it is arbitrary in absolute terms, which is why
-    // the header says bar alignment is a convenience and beat alignment is not.
-    if (value > 0.0) {
-        m_ourBeatInBar = (m_ourBeatInBar + 1) % kBeatsPerBar;
-    }
 }
 
 void WProLinkPhaseMeter::paintRow(QPainter* pPainter,
@@ -140,7 +142,7 @@ void WProLinkPhaseMeter::paintRow(QPainter* pPainter,
         const bool isDownbeat = beatIndex == 0;
 
         QPen pen(colour);
-        pen.setWidth(isDownbeat ? 4 : 2);
+        pen.setWidth(isDownbeat ? kDownbeatWidth : kBeatWidth);
         pPainter->setPen(pen);
         // The downbeat is full height and the others half, so the bar can be
         // counted as well as the beat.
@@ -160,20 +162,47 @@ void WProLinkPhaseMeter::paintEvent(QPaintEvent* pEvent) {
     const double masterPhase = m_pMasterBarPhase->get();
     const double masterBpm = m_pMasterBpm->get();
 
-    // Our own bar phase: exact within the beat, arbitrary across the bar.
+    // Our own bar phase, from the *playhead* rather than from counting beats.
+    // The elapsed track time times the file's tempo is which beat we are on, so
+    // a loop replays the same beats instead of marching on through the bar --
+    // which is what a counter did, and why a one-beat loop used to walk the
+    // marker around the whole bar while the audio repeated two beats.
     const double ourBeatDistance = m_pBeatDistance->get();
-    const bool ourTrackRunning = m_pBpm->get() > 0.0;
-    const double ourPhase = ourTrackRunning
-            ? (m_ourBeatInBar + ourBeatDistance) / kBeatsPerBar
-            : -1.0;
+    const double fileBpm = m_pFileBpm->get();
+    const double duration = m_pDuration->get();
+    const bool ourTrackRunning = m_pBpm->get() > 0.0 && fileBpm > 0.0 && duration > 0.0;
+    double ourPhase = -1.0;
+    if (ourTrackRunning) {
+        const double trackSeconds = m_pPlayPosition->get() * duration;
+        const double beatsElapsed = trackSeconds * fileBpm / 60.0;
+        const int beatInBar =
+                static_cast<int>(std::floor(beatsElapsed)) % kBeatsPerBar;
+        ourPhase = (beatInBar + ourBeatDistance) / kBeatsPerBar;
+    }
 
     // Aligned when the *beat* phases agree. Comparing bar phases would demand
-    // the bars line up too, which our locally counted bar cannot promise.
-    bool inSync = false;
+    // the bars line up too, which our arbitrary downbeat cannot promise.
+    //
+    // Latched rather than taken frame by frame: a deck matched by hand sits
+    // right on the threshold, and recolouring the moment it crosses made the
+    // whole meter flash. It has to hold for a few frames either way to count.
     if (masterPhase >= 0.0 && ourPhase >= 0.0) {
         const double masterBeatPhase = std::fmod(masterPhase * kBeatsPerBar, 1.0);
-        inSync = std::abs(wrapPhase(masterBeatPhase - ourBeatDistance)) < kInSyncTolerance;
+        const bool close =
+                std::abs(wrapPhase(masterBeatPhase - ourBeatDistance)) < kInSyncTolerance;
+        m_inSyncFrames = close ? m_inSyncFrames + 1 : 0;
+        m_outOfSyncFrames = close ? 0 : m_outOfSyncFrames + 1;
+        if (m_inSyncFrames >= kSyncLatchFrames) {
+            m_inSync = true;
+        } else if (m_outOfSyncFrames >= kSyncLatchFrames) {
+            m_inSync = false;
+        }
+    } else {
+        m_inSync = false;
+        m_inSyncFrames = 0;
+        m_outOfSyncFrames = 0;
     }
+    const bool inSync = m_inSync;
 
     const QColor masterColour = inSync ? m_inSyncColour : m_masterColour;
     const QColor ourColour = inSync ? m_inSyncColour : m_ourColour;
@@ -184,26 +213,9 @@ void WProLinkPhaseMeter::paintEvent(QPaintEvent* pEvent) {
     const QRectF ourRect(margin, margin * 2 + rowHeight, width() - 2 * margin, rowHeight);
 
     const QString masterLabel = masterDevice > 0
-            ? QStringLiteral("LINK %1  %2").arg(masterDevice).arg(masterBpm, 0, 'f', 2)
-            : tr("NO LINK MASTER");
+            ? tr("Deck %1").arg(masterDevice)
+            : tr("No master");
     paintRow(&painter, masterRect, masterPhase, masterColour, masterLabel);
-    paintRow(&painter,
-            ourRect,
-            ourPhase,
-            ourColour,
-            QStringLiteral("DECK  %1").arg(m_pBpm->get(), 0, 'f', 2));
+    paintRow(&painter, ourRect, ourPhase, ourColour, tr("This Deck"));
 
-    // The offset in milliseconds, which is what a DJ nudging a jog wheel is
-    // actually chasing. Only shown when there are two things to compare.
-    if (masterPhase >= 0.0 && ourPhase >= 0.0 && masterBpm > 0.0) {
-        const double masterBeatPhase = std::fmod(masterPhase * kBeatsPerBar, 1.0);
-        const double errorBeats = wrapPhase(ourBeatDistance - masterBeatPhase);
-        const double errorMs = errorBeats * 60000.0 / masterBpm;
-        painter.setPen(inSync ? m_inSyncColour : QColor(0xcc, 0xcc, 0xcc));
-        painter.drawText(QRectF(0, 0, width() - 6, height()),
-                Qt::AlignRight | Qt::AlignVCenter,
-                QStringLiteral("%1%2 ms")
-                        .arg(errorMs >= 0 ? QStringLiteral("+") : QString())
-                        .arg(errorMs, 0, 'f', 0));
-    }
 }
