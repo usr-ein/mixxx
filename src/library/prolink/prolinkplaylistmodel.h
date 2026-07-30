@@ -14,15 +14,21 @@ class TrackCollectionManager;
 /// metadata the player's own database supplied, so the table is fully browsable
 /// before a single audio byte has been fetched.
 ///
-/// **Loading a track is not implemented yet**, and `getTrack()` is deliberately
-/// left to the base class rather than stubbed. The base builds a track from the
-/// row's `location`, which currently points into a cache directory that nothing
-/// has written to, so a double-click fails to find the file and does nothing.
-/// That is the honest intermediate state: making it work means fetching the
-/// audio and the ANLZ files first, which is the next increment. Faking it — by
-/// synthesising a track with no file behind it — would put unplayable rows into
-/// Mixxx's real library, which is much harder to undo than an inert
-/// double-click.
+/// **`getTrack()` refuses to build a track whose file is not there yet**, and
+/// that override is not optional.
+///
+/// `BaseExternalPlaylistModel::getTrack()` calls `getOrAddTrack()`
+/// unconditionally, which writes a row into Mixxx's *real* `library` and
+/// `track_locations` tables. And the track table calls `getTrack()` per visible
+/// row to look for cover art — so without this override, merely *scrolling* a
+/// ProLink playlist permanently adds one Missing Track to the user's own library
+/// for every row seen, each pointing at a cache path nothing has written. It
+/// also produced a TagLib warning per row and re-saved empty metadata over the
+/// values the player's database supplied.
+///
+/// Returning null until the file exists costs nothing today: the columns render
+/// from SQL, and cover art was unavailable anyway. Once the fetcher lands and
+/// the audio is on disk, the base implementation takes over unchanged.
 class ProLinkPlaylistModel : public BaseExternalPlaylistModel {
     Q_OBJECT
 
@@ -31,6 +37,7 @@ class ProLinkPlaylistModel : public BaseExternalPlaylistModel {
             TrackCollectionManager* pTrackCollectionManager,
             QSharedPointer<BaseTrackCache> trackSource);
 
+    TrackPointer getTrack(const QModelIndex& index) const override;
     bool isColumnHiddenByDefault(int column) override;
     bool isColumnInternal(int column) override;
 };

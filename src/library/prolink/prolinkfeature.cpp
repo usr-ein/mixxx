@@ -156,6 +156,20 @@ ProLinkFeature::ProLinkFeature(Library* pLibrary, UserSettingsPointer pConfig)
     mixxx::prolink::createProLinkTables(database);
     transaction.commit();
 
+    // Purge anything under the cache root from the user's *real* library.
+    //
+    // The cache is boot-scoped -- it is cleared below, so every path in it is
+    // about to become invalid -- and rows left behind would show up in Missing
+    // Tracks forever, growing by one per ProLink track ever touched. This also
+    // cleans up after an earlier build in which the model's getTrack() let the
+    // base class add a row for every row merely *scrolled past*.
+    // Via the manager: TrackCollection::purgeAllTracks is private to it.
+    QDir cacheRoot(cacheRootPath());
+    pLibrary->trackCollectionManager()->purgeAllTracks(cacheRoot);
+    if (cacheRoot.exists()) {
+        cacheRoot.removeRecursively();
+    }
+
     m_pSidebarModel->setRootItem(TreeItem::newRoot(this));
     m_pNetwork->start();
 }
@@ -257,6 +271,14 @@ void ProLinkFeature::activateChild(const QModelIndex& index) {
     showStatusPage();
 }
 
+QString ProLinkFeature::cacheRootPath() {
+    // CacheLocation, not the settings directory: this is scratch that the
+    // platform already understands to be disposable, and it keeps a
+    // multi-gigabyte download area out of the user's Mixxx profile.
+    return QDir(QStandardPaths::writableLocation(QStandardPaths::CacheLocation))
+            .filePath(QStringLiteral("prolink"));
+}
+
 QString ProLinkFeature::mediumKey(const QByteArray& mac, MediaSlot slot) {
     return QStringLiteral("%1|%2").arg(macKey(mac)).arg(static_cast<int>(slot));
 }
@@ -326,9 +348,7 @@ void ProLinkFeature::onDatabaseFetched(const QByteArray& mac,
     // the path is the player's own, concatenated verbatim onto a local root, so
     // the two trees never have to be reconciled.
     const QString localRoot =
-            QDir(QStandardPaths::writableLocation(QStandardPaths::CacheLocation))
-                    .filePath(QStringLiteral("prolink/") +
-                            mixxx::prolink::deviceKeyFor(mac, slot));
+            QDir(cacheRootPath()).filePath(mixxx::prolink::deviceKeyFor(mac, slot));
     QSqlDatabase database = m_pTrackCollection->database();
     ScopedTransaction transaction(database);
     mixxx::prolink::writeMedium(database,

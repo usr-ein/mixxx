@@ -109,6 +109,8 @@ class ProLinkFeature : public BaseExternalLibraryFeature {
         QString error;
         mixxx::prolink::PdbContents contents;
     };
+    /// Boot-scoped scratch directory for fetched media.
+    static QString cacheRootPath();
     static QString mediumKey(const QByteArray& mac, mixxx::prolink::MediaSlot slot);
     /// Add the USB and SD children under a device row.
     void addSlotNodes(int deviceRow, const QByteArray& mac);

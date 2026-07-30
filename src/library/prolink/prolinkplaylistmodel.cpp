@@ -1,5 +1,8 @@
 #include "library/prolink/prolinkplaylistmodel.h"
 
+#include <QDir>
+#include <QFile>
+
 #include "library/prolink/prolinkdbwriter.h"
 #include "moc_prolinkplaylistmodel.cpp"
 
@@ -12,6 +15,18 @@ ProLinkPlaylistModel::ProLinkPlaylistModel(QObject* pParent,
                   mixxx::prolink::kProLinkPlaylistsTable,
                   mixxx::prolink::kProLinkPlaylistTracksTable,
                   trackSource) {
+}
+
+TrackPointer ProLinkPlaylistModel::getTrack(const QModelIndex& index) const {
+    const QString location = QDir::fromNativeSeparators(
+            getFieldString(index, ColumnCache::COLUMN_TRACKLOCATIONSTABLE_LOCATION));
+    if (location.isEmpty() || !QFile::exists(location)) {
+        // Not fetched yet. See the header: the base class would add it to the
+        // user's real library regardless, and the table asks for every visible
+        // row.
+        return TrackPointer();
+    }
+    return BaseExternalPlaylistModel::getTrack(index);
 }
 
 bool ProLinkPlaylistModel::isColumnHiddenByDefault(int column) {
