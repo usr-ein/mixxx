@@ -3,6 +3,7 @@
 #include <QCryptographicHash>
 #include <QDir>
 #include <QFile>
+#include <QFileInfo>
 #include <QMetaObject>
 #include <QNetworkInterface>
 
@@ -37,6 +38,35 @@ QHostAddress localAddressFor(const mixxx::prolink::ProLinkDevice& device) {
     // Falling back to Any is better than refusing: on a single-homed host it is
     // correct, and on a multi-homed one it at least tries.
     return QHostAddress(QHostAddress::AnyIPv4);
+}
+/// Write a fetched file, atomically.
+///
+/// Via a .part and a rename, because SoundSource::getTypeFromFile classifies by
+/// *reading bytes* (QMimeDatabase::MatchContent). A half-written file would be
+/// classified as unsupported, and the failure would look like an unsupported
+/// format rather than an interrupted download.
+QString writeFetchedFile(const QString& path, const QByteArray& data) {
+    QFileInfo info(path);
+    if (!QDir().mkpath(info.absolutePath())) {
+        return QStringLiteral("could not create %1").arg(info.absolutePath());
+    }
+    const QString partPath = path + QStringLiteral(".part");
+    QFile part(partPath);
+    if (!part.open(QIODevice::WriteOnly | QIODevice::Truncate)) {
+        return QStringLiteral("could not write %1: %2").arg(partPath, part.errorString());
+    }
+    const qint64 written = part.write(data);
+    part.close();
+    if (written != data.size()) {
+        QFile::remove(partPath);
+        return QStringLiteral("short write to %1").arg(partPath);
+    }
+    QFile::remove(path);
+    if (!QFile::rename(partPath, path)) {
+        QFile::remove(partPath);
+        return QStringLiteral("could not rename %1").arg(partPath);
+    }
+    return QString();
 }
 } // namespace
 
@@ -134,6 +164,12 @@ void ProLinkNetworkService::shutdown() {
                 Qt::BlockingQueuedConnection);
     }
 
+    // Drop queued work before the thread goes: a request that starts during
+    // shutdown would build sockets on a thread about to stop servicing them.
+    m_fileQueue.clear();
+    m_fileBusy = false;
+    m_mounts.clear();
+
     m_pThread->quit();
     const bool exited = m_pThread->wait(kThreadQuitTimeoutMs);
     if (!exited) {
@@ -208,6 +244,145 @@ void ProLinkNetworkService::pullDatabase(MediaSlot slot) {
         }
     }
     kLogger.warning() << "pull_db: no player on the network to pull from";
+}
+
+void ProLinkNetworkService::fetchFile(const QByteArray& mac,
+        MediaSlot slot,
+        const QString& remotePath,
+        const QString& localPath,
+        bool priority) {
+    ProLinkDevice target;
+    for (const ProLinkDevice& device : m_devices) {
+        if (device.mac == mac) {
+            target = device;
+            break;
+        }
+    }
+    if (!target.isValid() || !target.online || !m_pDiscovery) {
+        emit fileFetched(localPath, tr("player is no longer on the network"));
+        return;
+    }
+
+    // Already queued? Asking twice is normal -- the artwork prefetch and a
+    // deliberate load can want the same cover -- and enqueuing it twice would
+    // fetch it twice and emit two results, one of which nobody is waiting for.
+    for (const FileRequest& queued : m_fileQueue) {
+        if (queued.localPath == localPath) {
+            return;
+        }
+    }
+
+    FileRequest request;
+    request.device = target;
+    request.slot = slot;
+    request.remotePath = remotePath;
+    request.localPath = localPath;
+    if (priority) {
+        m_fileQueue.prepend(request);
+    } else {
+        m_fileQueue.append(request);
+    }
+    pumpFileQueue();
+}
+
+void ProLinkNetworkService::pumpFileQueue() {
+    if (m_fileBusy || m_fileQueue.isEmpty() || !m_pDiscovery) {
+        return;
+    }
+    m_fileBusy = true;
+    const FileRequest request = m_fileQueue.takeFirst();
+    QMetaObject::invokeMethod(
+            m_pDiscovery,
+            [this, request] { runFileRequest(request); },
+            Qt::QueuedConnection);
+}
+
+void ProLinkNetworkService::runFileRequest(const FileRequest& request) {
+    const QString key = QStringLiteral("%1|%2")
+                                .arg(QString::fromLatin1(request.device.mac.toHex()))
+                                .arg(static_cast<int>(request.slot));
+    const QString localPath = request.localPath;
+
+    // Report, release the slot, and start the next one. Every exit path goes
+    // through here so the queue cannot stall on a failure.
+    auto finish = [this, localPath](const QString& error) {
+        QMetaObject::invokeMethod(
+                this,
+                [this, localPath, error] {
+                    m_fileBusy = false;
+                    emit fileFetched(localPath, error);
+                    pumpFileQueue();
+                },
+                Qt::QueuedConnection);
+    };
+
+    auto withRoot = [this, request, key, localPath, finish](const QByteArray& rootHandle) {
+        nfs::NfsV2Client* pClient = m_mounts.value(key).pClient;
+        auto* pTransfer = new nfs::NfsFileTransfer(pClient, pClient);
+        pClient->resolvePath(rootHandle,
+                request.remotePath,
+                [this, pClient, pTransfer, localPath, finish](
+                        const nfs::NfsV2Client::Outcome<QByteArray>& file) {
+                    if (!file.ok) {
+                        pTransfer->deleteLater();
+                        finish(file.error);
+                        return;
+                    }
+                    pClient->getAttributes(file.value,
+                            [this, pTransfer, localPath, file, finish](
+                                    const nfs::NfsV2Client::Outcome<
+                                            nfs::FileAttributes>& attrs) {
+                                if (!attrs.ok) {
+                                    pTransfer->deleteLater();
+                                    finish(attrs.error);
+                                    return;
+                                }
+                                pTransfer->fetch(file.value,
+                                        attrs.value.size,
+                                        [pTransfer, localPath, finish](
+                                                const nfs::NfsFileTransfer::Result&
+                                                        result) {
+                                            const QString error = result.ok
+                                                    ? writeFetchedFile(localPath,
+                                                              result.data)
+                                                    : result.error;
+                                            pTransfer->deleteLater();
+                                            finish(error);
+                                        });
+                            });
+                });
+    };
+
+    // Reuse the mount if we have one. Mounting per file was what turned the
+    // artwork prefetch into a few hundred simultaneous portmap conversations.
+    const auto mounted = m_mounts.constFind(key);
+    if (mounted != m_mounts.constEnd() && !mounted->rootHandle.isEmpty()) {
+        withRoot(mounted->rootHandle);
+        return;
+    }
+
+    auto* pClient = new nfs::NfsV2Client(
+            request.device.address, localAddressFor(request.device), m_pDiscovery);
+    MountedMedium record;
+    record.pClient = pClient;
+    m_mounts.insert(key, record);
+
+    pClient->mount(exportPathForSlot(request.slot),
+            [this, key, withRoot, finish](
+                    const nfs::NfsV2Client::Outcome<QByteArray>& result) {
+                if (!result.ok) {
+                    // Drop the record so the next request retries the mount
+                    // rather than inheriting a broken one.
+                    auto record = m_mounts.take(key);
+                    if (record.pClient) {
+                        record.pClient->deleteLater();
+                    }
+                    finish(result.error);
+                    return;
+                }
+                m_mounts[key].rootHandle = result.value;
+                withRoot(result.value);
+            });
 }
 
 void ProLinkNetworkService::fetchOnNetworkThread(

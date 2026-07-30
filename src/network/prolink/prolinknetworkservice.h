@@ -1,5 +1,6 @@
 #pragma once
 
+#include <QHash>
 #include <QList>
 #include <QObject>
 #include <QThread>
@@ -98,6 +99,19 @@ class ProLinkNetworkService : public QObject {
     /// resolves to "no longer on the network" instead of dereferencing anything.
     void fetchDatabase(const QByteArray& mac, MediaSlot slot);
 
+    /// Fetch one file from a medium into *localPath*.
+    ///
+    /// *remotePath* is taken verbatim from `export.pdb`, which stores paths
+    /// relative to the medium root with a leading slash. The answer arrives as
+    /// fileFetched().
+    /// *priority* jumps the queue. A track the user is waiting on must not sit
+    /// behind a few hundred queued cover images.
+    void fetchFile(const QByteArray& mac,
+            MediaSlot slot,
+            const QString& remotePath,
+            const QString& localPath,
+            bool priority = false);
+
   signals:
     void deviceFound(const mixxx::prolink::ProLinkDevice& device);
     void deviceChanged(const mixxx::prolink::ProLinkDevice& device);
@@ -110,6 +124,8 @@ class ProLinkNetworkService : public QObject {
             mixxx::prolink::MediaSlot slot,
             const QByteArray& data,
             const QString& error);
+    /// Result of fetchFile(). *error* is empty on success.
+    void fileFetched(const QString& localPath, const QString& error);
 
   private slots:
     void onDeviceFound(const mixxx::prolink::ProLinkDevice& device);
@@ -118,6 +134,20 @@ class ProLinkNetworkService : public QObject {
 
   private:
     void fetchOnNetworkThread(const ProLinkDevice& device, MediaSlot slot);
+    struct FileRequest {
+        ProLinkDevice device;
+        MediaSlot slot = MediaSlot::Usb;
+        QString remotePath;
+        QString localPath;
+    };
+    /// Start the next queued request, if the network thread is idle.
+    void pumpFileQueue();
+    void runFileRequest(const FileRequest& request);
+    /// The mount for one medium, kept open across requests.
+    struct MountedMedium {
+        nfs::NfsV2Client* pClient = nullptr;
+        QByteArray rootHandle;
+    };
     void onFetchFinished(const QByteArray& mac,
             MediaSlot slot,
             const QByteArray& data,
@@ -144,6 +174,18 @@ class ProLinkNetworkService : public QObject {
     /// browsing — which would otherwise hash and write a megabyte on every
     /// expand.
     QByteArray m_diagnosticPull;
+
+    /// File fetches are strictly serialised.
+    ///
+    /// They used to get an NfsV2Client each -- its own socket, its own portmap
+    /// and mount -- which was survivable for one file and catastrophic for the
+    /// artwork prefetch: a few hundred simultaneous clients, and every RPC on
+    /// the deck timed out, including the track the user was waiting for. One
+    /// mount per medium, one request at a time.
+    QList<FileRequest> m_fileQueue;
+    bool m_fileBusy = false;
+    /// Keyed mac|slot. Lives on the network thread.
+    QHash<QString, MountedMedium> m_mounts;
 
     bool m_listening = false;
     QString m_lastError;

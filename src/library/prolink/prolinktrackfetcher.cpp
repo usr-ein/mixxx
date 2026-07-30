@@ -77,7 +77,9 @@ bool ProLinkTrackFetcher::fetchBlocking(const QByteArray& mac,
     });
     timeout.start();
 
-    m_pNetwork->fetchFile(mac, slot, remotePath, localPath);
+    // Priority: the user is watching this one, and a few hundred cover images
+    // may already be queued ahead of it.
+    m_pNetwork->fetchFile(mac, slot, remotePath, localPath, true);
 
     // ExcludeUserInputEvents: during the loop the user must not be able to
     // click another feature or double-click a second track, because the model
