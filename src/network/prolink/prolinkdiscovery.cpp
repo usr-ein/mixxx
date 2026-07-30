@@ -123,6 +123,7 @@ void ProLinkDiscovery::readPendingDatagrams() {
 
         auto existing = m_devices.find(device.mac);
         if (existing == m_devices.end()) {
+            device.online = true;
             m_devices.insert(device.mac, device);
             kLogger.info() << "found" << device.label() << "at" << device.address
                            << "on" << device.interfaceName;
@@ -147,6 +148,7 @@ void ProLinkDiscovery::readPendingDatagrams() {
         existing->interfaceName = device.interfaceName;
         existing->touch();
 
+        existing->online = true;
         if (wasStale) {
             m_reportedStale.remove(device.mac);
             kLogger.info() << existing->label() << "is back";
@@ -170,6 +172,7 @@ void ProLinkDiscovery::reapDevices() {
         // switch reconverging and come straight back.
         if (it->isStale() && !m_reportedStale.contains(it.key())) {
             m_reportedStale.insert(it.key());
+            it->online = false;
             kLogger.info() << it->label() << "went offline";
             emit deviceChanged(*it);
         }

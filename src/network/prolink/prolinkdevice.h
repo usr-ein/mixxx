@@ -46,9 +46,23 @@ class ProLinkDevice {
     /// wrong NIC and every RPC times out with no error to point at.
     QString interfaceName;
 
-    /// Milliseconds since the last keep-alive. Driven by a monotonic clock, so
-    /// it is immune to the system clock stepping (NTP settling on a Pi that has
-    /// just booted without a battery-backed RTC, which is exactly our case).
+    /// Whether the discovery table considered this device present when the
+    /// signal carrying it was emitted.
+    ///
+    /// **Consumers must use this, not isStale().** The timer below is
+    /// owner-side state: it keeps running inside a copy, so asking a copy how
+    /// long ago the device was seen actually answers "how long since this copy
+    /// was made" -- a different and useless question. Because deviceChanged is
+    /// deliberately not emitted for plain keep-alives (four a second per deck
+    /// would be noise), a mirror held by the GUI thread can be minutes old while
+    /// the device is perfectly alive.
+    bool online = true;
+
+    /// Milliseconds since the last keep-alive. **Only meaningful on the
+    /// instance owned by ProLinkDiscovery**, which is the one being touched.
+    /// Driven by a monotonic clock, so it is immune to the system clock stepping
+    /// (NTP settling on a Pi with no battery-backed RTC, which is exactly our
+    /// case).
     qint64 msSinceLastSeen() const {
         return m_lastSeen.isValid() ? m_lastSeen.elapsed() : -1;
     }
@@ -56,8 +70,9 @@ class ProLinkDevice {
         m_lastSeen.start();
     }
 
-    /// Missed at least five keep-alives: shown greyed out, but its subtree, its
-    /// database rows and its cache are all kept. See kDeviceTimeoutMs.
+    /// Missed at least five keep-alives. Owner-side only -- see `online`.
+    /// Shown greyed out, but its subtree, database rows and cache are all kept.
+    /// See kDeviceTimeoutMs.
     bool isStale() const {
         const qint64 elapsed = msSinceLastSeen();
         return elapsed < 0 || elapsed > kDeviceTimeoutMs;

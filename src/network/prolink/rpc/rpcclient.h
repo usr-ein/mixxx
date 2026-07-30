@@ -78,6 +78,12 @@ class RpcClient : public QObject {
 
     /// Abandon every outstanding call, invoking each callback with a timeout.
     /// Used when a peer disappears, so nothing is left waiting forever.
+    ///
+    /// **Never called during destruction.** A callback routinely captures the
+    /// objects that own this client, and by the time ~RpcClient runs those are
+    /// already being torn down -- invoking one then is a use-after-free. The
+    /// destructor drops pending calls silently instead; a caller that needs its
+    /// callbacks to fire must call this while everything is still alive.
     void abortAll();
 
     int outstandingCalls() const {

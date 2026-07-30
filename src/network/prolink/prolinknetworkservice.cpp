@@ -173,7 +173,7 @@ void ProLinkNetworkService::pullDatabase(MediaSlot slot) {
     // Restricted to 1-4: a mixer announces itself too and has no media.
     ProLinkDevice target;
     for (const ProLinkDevice& device : m_devices) {
-        if (device.isPlayer() && !device.isStale()) {
+        if (device.isPlayer() && device.online) {
             target = device;
             break;
         }
@@ -203,15 +203,18 @@ void ProLinkNetworkService::pullDatabaseOnNetworkThread(
     // Bound to the discovery object so they live and die on this thread. Both
     // are deleted when the transfer completes, via deleteLater on this thread's
     // own event loop -- which is running, unlike at shutdown.
+    // The transfer is a *child* of the client, not a sibling. Deleting two
+    // siblings meant the transfer died first and the client's teardown then
+    // fired read callbacks that captured it -- a use-after-free. One owner, one
+    // deleteLater, and Qt destroys the child first while the parent is intact.
     auto* pNfs = new nfs::NfsV2Client(device.address, localAddressFor(device), m_pDiscovery);
-    auto* pTransfer = new nfs::NfsFileTransfer(pNfs, m_pDiscovery);
+    auto* pTransfer = new nfs::NfsFileTransfer(pNfs, pNfs);
 
     pNfs->mount(exportPath,
             [this, pNfs, pTransfer, exportPath](
                     const nfs::NfsV2Client::Outcome<QByteArray>& mounted) {
                 if (!mounted.ok) {
                     kLogger.warning() << "pull_db:" << mounted.error;
-                    pTransfer->deleteLater();
                     pNfs->deleteLater();
                     return;
                 }
@@ -226,7 +229,6 @@ void ProLinkNetworkService::pullDatabaseOnNetworkThread(
                                 const nfs::NfsV2Client::Outcome<QByteArray>& file) {
                             if (!file.ok) {
                                 kLogger.warning() << "pull_db:" << file.error;
-                                pTransfer->deleteLater();
                                 pNfs->deleteLater();
                                 return;
                             }
@@ -236,7 +238,6 @@ void ProLinkNetworkService::pullDatabaseOnNetworkThread(
                                                     nfs::FileAttributes>& attrs) {
                                         if (!attrs.ok) {
                                             kLogger.warning() << "pull_db:" << attrs.error;
-                                            pTransfer->deleteLater();
                                             pNfs->deleteLater();
                                             return;
                                         }
@@ -249,7 +250,6 @@ void ProLinkNetworkService::pullDatabaseOnNetworkThread(
                                                                 Result& result) {
                                                     reportPull(result);
                                                     pNfs->unmount(exportPath);
-                                                    pTransfer->deleteLater();
                                                     pNfs->deleteLater();
                                                 });
                                     });

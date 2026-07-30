@@ -29,7 +29,18 @@ RpcClient::RpcClient(const QHostAddress& peer,
 }
 
 RpcClient::~RpcClient() {
-    close();
+    // Deliberately not close(), which would abort outstanding calls *with*
+    // their callbacks. Those callbacks capture the objects that own us -- the
+    // NFS client, the transfer, the service -- and during our destruction at
+    // least one of them is already partly gone. Dropping them silently is the
+    // only safe thing to do here.
+    if (m_pRetryTimer) {
+        m_pRetryTimer->stop();
+    }
+    m_pending.clear();
+    if (m_pSocket) {
+        m_pSocket->close();
+    }
 }
 
 bool RpcClient::open() {

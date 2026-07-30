@@ -156,7 +156,10 @@ void ProLinkFeature::onDeviceChanged(const ProLinkDevice& device) {
     // subtree and (later) their cached database will stay put through a blip,
     // because a player can drop off the network for two seconds and come
     // straight back -- see kDeviceTimeoutMs.
-    const bool offline = device.isStale();
+    // device.online, not device.isStale(): the timer inside a copy measures the
+    // age of the copy, not of the device. This call site happened to be correct
+    // only because the signal is emitted at the instant of the transition.
+    const bool offline = !device.online;
     pItem->setLabel(offline ? tr("%1 (offline)").arg(device.label()) : device.label());
     pItem->setBold(!offline);
     m_pSidebarModel->triggerRepaint(m_pSidebarModel->index(row, 0));
