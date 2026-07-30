@@ -7,6 +7,7 @@
 #include "library/coverart.h"
 #include "library/dao/trackschema.h"
 #include "library/queryutil.h"
+#include "track/keyutils.h"
 #include "util/logger.h"
 
 namespace {
@@ -53,6 +54,12 @@ bool createProLinkTables(QSqlDatabase& database) {
             "    bitrate TEXT,"
             "    bpm FLOAT,"
             "    key TEXT,"
+            // The Camelot notation, and the Camelot *sort order*, both key off
+            // this rather than off the text: ColumnCache builds a CASE over
+            // key_id from the notation preference. Without it a ProLink medium
+            // shows whatever rekordbox wrote and sorts it as a string, so 10A
+            // lands between 1A and 11A.
+            "    key_id INTEGER,"
             "    rating INTEGER,"
             "    analyze_path TEXT,"
             "    device TEXT,"
@@ -164,11 +171,11 @@ int writeMedium(QSqlDatabase& database,
     insertTrack.prepare(QStringLiteral(
             "INSERT OR REPLACE INTO %1 "
             "(rb_id, artist, title, album, year, genre, tracknumber, location, "
-            " comment, duration, bitrate, bpm, key, rating, analyze_path, device, "
+            " comment, duration, bitrate, bpm, key, key_id, rating, analyze_path, device, "
             " color, artwork_path, artwork_id, coverart_source, coverart_type, "
             " coverart_location, coverart_digest) "
             "VALUES (:rb_id, :artist, :title, :album, :year, :genre, :tracknumber, "
-            " :location, :comment, :duration, :bitrate, :bpm, :key, :rating, "
+            " :location, :comment, :duration, :bitrate, :bpm, :key, :key_id, :rating, "
             " :analyze_path, :device, :color, :artwork_path, :artwork_id, "
             " :coverart_source, :coverart_type, :coverart_location, :coverart_digest)")
                                 .arg(kProLinkLibraryTable));
@@ -204,6 +211,10 @@ int writeMedium(QSqlDatabase& database,
         // cannot pick up rounding error on the way through.
         insertTrack.bindValue(QStringLiteral(":bpm"), track.tempoCentiBpm / 100.0);
         insertTrack.bindValue(QStringLiteral(":key"), track.key);
+        // Parsed from the text, which is all a pdb gives us. An unrecognised
+        // spelling yields INVALID and simply sorts with the other unknowns.
+        insertTrack.bindValue(QStringLiteral(":key_id"),
+                static_cast<int>(KeyUtils::guessKeyFromText(track.key)));
         insertTrack.bindValue(QStringLiteral(":rating"), track.rating);
         insertTrack.bindValue(QStringLiteral(":analyze_path"),
                 QString(localRoot + track.analyzePath));

@@ -178,6 +178,7 @@ ProLinkFeature::ProLinkFeature(Library* pLibrary, UserSettingsPointer pConfig)
             LIBRARYTABLE_BITRATE,
             LIBRARYTABLE_BPM,
             LIBRARYTABLE_KEY,
+            LIBRARYTABLE_KEY_ID,
             LIBRARYTABLE_COLOR,
             REKORDBOX_ANALYZE_PATH,
             // Ours alone; the model reads it by name to find the medium's cover

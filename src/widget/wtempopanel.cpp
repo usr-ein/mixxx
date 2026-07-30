@@ -37,7 +37,7 @@ constexpr int kPadBottom = 26;
 constexpr int kColumnGap = 14;
 /// Inside the box, between its border and the text.
 constexpr int kBoxPadX = 14;
-constexpr int kBoxPadY = 8;
+constexpr int kBoxPadY = 16;
 constexpr int kBoxRadius = 4;
 } // namespace
 
