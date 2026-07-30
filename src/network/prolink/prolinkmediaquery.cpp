@@ -40,6 +40,14 @@ constexpr int kResponseNameLength = 0x40;
 constexpr int kResponseTrackCount = 0xA4;
 constexpr int kResponsePlaylistCount = 0xAC;
 
+// CDJ status (type 0x0a), for working out who the tempo master is.
+constexpr quint8 kTypeCdjStatus = 0x0A;
+constexpr int kStatusMinLength = 0x76;
+constexpr int kStatusDevice = 0x21;
+/// "Master meaningful": 00 not master, 01 master on a rekordbox track, 02
+/// master on a track with no usable tempo. Anything non-zero is the master.
+constexpr int kStatusMasterMeaningful = 0x9E;
+
 quint32 readU32(const QByteArray& data, int offset) {
     return (static_cast<quint32>(static_cast<quint8>(data.at(offset))) << 24) |
             (static_cast<quint32>(static_cast<quint8>(data.at(offset + 1))) << 16) |
@@ -176,10 +184,32 @@ void ProLinkMediaQuery::readPendingDatagrams() {
         int deviceNumber = 0;
         MediaSlot slot = MediaSlot::Empty;
         MediaInfo info;
-        // Most of what arrives here is ordinary status, four packets a second
-        // per deck now that we are announced. Anything that is not a media
-        // response is dropped without comment.
-        if (!parseMediaResponse(datagram.data(), &deviceNumber, &slot, &info)) {
+        const QByteArray data = datagram.data();
+
+        // Ordinary status, four a second per deck now that we are announced.
+        // Watched only for who is master, which is published here and nowhere
+        // a passive listener can see (F21).
+        if (data.size() > kStatusMasterMeaningful &&
+                data.startsWith(QByteArray::fromRawData(kMagic, kMagicLength)) &&
+                static_cast<quint8>(data.at(kOffsetType)) == kTypeCdjStatus &&
+                data.size() >= kStatusMinLength) {
+            const int sender = static_cast<quint8>(data.at(kStatusDevice));
+            const bool isMaster =
+                    static_cast<quint8>(data.at(kStatusMasterMeaningful)) != 0;
+            if (isMaster && sender != m_masterDevice) {
+                m_masterDevice = sender;
+                kLogger.info() << "tempo master is now player" << sender;
+                emit masterChanged(sender);
+            } else if (!isMaster && sender == m_masterDevice) {
+                // It gave up master and nobody has claimed it in this packet.
+                m_masterDevice = 0;
+                kLogger.info() << "player" << sender << "gave up tempo master";
+                emit masterChanged(0);
+            }
+            continue;
+        }
+
+        if (!parseMediaResponse(data, &deviceNumber, &slot, &info)) {
             continue;
         }
         if (info.isOccupied()) {

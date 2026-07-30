@@ -72,6 +72,12 @@ class ProLinkMediaQuery : public QObject {
         m_requesterNumber = number;
     }
 
+    /// The player currently acting as tempo master, or 0 if none is. Read off
+    /// the ordinary status packets that arrive on this same socket.
+    int masterDevice() const {
+        return m_masterDevice;
+    }
+
   signals:
     /// *player* is the responding device's address, which is how the caller maps
     /// it back to a MAC — the response carries a device number, and numbers can
@@ -79,6 +85,8 @@ class ProLinkMediaQuery : public QObject {
     void mediaInfoReceived(const QHostAddress& player,
             mixxx::prolink::MediaSlot slot,
             const mixxx::prolink::MediaInfo& info);
+    /// Another player took, or gave up, tempo master. 0 means nobody holds it.
+    void masterChanged(int deviceNumber);
 
   private slots:
     void readPendingDatagrams();
@@ -86,6 +94,7 @@ class ProLinkMediaQuery : public QObject {
   private:
     QUdpSocket* m_pSocket = nullptr;
     int m_requesterNumber = 0;
+    int m_masterDevice = 0;
 };
 
 /// Build a type-0x05 media query. Exposed for the unit tests, which hold it to a

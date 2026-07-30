@@ -5,9 +5,11 @@
 #include <QFile>
 #include <QFileInfo>
 #include <QMetaObject>
+#include <QTimer>
 #include <QNetworkInterface>
 
 #include "moc_prolinknetworkservice.cpp"
+#include "control/controlobject.h"
 #include "control/controlpushbutton.h"
 #include "util/cmdlineargs.h"
 #include "network/prolink/dbserver/dbserverclient.h"
@@ -27,6 +29,9 @@ constexpr int kThreadQuitTimeoutMs = 2000;
 /// Longest one queued file may take before the queue is assumed stuck. Well
 /// above a large track over NFS, and far below anything a user would wait out.
 constexpr int kQueueStallTimeoutMs = 150000;
+
+/// How often the master's phase is republished for the meter. 30 Hz.
+constexpr int kPhasePublishIntervalMs = 33;
 
 /// Our own address on the interface a device's announcements arrived on.
 ///
@@ -92,6 +97,40 @@ ProLinkNetworkService::ProLinkNetworkService(QObject* parent)
             });
 }
 
+void ProLinkNetworkService::startPhasePublishing() {
+    if (m_pPhaseTimer) {
+        return;
+    }
+    m_pMasterDeviceControl = std::make_unique<ControlObject>(
+            ConfigKey(QStringLiteral("[ProLink]"), QStringLiteral("master_device")));
+    m_pMasterBpmControl = std::make_unique<ControlObject>(
+            ConfigKey(QStringLiteral("[ProLink]"), QStringLiteral("master_bpm")));
+    m_pMasterBarPhaseControl = std::make_unique<ControlObject>(
+            ConfigKey(QStringLiteral("[ProLink]"), QStringLiteral("master_bar_phase")));
+    m_pMasterDeviceControl->setReadOnly();
+    m_pMasterBpmControl->setReadOnly();
+    m_pMasterBarPhaseControl->setReadOnly();
+    m_pMasterBarPhaseControl->forceSet(-1.0);
+
+    m_pPhaseTimer = new QTimer(this);
+    m_pPhaseTimer->setInterval(kPhasePublishIntervalMs);
+    connect(m_pPhaseTimer, &QTimer::timeout, this, [this]() {
+        if (!m_pDiscovery) {
+            return;
+        }
+        // Read across from the GUI thread, which is not how anything else here
+        // talks to the network thread. Deliberate: these are three plain
+        // doubles behind trivial getters, read far more often than they change,
+        // and hopping a queued signal 30 times a second to move a marker would
+        // cost more than it protects. The worst case is one frame of a marker
+        // drawn from a phase a millisecond stale.
+        m_pMasterDeviceControl->forceSet(m_pDiscovery->masterDevice());
+        m_pMasterBpmControl->forceSet(m_pDiscovery->masterBpm());
+        m_pMasterBarPhaseControl->forceSet(m_pDiscovery->masterBarPhase());
+    });
+    m_pPhaseTimer->start();
+}
+
 ProLinkNetworkService::~ProLinkNetworkService() {
     // Idempotent, so this is a backstop rather than the intended path: callers
     // should shutdown() explicitly while they are still fully constructed.
@@ -137,6 +176,7 @@ void ProLinkNetworkService::start() {
             &ProLinkNetworkService::mediaInfoFound);
 
     m_pThread->start();
+    startPhasePublishing();
 
     // Bind on the network thread, then hop the outcome back here rather than
     // writing our own members from over there.
@@ -186,6 +226,10 @@ void ProLinkNetworkService::shutdown() {
     // The clients themselves are children of m_pDiscovery and go with it below;
     // only our index of them is dropped here.
     m_dbClients.clear();
+
+    if (m_pPhaseTimer) {
+        m_pPhaseTimer->stop();
+    }
 
     m_pThread->quit();
     const bool exited = m_pThread->wait(kThreadQuitTimeoutMs);

@@ -4,6 +4,7 @@
 #include <rekordbox_anlz.h>
 
 #include <QFile>
+#include <QSet>
 #include <QTextCodec>
 #include <QtDebug>
 
@@ -149,6 +150,11 @@ void readAnalyzeFile(TrackPointer track,
 
             QVector<mixxx::audio::FramePos> beats;
             mixxx::audio::FramePos firstDownbeatPosition;
+            mixxx::audio::FramePos firstBeatPosition;
+            // Every beat carries the tempo rekordbox analysed it at. On a
+            // fixed-tempo track they are all the same value, and that value is
+            // exact -- see below for why it matters more than the positions.
+            QSet<uint16_t> storedTempos;
 
             for (const auto& beat : *beatGridTag->beats()) {
                 int time = static_cast<int>(beat->time()) - timingOffset;
@@ -159,6 +165,12 @@ void readAnalyzeFile(TrackPointer track,
                 const auto position =
                         mixxx::audio::FramePos(sampleRateKhz * static_cast<double>(time));
                 beats << position;
+                if (beat->tempo() > 0) {
+                    storedTempos.insert(beat->tempo());
+                }
+                if (!firstBeatPosition.isValid()) {
+                    firstBeatPosition = position;
+                }
 
                 // Rekordbox numbers every beat 1..4 within its bar. Mixxx has
                 // nowhere to store that, but remembering the first downbeat is
@@ -168,10 +180,37 @@ void readAnalyzeFile(TrackPointer track,
                 }
             }
 
-            const auto pBeats = mixxx::Beats::fromBeatPositions(
-                    sampleRate,
-                    beats,
-                    mixxx::rekordboxconstants::beatsSubversion);
+            // **A fixed-tempo track gets a fixed-tempo grid, from the stored
+            // tempo rather than from the beat positions.**
+            //
+            // rekordbox writes beat times as whole milliseconds. At 144 BPM a
+            // beat is 416.67 ms, so the stored gaps alternate 417, 417, 416 --
+            // and a grid built from those positions has a local tempo that
+            // swings by up to 0.45 BPM depending on which pair of beats is
+            // being measured. That is what makes the displayed BPM wander as a
+            // track plays: not the hardware, and not rekordbox being clever,
+            // just millisecond rounding preserved into a variable-tempo grid.
+            //
+            // The tempo field alongside each beat has no such problem: it is
+            // centi-BPM, it is exact, and on all six real tracks checked it was
+            // identical for every beat of the track. So when there is exactly
+            // one, use it and anchor the grid at the first beat.
+            mixxx::BeatsPointer pBeats;
+            if (storedTempos.size() == 1 && firstBeatPosition.isValid()) {
+                const double bpm = *storedTempos.constBegin() / 100.0;
+                pBeats = mixxx::Beats::fromConstTempo(sampleRate,
+                        firstBeatPosition,
+                        mixxx::Bpm(bpm),
+                        mixxx::rekordboxconstants::beatsSubversion);
+            } else {
+                // Genuinely variable tempo -- a live recording, or a track
+                // gridded by hand. The per-beat positions are all there is, and
+                // their millisecond rounding is the least of the problem.
+                pBeats = mixxx::Beats::fromBeatPositions(
+                        sampleRate,
+                        beats,
+                        mixxx::rekordboxconstants::beatsSubversion);
+            }
             track->trySetBeats(pBeats);
 
             // The intro cue is what WaveformRenderBeat anchors its downbeat

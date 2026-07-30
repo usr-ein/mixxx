@@ -9,6 +9,7 @@
 #include "network/prolink/prolinkpacket.h"
 #include "network/prolink/prolinkvirtualcdj.h"
 #include "network/prolink/prolinkmediaquery.h"
+#include "network/prolink/prolinkbeatlistener.h"
 #include "util/assert.h"
 #include "util/logger.h"
 
@@ -84,6 +85,8 @@ bool ProLinkDiscovery::start() {
                     }
                 });
 
+        m_pBeatListener = new ProLinkBeatListener(this);
+
         m_pMediaRetry = new QTimer(this);
         m_pMediaRetry->setInterval(kMediaRetryIntervalMs);
         connect(m_pMediaRetry, &QTimer::timeout, this, [this] { queryAllMedia(); });
@@ -122,6 +125,9 @@ bool ProLinkDiscovery::start() {
 void ProLinkDiscovery::stop() {
     if (m_pMediaRetry) {
         m_pMediaRetry->stop();
+    }
+    if (m_pBeatListener) {
+        m_pBeatListener->stop();
     }
     if (m_pMediaQuery) {
         m_pMediaQuery->stop();
@@ -320,6 +326,10 @@ void ProLinkDiscovery::startAnnouncing() {
     // we are going to announce: an unannounced host receives nothing on 50002.
     m_pMediaQuery->start();
     m_pMediaRetry->start();
+    // Beat packets are broadcast, so this would work without announcing -- but
+    // there is nothing to compare a phase against until we are on the network
+    // anyway, so it starts here with the rest.
+    m_pBeatListener->start();
 
     // We may have already admitted ourselves: start() is the first moment our
     // own MAC is known, and on a restart our previous keep-alives can still be
@@ -337,6 +347,28 @@ int ProLinkDiscovery::announcedNumber() const {
 
 QString ProLinkDiscovery::announceStatus() const {
     return m_pVirtualCdj ? m_pVirtualCdj->stateName() : QStringLiteral("off");
+}
+
+int ProLinkDiscovery::masterDevice() const {
+    return m_pMediaQuery ? m_pMediaQuery->masterDevice() : 0;
+}
+
+double ProLinkDiscovery::masterBpm() const {
+    if (!m_pBeatListener) {
+        return 0.0;
+    }
+    return m_pBeatListener->phaseFor(masterDevice()).bpm;
+}
+
+double ProLinkDiscovery::masterBarPhase() const {
+    if (!m_pBeatListener) {
+        return -1.0;
+    }
+    const BeatPhase phase = m_pBeatListener->phaseFor(masterDevice());
+    // Invalid means the master is paused, or there is no master: beat packets
+    // stop the moment the platter does. -1 rather than 0 so the meter can show
+    // "nothing to sync to" instead of a marker parked on the downbeat.
+    return phase.isValid() ? phase.barPhase() : -1.0;
 }
 
 void ProLinkDiscovery::queryAllMedia(bool force) {

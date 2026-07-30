@@ -59,6 +59,7 @@
 #include "widget/wnumberpos.h"
 #include "widget/wnumberrate.h"
 #include "widget/woverview.h"
+#include "widget/wprolinkphasemeter.h"
 #include "widget/wpixmapstore.h"
 #include "widget/wpushbutton.h"
 #include "widget/wraterange.h"
@@ -538,6 +539,8 @@ QList<QWidget*> LegacySkinParser::parseNode(const QDomElement& node) {
         result = wrapWidget(parseStandardWidget<WComboBox>(node));
     } else if (nodeName == "Overview") {
         result = wrapWidget(parseOverview(node));
+    } else if (nodeName == "ProLinkPhaseMeter") {
+        result = wrapWidget(parseProLinkPhaseMeter(node));
     } else if (nodeName == "Visual") {
         result = wrapWidget(parseVisual(node));
     } else if (nodeName == "Text") {
@@ -1067,6 +1070,18 @@ QWidget* LegacySkinParser::parseVisual(const QDomElement& node) {
     viewer->slotTrackLoaded(pPlayer->getLoadedTrack());
 
     return viewer;
+}
+
+QWidget* LegacySkinParser::parseProLinkPhaseMeter(const QDomElement& node) {
+    const QString group = lookupNodeGroup(node);
+    auto* pMeter = new WProLinkPhaseMeter(m_pParent, group);
+    commonWidgetSetup(node, pMeter);
+    pMeter->setup(node, *m_pContext);
+    pMeter->installEventFilter(m_pKeyboard);
+    pMeter->installEventFilter(
+            m_pControllerManager->getControllerLearningEventFilter());
+    pMeter->Init();
+    return pMeter;
 }
 
 QWidget* LegacySkinParser::parseText(const QDomElement& node) {

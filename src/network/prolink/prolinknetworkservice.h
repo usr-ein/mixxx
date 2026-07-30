@@ -25,6 +25,7 @@ class ProLinkDiscovery;
 } // namespace prolink
 } // namespace mixxx
 
+class ControlObject;
 class ControlPushButton;
 class QTimer;
 
@@ -206,6 +207,8 @@ class ProLinkNetworkService : public QObject {
     /// player — which is exactly what a two-deck rig provides. Returns 0 when
     /// there is nobody to borrow from, in which case artwork is unavailable
     /// until we announce (Phase B step 10).
+    /// Create the master-phase controls and start the 30 Hz republish.
+    void startPhasePublishing();
     int pickRequesterNumber(const ProLinkDevice& target) const;
     /// Get or create the dbserver connection for one player. Network thread.
     dbserver::DbServerClient* dbClientFor(const ProLinkDevice& device, int requesterNumber);
@@ -229,6 +232,25 @@ class ProLinkNetworkService : public QObject {
     /// by the library feature so the two layers stay independent, and so this
     /// works even if the feature is not shown.
     std::unique_ptr<ControlPushButton> m_pPullDbControl;
+
+    /// The tempo master's phase, published for the phase meter widget.
+    ///
+    /// Controls rather than a signal, because the consumer is a skin widget: it
+    /// already knows how to bind a ControlProxy, it repaints on its own timer,
+    /// and going through the control system means the values are visible in the
+    /// developer tools and usable from a controller mapping without any more
+    /// plumbing.
+    ///
+    /// `master_bar_phase` is 0..1 across the four-beat bar, or **-1 when there
+    /// is nothing to sync to** -- no master, or a master that is paused. -1
+    /// rather than 0 so the meter can say so instead of parking a marker on the
+    /// downbeat and looking authoritative about it.
+    std::unique_ptr<ControlObject> m_pMasterDeviceControl;
+    std::unique_ptr<ControlObject> m_pMasterBpmControl;
+    std::unique_ptr<ControlObject> m_pMasterBarPhaseControl;
+    /// Drives the three above. 30 Hz: fast enough that the marker moves
+    /// smoothly, slow enough to be free on a Pi.
+    QTimer* m_pPhaseTimer = nullptr;
 
     /// Non-empty while a `[ProLink],pull_db` diagnostic is in flight, so its
     /// extra logging and file-saving apply to that fetch and not to ordinary

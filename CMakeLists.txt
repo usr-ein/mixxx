@@ -1081,6 +1081,7 @@ add_library(mixxx-lib STATIC EXCLUDE_FROM_ALL
   src/network/prolink/rpc/rpcmessage.cpp
   src/network/prolink/rpc/xdrbuffer.cpp
   src/network/prolink/prolinknetworkservice.cpp
+  src/network/prolink/prolinkbeatlistener.cpp
   src/network/prolink/prolinkmediaquery.cpp
   src/network/prolink/prolinkpacket.cpp
   src/network/prolink/prolinkvirtualcdj.cpp
@@ -1349,6 +1350,7 @@ add_library(mixxx-lib STATIC EXCLUDE_FROM_ALL
   src/widget/wnumberpos.cpp
   src/widget/wnumberrate.cpp
   src/widget/woverview.cpp
+  src/widget/wprolinkphasemeter.cpp
   src/widget/wpixmapstore.cpp
   src/widget/wpushbutton.cpp
   src/widget/wraterange.cpp
@@ -2141,6 +2143,7 @@ if(BUILD_TESTING)
     src/test/analyserwaveformtest.cpp
     src/test/analyzersilence_test.cpp
     src/test/prolink_announce_test.cpp
+    src/test/prolink_beat_test.cpp
     src/test/prolink_dbserver_test.cpp
     src/test/prolink_pdb_test.cpp
     src/test/prolink_rpc_test.cpp

@@ -17,6 +17,7 @@ namespace prolink {
 
 class ProLinkVirtualCdj;
 class ProLinkMediaQuery;
+class ProLinkBeatListener;
 struct MediaInfo;
 
 /// Listens on UDP 50000 and maintains the table of devices on the network.
@@ -82,6 +83,13 @@ class ProLinkDiscovery : public QObject {
     /// media without the device going anywhere.
     void queryAllMedia(bool force = false);
 
+    /// Where the tempo master is within its bar right now, for the phase meter.
+    /// Bar phase 0..1, or -1 when there is no master or it is not playing.
+    double masterBarPhase() const;
+    /// The master's effective BPM, or 0.
+    double masterBpm() const;
+    int masterDevice() const;
+
   signals:
     /// The announcer changed state: claiming, active with a number, or failed.
     void announceStateChanged(int state, int deviceNumber, const QString& detail);
@@ -115,6 +123,7 @@ class ProLinkDiscovery : public QObject {
     /// that socket and must not outlive it.
     ProLinkVirtualCdj* m_pVirtualCdj = nullptr;
     ProLinkMediaQuery* m_pMediaQuery = nullptr;
+    ProLinkBeatListener* m_pBeatListener = nullptr;
     /// Retries the media query. One round is not enough: a player that is busy,
     /// or that joined after we claimed our number, simply does not answer, and
     /// there is no reply that means "empty" to distinguish from a lost one.
