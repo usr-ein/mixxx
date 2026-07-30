@@ -99,7 +99,16 @@ QString slotLabelFor(MediaSlot slot, const mixxx::prolink::MediaInfo& info, bool
         //: %1 is USB or SD
         return QObject::tr("%1 (empty)").arg(slotLabel(slot));
     }
-    return info.name.isEmpty() ? slotLabel(slot) : info.name;
+    if (!info.name.isEmpty()) {
+        return info.name;
+    }
+    // Unlabelled media, which is common -- a stick formatted without a volume
+    // name reports none, and the deck's own screen shows nothing for it either.
+    // The track count is the next most useful thing to say, and it tells two
+    // unnamed sticks apart, which the bare word "USB" would not.
+    //: %1 is USB or SD, %2 a number of tracks
+    return QObject::tr("%1 (%2 tracks)")
+            .arg(slotLabel(slot), QString::number(info.trackCount));
 }
 
 QIcon slotIcon(MediaSlot slot) {
