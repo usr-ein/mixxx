@@ -102,6 +102,19 @@ void TreeItem::insertChildren(int row, std::vector<std::unique_ptr<TreeItem>>&& 
     }
 }
 
+std::vector<std::unique_ptr<TreeItem>> TreeItem::takeChildren() {
+    std::vector<std::unique_ptr<TreeItem>> children;
+    children.reserve(m_children.size());
+    for (auto* pChild : std::as_const(m_children)) {
+        // Clearing the parent is what makes the child re-insertable:
+        // insertChild() asserts that the item it adopts has no parent yet.
+        pChild->m_pParent = nullptr;
+        children.emplace_back(pChild);
+    }
+    m_children.clear();
+    return children;
+}
+
 void TreeItem::removeChildren(int row, int count) {
     DEBUG_ASSERT(count >= 0);
     DEBUG_ASSERT(count <= m_children.size());

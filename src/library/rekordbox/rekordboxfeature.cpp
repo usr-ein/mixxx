@@ -88,16 +88,26 @@ bool createLibraryTable(QSqlDatabase& database, const QString& tableName) {
             "    year INTEGER,"
             "    genre TEXT,"
             "    tracknumber TEXT,"
-            "    location TEXT UNIQUE,"
+            "    location TEXT,"
             "    comment TEXT,"
             "    duration INTEGER,"
             "    bitrate TEXT,"
             "    bpm FLOAT,"
             "    key TEXT,"
             "    rating INTEGER,"
-            "    analyze_path TEXT UNIQUE,"
+            "    analyze_path TEXT,"
             "    device TEXT,"
-            "    color INTEGER"
+            "    color INTEGER,"
+            // Neither `location` nor `analyze_path` can be UNIQUE on its own:
+            // two devices holding clones of the same Rekordbox media -- which
+            // is routine, and is how a two-player setup is usually prepared --
+            // produce identical values for both. The second device's INSERT
+            // then fails silently, the `rb_id`+`device` lookup below finds
+            // nothing, and every one of its tracks lands in the playlist
+            // tables with a track_id of -1.
+            //
+            // What is actually unique is the pair the code already looks up.
+            "    UNIQUE(device, rb_id)"
             ");");
 
     if (!query.exec()) {
@@ -440,16 +450,23 @@ void buildPlaylistTree(
         const QString& playlistPath,
         const QString& device);
 
-QString parseDeviceDB(mixxx::DbConnectionPoolPtr dbConnectionPool, TreeItem* deviceItem) {
-    QString device = deviceItem->getLabel();
-    QString devicePath = deviceItem->getData().toList()[0].toString();
+// Runs on a QtConcurrent worker thread. It is passed the device's label and
+// path by value rather than its TreeItem: the item belongs to the live
+// TreeItemModel, the GUI thread writes to it immediately after launching us
+// (see activateChild), and reading it here would race that write.
+RekordboxDeviceParseResult parseDeviceDB(mixxx::DbConnectionPoolPtr dbConnectionPool,
+        const QString& device,
+        const QString& devicePath) {
+    RekordboxDeviceParseResult result;
+    result.device = device;
+    result.devicePlaylist = devicePath;
 
     qDebug() << "parseDeviceDB device: " << device << " devicePath: " << devicePath;
 
     QString dbPath = devicePath + QStringLiteral("/") + kPdbPath;
 
     if (!QFile(dbPath).exists()) {
-        return devicePath;
+        return result;
     }
 
     // The pooler limits the lifetime all thread-local connections,
@@ -461,7 +478,8 @@ QString parseDeviceDB(mixxx::DbConnectionPoolPtr dbConnectionPool, TreeItem* dev
     VERIFY_OR_DEBUG_ASSERT(database.isOpen()) {
         qDebug() << "Failed to open database for Rekordbox parser."
                  << database.lastError();
-        return QString();
+        result.devicePlaylist.clear();
+        return result;
     }
 
     //Give thread a low priority
@@ -471,7 +489,10 @@ QString parseDeviceDB(mixxx::DbConnectionPoolPtr dbConnectionPool, TreeItem* dev
     ScopedTransaction transaction(database);
 
     QSqlQuery query(database);
-    query.prepare("INSERT INTO " + kRekordboxLibraryTable +
+    // OR REPLACE so that re-parsing a device that is already in the table
+    // updates its rows instead of failing on UNIQUE(device, rb_id). Within a
+    // single parse the pair cannot repeat, so this only fires across parses.
+    query.prepare("INSERT OR REPLACE INTO " + kRekordboxLibraryTable +
             " (rb_id, artist, title, album, year,"
             "genre,comment,tracknumber,bpm, bitrate,duration, location,"
             "rating,key,analyze_path,device,color) VALUES (:rb_id, :artist, "
@@ -494,7 +515,8 @@ QString parseDeviceDB(mixxx::DbConnectionPoolPtr dbConnectionPool, TreeItem* dev
 
     mixxx::FileInfo fileInfo(dbPath);
     if (!Sandbox::askForAccess(&fileInfo)) {
-        return QString();
+        result.devicePlaylist.clear();
+        return result;
     }
     std::ifstream ifs(dbPath.toStdString(), std::ifstream::binary);
     kaitai::kstream ks(&ifs);
@@ -633,10 +655,13 @@ QString parseDeviceDB(mixxx::DbConnectionPoolPtr dbConnectionPool, TreeItem* dev
     }
 
     if (audioFilesCount > 0 || folderOrPlaylistFound) {
-        // If we have found anything, recursively build playlist/folder TreeItem children
-        // for the original device TreeItem
+        // Recursively build the playlist/folder subtree under a detached
+        // staging item. Everything below it is invisible to the model until
+        // onTracksFound() splices it in on the GUI thread, so appendChild()
+        // is safe from here down.
+        result.pStagingRoot = std::make_shared<TreeItem>();
         buildPlaylistTree(database,
-                deviceItem,
+                result.pStagingRoot.get(),
                 0,
                 playlistNameMap,
                 playlistIsFolderMap,
@@ -650,7 +675,7 @@ QString parseDeviceDB(mixxx::DbConnectionPoolPtr dbConnectionPool, TreeItem* dev
 
     transaction.commit();
 
-    return devicePath;
+    return result;
 }
 
 void buildPlaylistTree(
@@ -1563,8 +1588,14 @@ void RekordboxFeature::activateChild(const QModelIndex& index) {
     if (doParseDeviceDB) {
         qDebug() << "Parse Rekordbox Device DB: " << playlist;
 
-        // Let a worker thread do the XML parsing
-        m_tracksFuture = QtConcurrent::run(parseDeviceDB, static_cast<Library*>(parent())->dbConnectionPool(), item);
+        // Read everything the worker needs off the item here, on the GUI
+        // thread, and hand it over by value. Passing the item itself would
+        // race the setData() below, and would let the worker mutate a tree
+        // the model owns.
+        m_tracksFuture = QtConcurrent::run(parseDeviceDB,
+                static_cast<Library*>(parent())->dbConnectionPool(),
+                item->getLabel(),
+                playlist);
         m_tracksFutureWatcher.setFuture(m_tracksFuture);
 
         // This device is now a playlist element, future activations should treat is
@@ -1656,18 +1687,50 @@ void RekordboxFeature::onRekordboxDevicesFound() {
 
 void RekordboxFeature::onTracksFound() {
     qDebug() << "onTracksFound";
-    m_pSidebarModel->triggerRepaint();
 
-    QString devicePlaylist;
+    RekordboxDeviceParseResult result;
     try {
-        devicePlaylist = m_tracksFuture.result();
+        result = m_tracksFuture.result();
     } catch (const std::exception& e) {
         qWarning() << "Failed to load Rekordbox database:" << e.what();
+        m_pSidebarModel->triggerRepaint();
         return;
     }
 
-    qDebug() << "Show Rekordbox Device Playlist: " << devicePlaylist;
+    // Splice the worker's detached subtree under the device row. This is the
+    // only point at which the model grows, and it happens on the GUI thread
+    // through insertTreeItemRows(), which brackets the change in
+    // begin/endInsertRows() so the views and the SidebarModel proxy stay in
+    // step. The device is looked up by label rather than by a QModelIndex
+    // captured before the parse, because it may have been unmounted in the
+    // meantime and any such index would now be dangling.
+    if (result.pStagingRoot) {
+        clearLastRightClickedIndex();
 
-    m_pRekordboxPlaylistModel->setPlaylist(devicePlaylist);
+        TreeItem* pRoot = m_pSidebarModel->getRootItem();
+        for (int deviceRow = 0; deviceRow < pRoot->childRows(); deviceRow++) {
+            if (pRoot->child(deviceRow)->getLabel() != result.device) {
+                continue;
+            }
+            m_pSidebarModel->insertTreeItemRows(
+                    result.pStagingRoot->takeChildren(),
+                    0,
+                    m_pSidebarModel->index(deviceRow, 0));
+            break;
+        }
+    }
+
+    m_pSidebarModel->triggerRepaint();
+
+    if (result.devicePlaylist.isEmpty()) {
+        // The device vanished, held no readable database, or was refused by
+        // the sandbox. Leaving the current view alone is better than showing
+        // an empty one.
+        return;
+    }
+
+    qDebug() << "Show Rekordbox Device Playlist: " << result.devicePlaylist;
+
+    m_pRekordboxPlaylistModel->setPlaylist(result.devicePlaylist);
     emit showTrackModel(m_pRekordboxPlaylistModel);
 }

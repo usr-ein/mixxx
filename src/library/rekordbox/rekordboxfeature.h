@@ -34,12 +34,31 @@
 #include "library/baseexternallibraryfeature.h"
 #include "library/baseexternalplaylistmodel.h"
 #include "library/baseexternaltrackmodel.h"
+#include "library/treeitem.h"
 #include "library/treeitemmodel.h"
 #include "util/parented_ptr.h"
 
 class TrackCollectionManager;
 class BaseExternalPlaylistModel;
 class ControlPushButton;
+
+/// What a worker thread produces from one device's `export.pdb`.
+///
+/// `pStagingRoot` holds the playlist/folder subtree, and is deliberately *not*
+/// the device's own TreeItem: that one is owned by the live TreeItemModel, and
+/// a model's items may only be mutated on the GUI thread, bracketed by
+/// begin/endInsertRows(). So the worker builds under a detached staging item
+/// and RekordboxFeature::onTracksFound() splices the result in.
+struct RekordboxDeviceParseResult {
+    /// Label of the device this came from, used to find its row again -- the
+    /// device may well have been unmounted while we were parsing.
+    QString device;
+    /// The device's "all tracks" playlist, or empty if the parse failed.
+    QString devicePlaylist;
+    /// Shared rather than unique so the result stays copyable, which is what
+    /// QFuture wants, and so an unconsumed result still frees its subtree.
+    std::shared_ptr<TreeItem> pStagingRoot;
+};
 
 class RekordboxPlaylistModel : public BaseExternalPlaylistModel {
     Q_OBJECT
@@ -92,8 +111,8 @@ class RekordboxFeature : public BaseExternalLibraryFeature {
 
     QFutureWatcher<QList<TreeItem*>> m_devicesFutureWatcher;
     QFuture<QList<TreeItem*>> m_devicesFuture;
-    QFutureWatcher<QString> m_tracksFutureWatcher;
-    QFuture<QString> m_tracksFuture;
+    QFutureWatcher<RekordboxDeviceParseResult> m_tracksFutureWatcher;
+    QFuture<RekordboxDeviceParseResult> m_tracksFuture;
     QString m_title;
     std::unique_ptr<ControlPushButton> m_pRefreshControl;
 

@@ -94,6 +94,17 @@ class TreeItem final {
     void removeChildren(int row, int count);
     void insertChild(int row, std::unique_ptr<TreeItem> pChild);
 
+    // Detaches all children and hands over their ownership, leaving this item
+    // childless. Unlike removeChildren() the children are not deleted.
+    //
+    // This is the counterpart of insertChildren() and exists for one purpose:
+    // a TreeItem that is already owned by a live TreeItemModel must only ever
+    // be mutated from the GUI thread, and only between beginInsertRows() and
+    // endInsertRows(). So a worker thread builds its subtree under a detached
+    // staging item instead, and the GUI thread takes the children from it and
+    // splices them in via TreeItemModel::insertTreeItemRows().
+    std::vector<std::unique_ptr<TreeItem>> takeChildren();
+
     /////////////////////////////////////////////////////////////////////////
     // Payload
     /////////////////////////////////////////////////////////////////////////
