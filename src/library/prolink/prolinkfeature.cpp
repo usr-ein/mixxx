@@ -101,7 +101,14 @@ void ProLinkFeature::activateChild(const QModelIndex& index) {
     showStatusPage();
 }
 
+void ProLinkFeature::refreshStatusPage() {
+    if (m_pStatusView) {
+        m_pStatusView->setHtml(statusHtml());
+    }
+}
+
 void ProLinkFeature::showStatusPage() {
+    refreshStatusPage();
     emit switchToView(kViewName);
     emit disableSearch();
 }
@@ -134,6 +141,7 @@ void ProLinkFeature::onDeviceFound(const ProLinkDevice& device) {
             std::move(rows), m_pSidebarModel->getRootItem()->childRows());
 
     m_pDeviceCountControl->forceSet(m_pNetwork->deviceCount());
+    refreshStatusPage();
 }
 
 void ProLinkFeature::onDeviceChanged(const ProLinkDevice& device) {
@@ -152,6 +160,7 @@ void ProLinkFeature::onDeviceChanged(const ProLinkDevice& device) {
     pItem->setLabel(offline ? tr("%1 (offline)").arg(device.label()) : device.label());
     pItem->setBold(!offline);
     m_pSidebarModel->triggerRepaint(m_pSidebarModel->index(row, 0));
+    refreshStatusPage();
 }
 
 void ProLinkFeature::onDeviceLost(const QByteArray& mac) {
@@ -161,11 +170,13 @@ void ProLinkFeature::onDeviceLost(const QByteArray& mac) {
     }
     m_pSidebarModel->removeRows(row, 1);
     m_pDeviceCountControl->forceSet(m_pNetwork->deviceCount());
+    refreshStatusPage();
 }
 
 void ProLinkFeature::onListeningChanged(bool listening, const QString& error) {
     m_listening = listening;
     m_error = error;
+    refreshStatusPage();
     // No QMessageBox on failure, ever: the library is constructed during
     // startup and a modal dialog there blocks the whole application before there
     // is a window to own it. See the comment at library.cpp:170.
@@ -186,6 +197,7 @@ void ProLinkFeature::bindLibraryWidget(WLibrary* pLibraryWidget,
     pEdit->setHtml(statusHtml());
     pEdit->setOpenLinks(false);
     pLibraryWidget->registerView(kViewName, pEdit);
+    m_pStatusView = pEdit;
 }
 
 QString ProLinkFeature::statusHtml() const {

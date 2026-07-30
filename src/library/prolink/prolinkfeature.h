@@ -14,6 +14,7 @@
 class Library;
 class ControlPushButton;
 class ControlObject;
+class WLibraryTextBrowser;
 
 namespace mixxx {
 namespace prolink {
@@ -65,6 +66,14 @@ class ProLinkFeature : public LibraryFeature {
     /// Link network holds at most a handful of devices.
     int rowForMac(const QByteArray& mac) const;
     void showStatusPage();
+    /// Re-render the status page in place.
+    ///
+    /// Needed because bindLibraryWidget() runs once, while the library widget is
+    /// being built -- long before any player has announced itself. Setting the
+    /// HTML only there would leave the page permanently reading "No players
+    /// found yet", which is exactly the state it is supposed to report the end
+    /// of.
+    void refreshStatusPage();
     QString statusHtml() const;
 
     parented_ptr<TreeItemModel> m_pSidebarModel;
@@ -74,6 +83,11 @@ class ProLinkFeature : public LibraryFeature {
     /// Read-only, so a skin or a controller mapping can show a link indicator
     /// without any new plumbing.
     std::unique_ptr<ControlObject> m_pDeviceCountControl;
+
+    /// The registered view, so its contents can be replaced as devices come and
+    /// go. QPointer because WLibrary owns it and may outlive or predecease us
+    /// depending on teardown order.
+    QPointer<WLibraryTextBrowser> m_pStatusView;
 
     bool m_listening = false;
     QString m_error;
