@@ -2437,6 +2437,19 @@ elseif(SQLite3_IS_STATIC)
   target_link_libraries(mixxx-lib PRIVATE SQLite::SQLite3)
 endif()
 
+# Pioneer Pro DJ Link support: see other CDJs on the network in the sidebar.
+#
+# Default ON but inert unless [Library]/ShowProLinkLibrary is set, and even then
+# the feature only ever listens -- it does not transmit on any Pro DJ Link port,
+# so it cannot disturb a live rig. Serving our own media (which does transmit,
+# and needs a privileged port) is a later, separately-gated addition.
+option(PROLINK "Support for the Pioneer Pro DJ Link network protocol" ON)
+if(PROLINK)
+  target_sources(mixxx-lib PRIVATE
+    src/library/prolink/prolinkfeature.cpp)
+  target_compile_definitions(mixxx-lib PUBLIC __PROLINK__)
+endif()
+
 # Denon Engine Prime library export support (using libdjinterop)
 option(ENGINEPRIME "Support for library export to Denon Engine Prime" ON)
 if(ENGINEPRIME)

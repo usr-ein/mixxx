@@ -20,6 +20,7 @@
 #include "library/libraryfeature.h"
 #include "library/mixxxlibraryfeature.h"
 #include "library/recording/recordingfeature.h"
+#include "library/prolink/prolinkfeature.h"
 #include "library/rekordbox/rekordboxfeature.h"
 #include "library/rhythmbox/rhythmboxfeature.h"
 #include "library/serato/seratofeature.h"
@@ -206,6 +207,16 @@ Library::Library(
                 ConfigKey(kConfigGroup, "ShowSeratoLibrary"), true)) {
         addFeature(new SeratoFeature(this, m_pConfig));
     }
+
+#ifdef __PROLINK__
+    // Off by default. The feature is passive -- it binds UDP 50000 and listens,
+    // and transmits nothing -- but binding a port and watching a network is not
+    // something to start doing to a user who has not asked for it.
+    if (m_pConfig->getValue(
+                ConfigKey(kConfigGroup, "ShowProLinkLibrary"), false)) {
+        addFeature(new ProLinkFeature(this, m_pConfig));
+    }
+#endif
 
     for (const auto& externalTrackCollection : m_pTrackCollectionManager->externalCollections()) {
         auto* feature = externalTrackCollection->newLibraryFeature(this, m_pConfig);
