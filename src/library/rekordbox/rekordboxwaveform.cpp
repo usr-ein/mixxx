@@ -5,6 +5,8 @@
 #include <QFile>
 #include <QtDebug>
 
+#include <algorithm>
+#include <cmath>
 #include <fstream>
 #include <vector>
 
@@ -21,9 +23,12 @@ namespace {
 /// track duration comes out at 150 on every file checked.
 constexpr double kRekordboxPointsPerSecond = 150.0;
 
-/// Mixxx's own waveform resolution, matching AnalyzerWaveform: one visual sample
-/// per 441 frames, i.e. 100 per second at 44.1 kHz.
-constexpr int kMixxxFramesPerVisualSample = 441;
+/// Mixxx's own waveform resolution, matching AnalyzerWaveform: 441 visual
+/// samples **per second** (not per 441 frames -- the constructor parameter is a
+/// rate, and reading it the other way is what made the first cut of this look
+/// blocky). So the output is nearly three times denser than rekordbox's 150,
+/// and the conversion is an upsample.
+constexpr int kMixxxVisualSamplesPerSecond = 441;
 /// Two visual samples per pixel across a 1920-wide overview.
 constexpr int kSummaryVisualSamples = 2 * 1920;
 
@@ -60,55 +65,112 @@ ColourPoint decodePoint(quint16 word) {
     return point;
 }
 
-/// 3-bit and 5-bit fields scaled to the 0-255 Mixxx stores.
+/// One output sample's worth of each band, already scaled to the 0-255 Mixxx
+/// stores.
+struct Scaled {
+    double low;
+    double mid;
+    double high;
+    double all;
+};
+
+/// Turn one rekordbox point into Mixxx's four channels.
 ///
-/// Multiplied rather than shifted so full scale maps to full scale: `7 << 5` is
-/// 224, which would cap a loud track a seventh short of the top of the display.
-constexpr quint8 scale3(quint8 value) {
-    return static_cast<quint8>(value * 255 / 7);
+/// **The three colour fields are a hue, not three magnitudes.** They sit near
+/// saturation whatever the track is doing -- mean levels 5.7, 3.4 and 2.1 out of
+/// 7 -- and they correlate with the 5-bit magnitude at only 0.0-0.4, while that
+/// magnitude correlates with the plain PWV3 waveform at 0.91-0.99. So rekordbox
+/// stores spectral balance and amplitude separately, which is exactly what a
+/// colour waveform is.
+///
+/// Mixxx's RGB renderer, though, derives its height from the three bands
+/// (`low^2 + mid^2 + high^2`) and never reads `filtered.all`. Feeding it the hue
+/// values directly therefore draws a waveform whose height is the spectral
+/// balance rather than the volume -- and quantised to the eight levels three
+/// bits allow, which is what made it blocky.
+///
+/// So the dominant band is scaled to the 5-bit amplitude and the other two keep
+/// their ratio to it. Hue is preserved exactly, height becomes the real envelope
+/// at 32 levels instead of 8, and `filtered.all` is filled in too for the
+/// renderers that do use it.
+Scaled scalePoint(const ColourPoint& point) {
+    const double amplitude = point.all * 255.0 / 31.0;
+    const quint8 dominant = std::max({point.low, point.mid, point.high});
+    if (dominant == 0) {
+        return {0.0, 0.0, 0.0, amplitude};
+    }
+    const double scale = amplitude / static_cast<double>(dominant);
+    return {point.low * scale, point.mid * scale, point.high * scale, amplitude};
 }
-constexpr quint8 scale5(quint8 value) {
-    return static_cast<quint8>(value * 255 / 31);
+
+/// Rounded and clamped. The scaling above can push a band past 255 when two are
+/// nearly equal, and wrapping that to a small number would punch holes in the
+/// waveform at exactly its loudest moments.
+unsigned char toByte(double value) {
+    return static_cast<unsigned char>(std::lround(std::clamp(value, 0.0, 255.0)));
 }
 
 /// Fill one Waveform by resampling *points* onto its visual samples.
 ///
-/// The two rates do not divide (150 into 100), so each output sample covers a
-/// fractional range of inputs and takes the **maximum** over it. Maximum rather
-/// than mean because a waveform display is an envelope: averaging a transient
-/// with its neighbours flattens exactly the peaks a DJ is looking at.
-void fillWaveform(Waveform* pWaveform,
-        const std::vector<ColourPoint>& points,
-        double trackSeconds) {
+/// The two directions want opposite treatment, and getting that wrong is
+/// visible: the main waveform is 441 samples per second against rekordbox's 150,
+/// so it is an **upsample**, while the overview is a few samples per second and
+/// is a heavy **downsample**.
+///
+///  * Downsampling takes the **maximum** over the covered range. A waveform is
+///    an envelope; averaging a transient with its neighbours flattens exactly
+///    the peaks a DJ is looking at.
+///  * Upsampling **interpolates** between the two nearest inputs. Repeating the
+///    nearest one instead -- which is what a max over a sub-sample range degrades
+///    to -- draws each rekordbox point as three identical output samples, and the
+///    result is a staircase. It also matters vertically: the bands are only three
+///    bits, eight distinct levels, so without interpolation every edge in the
+///    picture is quantised twice over.
+void fillWaveform(Waveform* pWaveform, const std::vector<ColourPoint>& points) {
     const int outputSize = pWaveform->getDataSize();
-    if (outputSize <= 0 || points.empty() || trackSeconds <= 0) {
+    if (outputSize <= 0 || points.empty()) {
         return;
     }
     const double pointsPerOutput =
             static_cast<double>(points.size()) / static_cast<double>(outputSize);
+    const size_t lastPoint = points.size() - 1;
 
     for (int i = 0; i < outputSize; ++i) {
-        const auto begin = static_cast<size_t>(i * pointsPerOutput);
-        auto end = static_cast<size_t>((i + 1) * pointsPerOutput);
-        // Always consume at least one input, or an output longer than the input
-        // would leave empty samples between the ones it does fill.
-        end = std::max(end, begin + 1);
-        end = std::min(end, points.size());
+        Scaled value{0, 0, 0, 0};
 
-        ColourPoint peak{0, 0, 0, 0};
-        for (size_t p = begin; p < end; ++p) {
-            peak.low = std::max(peak.low, points[p].low);
-            peak.mid = std::max(peak.mid, points[p].mid);
-            peak.high = std::max(peak.high, points[p].high);
-            peak.all = std::max(peak.all, points[p].all);
+        if (pointsPerOutput <= 1.0) {
+            // Upsampling: linear interpolation between neighbours.
+            const double position = i * pointsPerOutput;
+            const auto index = static_cast<size_t>(position);
+            const double fraction = position - static_cast<double>(index);
+            const Scaled a = scalePoint(points[std::min(index, lastPoint)]);
+            const Scaled b = scalePoint(points[std::min(index + 1, lastPoint)]);
+            value.low = a.low + (b.low - a.low) * fraction;
+            value.mid = a.mid + (b.mid - a.mid) * fraction;
+            value.high = a.high + (b.high - a.high) * fraction;
+            value.all = a.all + (b.all - a.all) * fraction;
+        } else {
+            // Downsampling: peak-preserving maximum.
+            const auto begin = static_cast<size_t>(i * pointsPerOutput);
+            auto end = static_cast<size_t>((i + 1) * pointsPerOutput);
+            end = std::max(end, begin + 1);
+            end = std::min(end, points.size());
+            for (size_t p = begin; p < end; ++p) {
+                const Scaled scaled = scalePoint(points[p]);
+                value.low = std::max(value.low, scaled.low);
+                value.mid = std::max(value.mid, scaled.mid);
+                value.high = std::max(value.high, scaled.high);
+                value.all = std::max(value.all, scaled.all);
+            }
         }
+
         // Written through data() rather than the low()/mid()/high() setters,
         // which are private to AnalyzerWaveform.
         WaveformData& out = pWaveform->data()[i];
-        out.filtered.low = scale3(peak.low);
-        out.filtered.mid = scale3(peak.mid);
-        out.filtered.high = scale3(peak.high);
-        out.filtered.all = scale5(peak.all);
+        out.filtered.low = toByte(value.low);
+        out.filtered.mid = toByte(value.mid);
+        out.filtered.high = toByte(value.high);
+        out.filtered.all = toByte(value.all);
     }
 }
 
@@ -202,14 +264,14 @@ bool importWaveforms(TrackPointer track,
             static_cast<SINT>(pointSeconds * static_cast<double>(sampleRate));
 
     auto pWaveform = WaveformPointer(new Waveform(
-            sampleRate, frameLength, kMixxxFramesPerVisualSample, -1));
+            sampleRate, frameLength, kMixxxVisualSamplesPerSecond, -1));
     auto pSummary = WaveformPointer(new Waveform(sampleRate,
             frameLength,
-            kMixxxFramesPerVisualSample,
+            kMixxxVisualSamplesPerSecond,
             kSummaryVisualSamples));
 
-    fillWaveform(pWaveform.data(), points, pointSeconds);
-    fillWaveform(pSummary.data(), points, pointSeconds);
+    fillWaveform(pWaveform.data(), points);
+    fillWaveform(pSummary.data(), points);
 
     // Marked complete and current, exactly as AnalyzerWaveform::storeResults
     // does -- a waveform that is not both is treated as missing and analysed
