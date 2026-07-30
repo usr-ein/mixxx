@@ -32,6 +32,17 @@ constexpr int kMixxxVisualSamplesPerSecond = 441;
 /// Two visual samples per pixel across a 1920-wide overview.
 constexpr int kSummaryVisualSamples = 2 * 1920;
 
+/// Above this many inputs per output, downsampling averages instead of taking
+/// the peak. Four is the point where "a couple of samples merged" turns into
+/// "a window wide enough that its maximum is always near the ceiling".
+constexpr double kMeanAboveRatio = 4.0;
+
+/// Exponent applied to each band's share of the dominant one. 1.0 leaves the
+/// hue as rekordbox stored it and renders mostly white; higher values separate
+/// the colours. 2.2 keeps bass unmistakably red and stops a bright hi-hat from
+/// whiting out the whole bar.
+constexpr double kBandContrast = 2.2;
+
 /// One entry of the `PWV5` colour waveform.
 ///
 /// A 16-bit big-endian word. The layout below was derived from the files rather
@@ -99,8 +110,24 @@ Scaled scalePoint(const ColourPoint& point) {
     if (dominant == 0) {
         return {0.0, 0.0, 0.0, amplitude};
     }
-    const double scale = amplitude / static_cast<double>(dominant);
-    return {point.low * scale, point.mid * scale, point.high * scale, amplitude};
+
+    // **Contrast between the bands, or everything comes out white.**
+    //
+    // Mixxx's RGB renderer mixes the three band colours in proportion, so three
+    // near-equal bands make near-white. rekordbox's hue fields sit close to
+    // saturation whatever is playing -- mean levels 5.7, 3.4 and 2.1 out of 7 --
+    // so a straight proportional scaling washed most of the track out, and any
+    // passage with real top end went white and stayed there.
+    //
+    // Raising each band's ratio to a power pushes the quieter two down without
+    // touching the dominant one, which separates the colours while leaving the
+    // hue's ordering exactly as rekordbox recorded it. The height is unaffected:
+    // that comes from the 5-bit amplitude.
+    const double inverse = 1.0 / static_cast<double>(dominant);
+    const double low = std::pow(point.low * inverse, kBandContrast) * amplitude;
+    const double mid = std::pow(point.mid * inverse, kBandContrast) * amplitude;
+    const double high = std::pow(point.high * inverse, kBandContrast) * amplitude;
+    return {low, mid, high, amplitude};
 }
 
 /// Rounded and clamped. The scaling above can push a band past 255 when two are
@@ -117,9 +144,14 @@ unsigned char toByte(double value) {
 /// so it is an **upsample**, while the overview is a few samples per second and
 /// is a heavy **downsample**.
 ///
-///  * Downsampling takes the **maximum** over the covered range. A waveform is
-///    an envelope; averaging a transient with its neighbours flattens exactly
-///    the peaks a DJ is looking at.
+///  * Downsampling takes the maximum over a *narrow* range and the **mean** over
+///    a wide one. Max is right for the detail waveform, where a handful of
+///    inputs collapse into one output and a transient would otherwise be lost.
+///    It is quite wrong for the overview: a whole track into 1920 samples is
+///    over twenty inputs each, and the loudest of twenty is near the ceiling
+///    almost everywhere, so the minimap came out a solid block at full height
+///    with no shape to it at all. Past a few inputs per output the mean is what
+///    carries the shape of the track.
 ///  * Upsampling **interpolates** between the two nearest inputs. Repeating the
 ///    nearest one instead -- which is what a max over a sub-sample range degrades
 ///    to -- draws each rekordbox point as three identical output samples, and the
@@ -131,11 +163,26 @@ void fillWaveform(Waveform* pWaveform, const std::vector<ColourPoint>& points) {
     if (outputSize <= 0 || points.empty()) {
         return;
     }
+
+    // **The array is interleaved stereo: two entries per visual sample.**
+    // Waveform's constructor sizes it `frameLength / ratio * kAnalysisChannels`,
+    // so entry 2n is the left channel of sample n and 2n+1 the right. Treating
+    // it as one long mono array maps those two neighbours to *different* points
+    // in the track, which skews left against right by half a sample: the
+    // renderer then draws two waveforms a hair apart and the interference
+    // between them is a slow ripple across the whole thing. Very visible on the
+    // overview, where each entry covers a second or more of audio.
+    //
+    // rekordbox's waveform is mono, so both channels get the same value.
+    const int frames = outputSize / 2;
+    if (frames <= 0) {
+        return;
+    }
     const double pointsPerOutput =
-            static_cast<double>(points.size()) / static_cast<double>(outputSize);
+            static_cast<double>(points.size()) / static_cast<double>(frames);
     const size_t lastPoint = points.size() - 1;
 
-    for (int i = 0; i < outputSize; ++i) {
+    for (int i = 0; i < frames; ++i) {
         Scaled value{0, 0, 0, 0};
 
         if (pointsPerOutput <= 1.0) {
@@ -150,27 +197,45 @@ void fillWaveform(Waveform* pWaveform, const std::vector<ColourPoint>& points) {
             value.high = a.high + (b.high - a.high) * fraction;
             value.all = a.all + (b.all - a.all) * fraction;
         } else {
-            // Downsampling: peak-preserving maximum.
             const auto begin = static_cast<size_t>(i * pointsPerOutput);
             auto end = static_cast<size_t>((i + 1) * pointsPerOutput);
             end = std::max(end, begin + 1);
             end = std::min(end, points.size());
+            const bool useMean = pointsPerOutput > kMeanAboveRatio;
+            double count = 0.0;
             for (size_t p = begin; p < end; ++p) {
                 const Scaled scaled = scalePoint(points[p]);
-                value.low = std::max(value.low, scaled.low);
-                value.mid = std::max(value.mid, scaled.mid);
-                value.high = std::max(value.high, scaled.high);
-                value.all = std::max(value.all, scaled.all);
+                if (useMean) {
+                    value.low += scaled.low;
+                    value.mid += scaled.mid;
+                    value.high += scaled.high;
+                    value.all += scaled.all;
+                    count += 1.0;
+                } else {
+                    value.low = std::max(value.low, scaled.low);
+                    value.mid = std::max(value.mid, scaled.mid);
+                    value.high = std::max(value.high, scaled.high);
+                    value.all = std::max(value.all, scaled.all);
+                }
+            }
+            if (useMean && count > 0.0) {
+                value.low /= count;
+                value.mid /= count;
+                value.high /= count;
+                value.all /= count;
             }
         }
 
         // Written through data() rather than the low()/mid()/high() setters,
-        // which are private to AnalyzerWaveform.
-        WaveformData& out = pWaveform->data()[i];
-        out.filtered.low = toByte(value.low);
-        out.filtered.mid = toByte(value.mid);
-        out.filtered.high = toByte(value.high);
-        out.filtered.all = toByte(value.all);
+        // which are private to AnalyzerWaveform. Both channels of the frame.
+        WaveformData* pData = pWaveform->data();
+        for (int channel = 0; channel < 2; ++channel) {
+            WaveformData& out = pData[i * 2 + channel];
+            out.filtered.low = toByte(value.low);
+            out.filtered.mid = toByte(value.mid);
+            out.filtered.high = toByte(value.high);
+            out.filtered.all = toByte(value.all);
+        }
     }
 }
 
