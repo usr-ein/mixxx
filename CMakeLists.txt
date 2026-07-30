@@ -1070,6 +1070,9 @@ add_library(mixxx-lib STATIC EXCLUDE_FROM_ALL
   src/network/jsonwebtask.cpp
   src/network/networktask.cpp
   src/network/prolink/prolinkdiscovery.cpp
+  src/network/prolink/rpc/rpcclient.cpp
+  src/network/prolink/rpc/rpcmessage.cpp
+  src/network/prolink/rpc/xdrbuffer.cpp
   src/network/prolink/prolinknetworkservice.cpp
   src/network/prolink/prolinkpacket.cpp
   src/network/webtask.cpp
@@ -2128,6 +2131,8 @@ if(BUILD_TESTING)
     src-mixxx-test
     src/test/analyserwaveformtest.cpp
     src/test/analyzersilence_test.cpp
+    src/test/prolink_rpc_test.cpp
+    src/test/prolink_xdr_test.cpp
     src/test/audiotaperpot_test.cpp
     src/test/autodjprocessor_test.cpp
     src/test/beatgridtest.cpp

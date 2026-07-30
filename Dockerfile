@@ -78,3 +78,44 @@ RUN --mount=type=cache,target=/build,sharing=locked \
 # Export stage: `--output` copies just the binary out to the host.
 FROM scratch AS export
 COPY --from=build /mixxx /mixxx
+
+# Unit tests, for the parts of the tree that can be checked without hardware.
+#
+#   docker build --target unittest --build-arg GTEST_FILTER='ProLinkXdrTest.*' .
+#
+# Separate stage rather than folded into `build` so a routine binary build for
+# the deck does not pay for compiling the test tree, which is large.
+#
+# QT_QPA_PLATFORM=offscreen because there is no display in the container and
+# mixxx-test constructs a QApplication. GTEST_FILTER defaults to the ProLink
+# tests: the full suite needs xvfb and audio devices that are not installed
+# here, so running all of it would fail for reasons unrelated to the change
+# being checked.
+FROM build AS unittest
+ARG GTEST_FILTER=ProLink*
+# Parallelism is capped rather than $(nproc): the test tree is ~700 translation
+# units and several of Mixxx's are large enough that a full-width build exhausts
+# the Docker VM's memory and the OOM killer takes cc1plus with it. The failure
+# looks like "fatal error: Killed signal terminated program cc1plus", which does
+# not obviously say "out of memory". Raise it if the VM has plenty of RAM.
+ARG BUILD_JOBS=3
+# gmock is a separate Debian package from gtest, and mixxx-test links
+# GTest::gmock. Installed only in this stage so the image the deck binary is
+# built in stays exactly as it was.
+RUN apt-get update && apt-get install -y --no-install-recommends libgmock-dev \
+    && rm -rf /var/lib/apt/lists/*
+# Its own build tree, not /build: the deck build configures with BUILD_TESTING
+# off, and flipping that setting back and forth in a shared tree would make
+# every alternate build a near-full rebuild. The ccache is shared, so most
+# object files are hits anyway.
+RUN --mount=type=cache,target=/build-test,sharing=locked \
+    --mount=type=cache,target=/ccache,sharing=locked \
+    export CCACHE_DIR=/ccache \
+    && cmake -S /src -B /build-test -G Ninja \
+        -DCMAKE_BUILD_TYPE=RelWithDebInfo \
+        -DBUILD_TESTING=ON \
+        -DINSTALL_USER_UDEV_RULES=OFF \
+        -DCMAKE_C_COMPILER_LAUNCHER=ccache \
+        -DCMAKE_CXX_COMPILER_LAUNCHER=ccache \
+    && cmake --build /build-test --target mixxx-test --parallel "${BUILD_JOBS}" \
+    && QT_QPA_PLATFORM=offscreen /build-test/mixxx-test --gtest_filter="${GTEST_FILTER}"
