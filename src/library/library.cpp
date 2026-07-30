@@ -87,16 +87,48 @@ Library::Library(
 
     // TODO(rryan) -- turn this construction / adding of features into a static
     // method or something -- CreateDefaultLibrary
+    //
+    // ORDER IS THE SIDEBAR ORDER. SidebarModel keeps features in the order they
+    // are added and renders row N as the Nth addFeature() call, so the sequence
+    // below is the menu top to bottom. The three that lead are the ones a deck
+    // actually reaches for -- the USBs you turned up with, your own collection,
+    // and the players on the network -- and everything else follows.
+
+    // TODO(XXX) Rekordbox feature added persistently as the only way to enable it to
+    // dynamically appear/disappear when correctly prepared removable devices
+    // are mounted/unmounted would be to have some form of timed thread to check
+    // periodically. Not ideal performance wise.
+    if (m_pConfig->getValue(
+                ConfigKey(kConfigGroup, "ShowRekordboxLibrary"), true)) {
+        addFeature(new RekordboxFeature(this, m_pConfig));
+    }
+
     m_pMixxxLibraryFeature = new MixxxLibraryFeature(
             this,
             m_pConfig);
     addFeature(m_pMixxxLibraryFeature);
+    // Keep the startup selection on the local collection even though Rekordbox
+    // now sits above it: activating the Rekordbox root instead would greet every
+    // boot with its "plug in a prepared device" page. Derived from the row count
+    // rather than hard-coded, so it survives the next reshuffle.
+    m_pSidebarModel->setDefaultSelection(
+            static_cast<unsigned int>(m_pSidebarModel->rowCount() - 1));
 #ifdef __ENGINEPRIME__
     connect(m_pMixxxLibraryFeature,
             &MixxxLibraryFeature::exportLibrary,
             this,
             &Library::exportLibrary,
             Qt::DirectConnection /* signal-to-signal */);
+#endif
+
+#ifdef __PROLINK__
+    // Off by default. The feature is passive -- it binds UDP 50000 and listens,
+    // and transmits nothing -- but binding a port and watching a network is not
+    // something to start doing to a user who has not asked for it.
+    if (m_pConfig->getValue(
+                ConfigKey(kConfigGroup, "ShowProLinkLibrary"), false)) {
+        addFeature(new ProLinkFeature(this, m_pConfig));
+    }
 #endif
 
     addFeature(new AutoDJFeature(this, m_pConfig, pPlayerManager));
@@ -194,29 +226,10 @@ Library::Library(
         addFeature(new TraktorFeature(this, m_pConfig));
     }
 
-    // TODO(XXX) Rekordbox feature added persistently as the only way to enable it to
-    // dynamically appear/disappear when correctly prepared removable devices
-    // are mounted/unmounted would be to have some form of timed thread to check
-    // periodically. Not ideal performance wise.
-    if (m_pConfig->getValue(
-                ConfigKey(kConfigGroup, "ShowRekordboxLibrary"), true)) {
-        addFeature(new RekordboxFeature(this, m_pConfig));
-    }
-
     if (m_pConfig->getValue(
                 ConfigKey(kConfigGroup, "ShowSeratoLibrary"), true)) {
         addFeature(new SeratoFeature(this, m_pConfig));
     }
-
-#ifdef __PROLINK__
-    // Off by default. The feature is passive -- it binds UDP 50000 and listens,
-    // and transmits nothing -- but binding a port and watching a network is not
-    // something to start doing to a user who has not asked for it.
-    if (m_pConfig->getValue(
-                ConfigKey(kConfigGroup, "ShowProLinkLibrary"), false)) {
-        addFeature(new ProLinkFeature(this, m_pConfig));
-    }
-#endif
 
     for (const auto& externalTrackCollection : m_pTrackCollectionManager->externalCollections()) {
         auto* feature = externalTrackCollection->newLibraryFeature(this, m_pConfig);
