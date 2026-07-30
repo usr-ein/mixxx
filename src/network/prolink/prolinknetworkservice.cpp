@@ -1,11 +1,14 @@
 #include "network/prolink/prolinknetworkservice.h"
 
 #include <QCryptographicHash>
+#include <QDir>
+#include <QFile>
 #include <QMetaObject>
 #include <QNetworkInterface>
 
 #include "moc_prolinknetworkservice.cpp"
 #include "control/controlpushbutton.h"
+#include "util/cmdlineargs.h"
 #include "network/prolink/nfs/nfsfiletransfer.h"
 #include "network/prolink/nfs/nfsv2client.h"
 #include "network/prolink/prolinkdiscovery.h"
@@ -263,24 +266,55 @@ void ProLinkNetworkService::reportPull(const nfs::NfsFileTransfer::Result& resul
                           << "reads:" << result.error;
         return;
     }
-    // SHA-1 rather than a full parse: the point is to compare against the same
-    // file read off the physically ejected stick, and byte-identical is the only
-    // acceptable answer.
+    // Two digests, because one is not enough to interpret.
     //
-    // Note the two header bytes a player rewrites as it operates -- a play count
-    // or a history entry lands in the sequence counter at 0x14 (F13) -- so a
-    // digest taken minutes apart can legitimately differ in those. Compare the
-    // whole file first; if only bytes 0x10..0x18 differ, that is the player
-    // writing its own bookkeeping, not a transfer error.
+    // A player rewrites its own bookkeeping into the pdb header as it operates:
+    // a play count or a history entry lands in the sequence counter at 0x14, and
+    // pulling the same database twice produced files differing in exactly that
+    // window and nothing else (F13). So a raw digest that fails to match the
+    // stick proves nothing on its own -- the deck may simply have written to it
+    // between the fetch and the eject.
+    //
+    // The stable digest zeroes 0x10..0x18 before hashing. If the raw digests
+    // differ and the stable ones match, that is the player's own bookkeeping and
+    // the transfer was perfect. If the stable digests differ too, it is a real
+    // bug. One line each, so the answer needs no file comparison.
+    constexpr int kVolatileStart = 0x10;
+    constexpr int kVolatileEnd = 0x18;
     const QByteArray digest =
             QCryptographicHash::hash(result.data, QCryptographicHash::Sha1).toHex();
+    QByteArray stabilised = result.data;
+    if (stabilised.size() >= kVolatileEnd) {
+        memset(stabilised.data() + kVolatileStart, 0, kVolatileEnd - kVolatileStart);
+    }
+    const QByteArray stableDigest =
+            QCryptographicHash::hash(stabilised, QCryptographicHash::Sha1).toHex();
+
+    // Keep the bytes as well. Without them a digest mismatch can only be
+    // guessed at, and `cmp -l` against the stick is the difference between
+    // "the header moved" and "the transfer is broken".
+    const QString savedPath =
+            QDir(CmdlineArgs::Instance().getSettingsPath()).filePath(
+                    QStringLiteral("prolink-pull.pdb"));
+    QFile saved(savedPath);
+    if (saved.open(QIODevice::WriteOnly | QIODevice::Truncate)) {
+        saved.write(result.data);
+        saved.close();
+        kLogger.info() << "pull_db saved:" << savedPath;
+    } else {
+        kLogger.warning() << "pull_db: could not save to" << savedPath << ":"
+                          << saved.errorString();
+    }
     const double seconds = result.elapsedMs / 1000.0;
     const double kib = result.data.size() / 1024.0;
     kLogger.info() << "pull_db OK:" << result.data.size() << "bytes in"
                    << result.reads << "reads," << result.shortReads << "short,"
                    << result.elapsedMs << "ms,"
                    << (seconds > 0 ? qRound(kib / seconds) : 0) << "KiB/s";
-    kLogger.info() << "pull_db sha1:" << digest;
+    kLogger.info() << "pull_db sha1       :" << digest;
+    kLogger.info() << "pull_db sha1 stable:" << stableDigest
+                   << "(header 0x10-0x18 zeroed; compare this one if the raw "
+                      "digests differ)";
 }
 
 void ProLinkNetworkService::onDeviceFound(const ProLinkDevice& device) {
