@@ -12,6 +12,8 @@
 #include "widget/wlibrary.h"
 #include "widget/wlibrarytextbrowser.h"
 
+using mixxx::prolink::MediaSlot;
+using mixxx::prolink::parsePdb;
 using mixxx::prolink::ProLinkDevice;
 using mixxx::prolink::ProLinkNetworkService;
 
@@ -27,11 +29,41 @@ const QString kViewName = QStringLiteral("PROLINKHOME");
 /// playlist nodes later does not mean overloading a boolean.
 constexpr int kPayloadKind = 0;
 constexpr int kPayloadMac = 1;
+/// Slot number for a slot node; playlist id for a playlist node.
+constexpr int kPayloadSlot = 2;
+constexpr int kPayloadPlaylist = 3;
 
 const QString kKindDevice = QStringLiteral("device");
+const QString kKindSlot = QStringLiteral("slot");
+const QString kKindPlaylist = QStringLiteral("playlist");
+
+QString macKey(const QByteArray& mac) {
+    return QString::fromLatin1(mac.toHex());
+}
 
 QVariant deviceNodePayload(const ProLinkDevice& device) {
-    return QVariant(QList<QString>{kKindDevice, QString::fromLatin1(device.mac.toHex())});
+    return QVariant(QList<QString>{kKindDevice, macKey(device.mac)});
+}
+
+QVariant slotNodePayload(const QByteArray& mac, MediaSlot slot) {
+    return QVariant(QList<QString>{kKindSlot,
+            macKey(mac),
+            QString::number(static_cast<int>(slot))});
+}
+
+QVariant playlistNodePayload(const QByteArray& mac, MediaSlot slot, quint32 playlistId) {
+    return QVariant(QList<QString>{kKindPlaylist,
+            macKey(mac),
+            QString::number(static_cast<int>(slot)),
+            QString::number(playlistId)});
+}
+
+/// The two slots a player can have media in. CD is skipped: a CDJ-2000NXS has
+/// one, but rekordbox media does not live there and nothing we do applies to it.
+const MediaSlot kBrowsableSlots[] = {MediaSlot::Usb, MediaSlot::Sd};
+
+QString slotLabel(MediaSlot slot) {
+    return slot == MediaSlot::Usb ? QStringLiteral("USB") : QStringLiteral("SD");
 }
 } // namespace
 
@@ -66,6 +98,10 @@ ProLinkFeature::ProLinkFeature(Library* pLibrary, UserSettingsPointer pConfig)
             &ProLinkNetworkService::listeningChanged,
             this,
             &ProLinkFeature::onListeningChanged);
+    connect(m_pNetwork.get(),
+            &ProLinkNetworkService::databaseFetched,
+            this,
+            &ProLinkFeature::onDatabaseFetched);
 
     m_pSidebarModel->setRootItem(TreeItem::newRoot(this));
     m_pNetwork->start();
@@ -93,12 +129,160 @@ void ProLinkFeature::activate() {
 }
 
 void ProLinkFeature::activateChild(const QModelIndex& index) {
-    Q_UNUSED(index);
-    // Browsing a device is not implemented yet. Showing the status page is a
-    // deliberate placeholder: on a CDJ an error and an empty folder look
-    // identical, and the same is true here -- a click that appears to do nothing
-    // is indistinguishable from a bug.
+    if (!index.isValid()) {
+        return;
+    }
+    auto* pItem = static_cast<TreeItem*>(index.internalPointer());
+    if (pItem == nullptr) {
+        return;
+    }
+    const QList<QString> payload = pItem->getData().toStringList();
+    if (payload.size() <= kPayloadMac) {
+        showStatusPage();
+        return;
+    }
+    const QString kind = payload.at(kPayloadKind);
+    const QByteArray mac = QByteArray::fromHex(payload.at(kPayloadMac).toLatin1());
+
+    if (kind == kKindSlot && payload.size() > kPayloadSlot) {
+        const auto slot = static_cast<MediaSlot>(payload.at(kPayloadSlot).toInt());
+        Medium& medium = m_media[mediumKey(mac, slot)];
+        switch (medium.state) {
+        case Medium::State::Fetching:
+            // Already in flight. Returning early is the point of tracking state:
+            // a second click would otherwise start a second megabyte transfer
+            // over a link the CDJs are themselves playing across.
+            break;
+        case Medium::State::Ready:
+            showPlaylists(mac, slot);
+            break;
+        case Medium::State::Unknown:
+        case Medium::State::Failed:
+            // Failed is retried rather than remembered: the usual cause is an
+            // empty slot or a deck that was mid-something, and both change.
+            medium.state = Medium::State::Fetching;
+            medium.error.clear();
+            m_pNetwork->fetchDatabase(mac, slot);
+            break;
+        }
+        showStatusPage();
+        return;
+    }
+
+    // A playlist, or anything we do not recognise. Track tables are the next
+    // increment; until then the status page lists what was parsed, which at
+    // least shows the fetch and parse worked.
     showStatusPage();
+}
+
+QString ProLinkFeature::mediumKey(const QByteArray& mac, MediaSlot slot) {
+    return QStringLiteral("%1|%2").arg(macKey(mac)).arg(static_cast<int>(slot));
+}
+
+void ProLinkFeature::addSlotNodes(int deviceRow, const QByteArray& mac) {
+    TreeItem* pRoot = m_pSidebarModel->getRootItem();
+    if (deviceRow < 0 || deviceRow >= pRoot->childRows()) {
+        return;
+    }
+    // Both slots are always offered, even though a player usually has one
+    // populated. We cannot know which without announcing ourselves -- slot
+    // occupancy is published only in status packets, and those are unicast to
+    // announced peers (F20/F21). Offering both and letting the fetch fail is
+    // honest; guessing would hide a slot that does have media.
+    std::vector<std::unique_ptr<TreeItem>> rows;
+    for (const MediaSlot slot : kBrowsableSlots) {
+        rows.push_back(std::make_unique<TreeItem>(
+                slotLabel(slot), slotNodePayload(mac, slot)));
+    }
+    m_pSidebarModel->insertTreeItemRows(
+            std::move(rows), 0, m_pSidebarModel->index(deviceRow, 0));
+}
+
+int ProLinkFeature::rowForSlot(int deviceRow, MediaSlot slot) const {
+    TreeItem* pRoot = m_pSidebarModel->getRootItem();
+    if (deviceRow < 0 || deviceRow >= pRoot->childRows()) {
+        return -1;
+    }
+    TreeItem* pDevice = pRoot->child(deviceRow);
+    const QString wanted = QString::number(static_cast<int>(slot));
+    for (int row = 0; row < pDevice->childRows(); ++row) {
+        const QList<QString> payload = pDevice->child(row)->getData().toStringList();
+        if (payload.size() > kPayloadSlot && payload.at(kPayloadSlot) == wanted) {
+            return row;
+        }
+    }
+    return -1;
+}
+
+void ProLinkFeature::onDatabaseFetched(const QByteArray& mac,
+        MediaSlot slot,
+        const QByteArray& data,
+        const QString& error) {
+    Medium& medium = m_media[mediumKey(mac, slot)];
+    if (!error.isEmpty()) {
+        medium.state = Medium::State::Failed;
+        medium.error = error;
+        refreshStatusPage();
+        return;
+    }
+
+    // Parsing a megabyte takes a few milliseconds, so it stays on the GUI
+    // thread rather than buying a QtConcurrent round trip and the lifetime
+    // questions that come with one.
+    medium.contents = parsePdb(data);
+    if (!medium.contents.ok) {
+        medium.state = Medium::State::Failed;
+        medium.error = medium.contents.error;
+        refreshStatusPage();
+        return;
+    }
+    medium.state = Medium::State::Ready;
+    medium.error.clear();
+    showPlaylists(mac, slot);
+    refreshStatusPage();
+}
+
+void ProLinkFeature::showPlaylists(const QByteArray& mac, MediaSlot slot) {
+    const int deviceRow = rowForMac(mac);
+    const int slotRow = rowForSlot(deviceRow, slot);
+    if (slotRow < 0) {
+        return;
+    }
+    const Medium& medium = m_media.value(mediumKey(mac, slot));
+    if (medium.state != Medium::State::Ready) {
+        return;
+    }
+
+    const QModelIndex deviceIndex = m_pSidebarModel->index(deviceRow, 0);
+    const QModelIndex slotIndex = m_pSidebarModel->index(slotRow, 0, deviceIndex);
+    TreeItem* pSlot = m_pSidebarModel->getRootItem()->child(deviceRow)->child(slotRow);
+    if (pSlot->childRows() > 0) {
+        return; // already populated
+    }
+
+    // NOTE(prolink): no clearLastRightClickedIndex() here, because that lives on
+    // BaseExternalLibraryFeature and this is still a plain LibraryFeature. When
+    // the track table arrives and the base class changes, this call becomes
+    // mandatory before *every* structural change: that base holds a raw
+    // QModelIndex whose internalPointer() Qt cannot fix up when rows move
+    // (baseexternallibraryfeature.h:57-58).
+
+    std::vector<std::unique_ptr<TreeItem>> rows;
+    // "All tracks" first, then the curated playlists. A medium with no playlist
+    // at all is normal -- a stick can be a flat pile of files -- and without
+    // this entry it would look empty when it is not.
+    rows.push_back(std::make_unique<TreeItem>(
+            tr("All tracks (%1)").arg(medium.contents.tracks.size()),
+            playlistNodePayload(mac, slot, 0)));
+    for (const auto& playlist : medium.contents.playlists) {
+        if (playlist.isFolder) {
+            continue; // folders are a later increment
+        }
+        rows.push_back(std::make_unique<TreeItem>(
+                QStringLiteral("%1 (%2)").arg(playlist.name).arg(playlist.trackIds.size()),
+                playlistNodePayload(mac, slot, playlist.id)));
+    }
+    m_pSidebarModel->insertTreeItemRows(std::move(rows), 0, slotIndex);
 }
 
 void ProLinkFeature::refreshStatusPage() {
@@ -137,8 +321,9 @@ void ProLinkFeature::onDeviceFound(const ProLinkDevice& device) {
     auto pItem = std::make_unique<TreeItem>(device.label(), deviceNodePayload(device));
     pItem->setBold(true);
     rows.push_back(std::move(pItem));
-    m_pSidebarModel->insertTreeItemRows(
-            std::move(rows), m_pSidebarModel->getRootItem()->childRows());
+    const int row = m_pSidebarModel->getRootItem()->childRows();
+    m_pSidebarModel->insertTreeItemRows(std::move(rows), row);
+    addSlotNodes(row, device.mac);
 
     m_pDeviceCountControl->forceSet(m_pNetwork->deviceCount());
     refreshStatusPage();
@@ -247,7 +432,38 @@ QString ProLinkFeature::statusHtml() const {
                                 device.interfaceName);
     }
     html += QStringLiteral("</table>");
+
+    // What each slot we have touched is doing. Without this the sidebar is the
+    // only feedback, and "expanded a slot and nothing happened" covers a fetch
+    // in flight, an empty slot and a real failure alike.
+    if (!m_media.isEmpty()) {
+        html += QStringLiteral("<h3>%1</h3><table cellpadding='4'>").arg(tr("Media"));
+        for (auto it = m_media.constBegin(); it != m_media.constEnd(); ++it) {
+            QString state;
+            switch (it.value().state) {
+            case Medium::State::Unknown:
+                state = tr("not opened");
+                break;
+            case Medium::State::Fetching:
+                state = tr("fetching…");
+                break;
+            case Medium::State::Ready:
+                state = tr("%1 tracks, %2 playlists")
+                                .arg(it.value().contents.tracks.size())
+                                .arg(it.value().contents.playlistCount());
+                break;
+            case Medium::State::Failed:
+                state = it.value().error.toHtmlEscaped();
+                break;
+            }
+            html += QStringLiteral("<tr><td>%1</td><td>%2</td></tr>")
+                            .arg(it.key(), state);
+        }
+        html += QStringLiteral("</table>");
+    }
+
     html += QStringLiteral("<p><i>%1</i></p>")
-                    .arg(tr("Browsing a player's media is not implemented yet."));
+                    .arg(tr("Expand a player and open USB or SD to fetch its "
+                            "database. Loading tracks is not implemented yet."));
     return html;
 }

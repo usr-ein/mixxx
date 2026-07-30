@@ -91,6 +91,13 @@ class ProLinkNetworkService : public QObject {
     /// `[ProLink],pull_db` control.
     void pullDatabase(MediaSlot slot = MediaSlot::Usb);
 
+    /// Fetch a player's `export.pdb` for the browse path.
+    ///
+    /// Asynchronous: the answer arrives as databaseFetched(). Keyed on MAC
+    /// rather than on a device copy, so a request outliving the device it named
+    /// resolves to "no longer on the network" instead of dereferencing anything.
+    void fetchDatabase(const QByteArray& mac, MediaSlot slot);
+
   signals:
     void deviceFound(const mixxx::prolink::ProLinkDevice& device);
     void deviceChanged(const mixxx::prolink::ProLinkDevice& device);
@@ -98,6 +105,11 @@ class ProLinkNetworkService : public QObject {
     /// Emitted once the socket is up, or once it has failed to come up, so the
     /// UI can say which without polling.
     void listeningChanged(bool listening, const QString& error);
+    /// The result of fetchDatabase(). *error* is empty on success.
+    void databaseFetched(const QByteArray& mac,
+            mixxx::prolink::MediaSlot slot,
+            const QByteArray& data,
+            const QString& error);
 
   private slots:
     void onDeviceFound(const mixxx::prolink::ProLinkDevice& device);
@@ -105,7 +117,11 @@ class ProLinkNetworkService : public QObject {
     void onDeviceLost(const QByteArray& mac);
 
   private:
-    void pullDatabaseOnNetworkThread(const ProLinkDevice& device, MediaSlot slot);
+    void fetchOnNetworkThread(const ProLinkDevice& device, MediaSlot slot);
+    void onFetchFinished(const QByteArray& mac,
+            MediaSlot slot,
+            const QByteArray& data,
+            const QString& error);
     void reportPull(const nfs::NfsFileTransfer::Result& result);
 
     /// Raw and parented to `this`, not parented_ptr: created lazily in start(),
@@ -122,6 +138,12 @@ class ProLinkNetworkService : public QObject {
     /// by the library feature so the two layers stay independent, and so this
     /// works even if the feature is not shown.
     std::unique_ptr<ControlPushButton> m_pPullDbControl;
+
+    /// Non-empty while a `[ProLink],pull_db` diagnostic is in flight, so its
+    /// extra logging and file-saving apply to that fetch and not to ordinary
+    /// browsing — which would otherwise hash and write a megabyte on every
+    /// expand.
+    QByteArray m_diagnosticPull;
 
     bool m_listening = false;
     QString m_lastError;

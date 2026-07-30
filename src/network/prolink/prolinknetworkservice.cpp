@@ -171,87 +171,111 @@ void ProLinkNetworkService::refresh() {
             Qt::QueuedConnection);
 }
 
-void ProLinkNetworkService::pullDatabase(MediaSlot slot) {
-    // Pick the first player, since this is a diagnostic rather than a chooser.
-    // Restricted to 1-4: a mixer announces itself too and has no media.
+void ProLinkNetworkService::fetchDatabase(const QByteArray& mac, MediaSlot slot) {
     ProLinkDevice target;
     for (const ProLinkDevice& device : m_devices) {
-        if (device.isPlayer() && device.online) {
+        if (device.mac == mac) {
             target = device;
             break;
         }
     }
-    if (!target.isValid()) {
-        kLogger.warning() << "pull_db: no player on the network to pull from";
+    if (!target.isValid() || !m_pDiscovery) {
+        emit databaseFetched(mac, slot, QByteArray(), tr("player is no longer on the network"));
         return;
     }
-    if (!m_pDiscovery) {
+    if (!target.online) {
+        emit databaseFetched(mac, slot, QByteArray(), tr("player is offline"));
         return;
     }
+
     // Hop onto the network thread: everything below opens sockets.
-    ProLinkDiscovery* pAnchor = m_pDiscovery;
     const ProLinkDevice device = target;
     QMetaObject::invokeMethod(
-            pAnchor,
-            [this, device, slot] { pullDatabaseOnNetworkThread(device, slot); },
+            m_pDiscovery,
+            [this, device, slot] { fetchOnNetworkThread(device, slot); },
             Qt::QueuedConnection);
 }
 
-void ProLinkNetworkService::pullDatabaseOnNetworkThread(
+void ProLinkNetworkService::pullDatabase(MediaSlot slot) {
+    // The [ProLink],pull_db diagnostic: first player, log the result. Kept
+    // deliberately separate from the browse path so it stays usable when
+    // browsing is broken -- which is exactly when it is worth having.
+    for (const ProLinkDevice& device : m_devices) {
+        if (device.isPlayer() && device.online) {
+            m_diagnosticPull = device.mac;
+            fetchDatabase(device.mac, slot);
+            return;
+        }
+    }
+    kLogger.warning() << "pull_db: no player on the network to pull from";
+}
+
+void ProLinkNetworkService::fetchOnNetworkThread(
         const ProLinkDevice& device, MediaSlot slot) {
     const QString exportPath = exportPathForSlot(slot);
-    kLogger.info() << "pull_db: mounting" << exportPath << "on" << device.label()
-                   << device.address.toString();
+    const QByteArray mac = device.mac;
+    kLogger.info() << "fetching" << exportPath << "from" << device.label();
 
-    // Bound to the discovery object so they live and die on this thread. Both
-    // are deleted when the transfer completes, via deleteLater on this thread's
-    // own event loop -- which is running, unlike at shutdown.
-    // The transfer is a *child* of the client, not a sibling. Deleting two
-    // siblings meant the transfer died first and the client's teardown then
-    // fired read callbacks that captured it -- a use-after-free. One owner, one
-    // deleteLater, and Qt destroys the child first while the parent is intact.
+    // The transfer is a child of the client, so one deleteLater takes both and
+    // Qt destroys the child while the parent is still intact.
     auto* pNfs = new nfs::NfsV2Client(device.address, localAddressFor(device), m_pDiscovery);
     auto* pTransfer = new nfs::NfsFileTransfer(pNfs, pNfs);
 
+    // Every failure path funnels through here, so none can forget to report or
+    // to clean up -- with a chain this deep that is not a hypothetical.
+    auto fail = [this, pNfs, mac, slot](const QString& error) {
+        kLogger.warning() << "fetch failed:" << error;
+        QMetaObject::invokeMethod(
+                this,
+                [this, mac, slot, error] { onFetchFinished(mac, slot, QByteArray(), error); },
+                Qt::QueuedConnection);
+        pNfs->deleteLater();
+    };
+
     pNfs->mount(exportPath,
-            [this, pNfs, pTransfer, exportPath](
+            [this, pNfs, pTransfer, exportPath, mac, slot, fail](
                     const nfs::NfsV2Client::Outcome<QByteArray>& mounted) {
                 if (!mounted.ok) {
-                    kLogger.warning() << "pull_db:" << mounted.error;
-                    pNfs->deleteLater();
+                    fail(mounted.error);
                     return;
                 }
-                kLogger.info() << "pull_db: mounted, mountd" << pNfs->mountdPort()
-                               << "nfsd" << pNfs->nfsdPort();
-
-                const QString pdbPath =
-                        QStringLiteral("PIONEER/rekordbox/export.pdb");
                 pNfs->resolvePath(mounted.value,
-                        pdbPath,
-                        [this, pNfs, pTransfer, exportPath, pdbPath](
+                        QStringLiteral("PIONEER/rekordbox/export.pdb"),
+                        [this, pNfs, pTransfer, exportPath, mac, slot, fail](
                                 const nfs::NfsV2Client::Outcome<QByteArray>& file) {
                             if (!file.ok) {
-                                kLogger.warning() << "pull_db:" << file.error;
-                                pNfs->deleteLater();
+                                fail(file.error);
                                 return;
                             }
                             pNfs->getAttributes(file.value,
-                                    [this, pNfs, pTransfer, exportPath, file](
+                                    [this, pNfs, pTransfer, exportPath, mac, slot, file, fail](
                                             const nfs::NfsV2Client::Outcome<
                                                     nfs::FileAttributes>& attrs) {
                                         if (!attrs.ok) {
-                                            kLogger.warning() << "pull_db:" << attrs.error;
-                                            pNfs->deleteLater();
+                                            fail(attrs.error);
                                             return;
                                         }
-                                        kLogger.info() << "pull_db: export.pdb is"
-                                                       << attrs.value.size << "bytes";
                                         pTransfer->fetch(file.value,
                                                 attrs.value.size,
-                                                [this, pNfs, pTransfer, exportPath](
+                                                [this, pNfs, exportPath, mac, slot](
                                                         const nfs::NfsFileTransfer::
                                                                 Result& result) {
                                                     reportPull(result);
+                                                    const QByteArray data =
+                                                            result.ok ? result.data
+                                                                      : QByteArray();
+                                                    const QString error =
+                                                            result.ok ? QString()
+                                                                      : result.error;
+                                                    QMetaObject::invokeMethod(
+                                                            this,
+                                                            [this, mac, slot, data, error] {
+                                                                onFetchFinished(mac,
+                                                                        slot,
+                                                                        data,
+                                                                        error);
+                                                            },
+                                                            Qt::QueuedConnection);
                                                     pNfs->unmount(exportPath);
                                                     pNfs->deleteLater();
                                                 });
@@ -261,11 +285,23 @@ void ProLinkNetworkService::pullDatabaseOnNetworkThread(
 }
 
 void ProLinkNetworkService::reportPull(const nfs::NfsFileTransfer::Result& result) {
+    if (m_diagnosticPull.isEmpty()) {
+        // An ordinary browse fetch. Hashing and writing a megabyte on every
+        // expand would be pure cost, so just say what happened.
+        if (result.ok) {
+            kLogger.info() << "fetched" << result.data.size() << "bytes in"
+                           << result.reads << "reads," << result.elapsedMs << "ms";
+        }
+        return;
+    }
+    m_diagnosticPull.clear();
+
     if (!result.ok) {
         kLogger.warning() << "pull_db FAILED after" << result.reads
                           << "reads:" << result.error;
         return;
     }
+
     // Two digests, because one is not enough to interpret.
     //
     // A player rewrites its own bookkeeping into the pdb header as it operates:
@@ -275,10 +311,9 @@ void ProLinkNetworkService::reportPull(const nfs::NfsFileTransfer::Result& resul
     // stick proves nothing on its own -- the deck may simply have written to it
     // between the fetch and the eject.
     //
-    // The stable digest zeroes 0x10..0x18 before hashing. If the raw digests
-    // differ and the stable ones match, that is the player's own bookkeeping and
-    // the transfer was perfect. If the stable digests differ too, it is a real
-    // bug. One line each, so the answer needs no file comparison.
+    // The stable digest zeroes 0x10..0x18 before hashing. Raw differs but stable
+    // matches -> the player's own bookkeeping, and the transfer was perfect.
+    // Both differ -> a real bug. One line each, no file comparison needed.
     constexpr int kVolatileStart = 0x10;
     constexpr int kVolatileEnd = 0x18;
     const QByteArray digest =
@@ -290,12 +325,11 @@ void ProLinkNetworkService::reportPull(const nfs::NfsFileTransfer::Result& resul
     const QByteArray stableDigest =
             QCryptographicHash::hash(stabilised, QCryptographicHash::Sha1).toHex();
 
-    // Keep the bytes as well. Without them a digest mismatch can only be
-    // guessed at, and `cmp -l` against the stick is the difference between
-    // "the header moved" and "the transfer is broken".
-    const QString savedPath =
-            QDir(CmdlineArgs::Instance().getSettingsPath()).filePath(
-                    QStringLiteral("prolink-pull.pdb"));
+    // Keep the bytes too: without them a digest mismatch can only be guessed at,
+    // and `cmp -l` against the stick is the difference between "the header
+    // moved" and "the transfer is broken".
+    const QString savedPath = QDir(CmdlineArgs::Instance().getSettingsPath())
+                                      .filePath(QStringLiteral("prolink-pull.pdb"));
     QFile saved(savedPath);
     if (saved.open(QIODevice::WriteOnly | QIODevice::Truncate)) {
         saved.write(result.data);
@@ -305,16 +339,23 @@ void ProLinkNetworkService::reportPull(const nfs::NfsFileTransfer::Result& resul
         kLogger.warning() << "pull_db: could not save to" << savedPath << ":"
                           << saved.errorString();
     }
+
     const double seconds = result.elapsedMs / 1000.0;
     const double kib = result.data.size() / 1024.0;
-    kLogger.info() << "pull_db OK:" << result.data.size() << "bytes in"
-                   << result.reads << "reads," << result.shortReads << "short,"
-                   << result.elapsedMs << "ms,"
-                   << (seconds > 0 ? qRound(kib / seconds) : 0) << "KiB/s";
+    kLogger.info() << "pull_db OK:" << result.data.size() << "bytes in" << result.reads
+                   << "reads," << result.shortReads << "short," << result.elapsedMs
+                   << "ms," << (seconds > 0 ? qRound(kib / seconds) : 0) << "KiB/s";
     kLogger.info() << "pull_db sha1       :" << digest;
     kLogger.info() << "pull_db sha1 stable:" << stableDigest
                    << "(header 0x10-0x18 zeroed; compare this one if the raw "
                       "digests differ)";
+}
+
+void ProLinkNetworkService::onFetchFinished(const QByteArray& mac,
+        MediaSlot slot,
+        const QByteArray& data,
+        const QString& error) {
+    emit databaseFetched(mac, slot, data, error);
 }
 
 void ProLinkNetworkService::onDeviceFound(const ProLinkDevice& device) {

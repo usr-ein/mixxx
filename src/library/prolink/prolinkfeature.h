@@ -1,11 +1,13 @@
 #pragma once
 
+#include <QHash>
 #include <QObject>
 #include <QPointer>
 #include <QString>
 #include <memory>
 
 #include "library/libraryfeature.h"
+#include "library/prolink/prolinkpdbimport.h"
 #include "library/treeitemmodel.h"
 #include "network/prolink/prolinkdevice.h"
 #include "preferences/usersettings.h"
@@ -55,6 +57,10 @@ class ProLinkFeature : public LibraryFeature {
     void activateChild(const QModelIndex& index) override;
 
   private slots:
+    void onDatabaseFetched(const QByteArray& mac,
+            mixxx::prolink::MediaSlot slot,
+            const QByteArray& data,
+            const QString& error);
     void onDeviceFound(const mixxx::prolink::ProLinkDevice& device);
     void onDeviceChanged(const mixxx::prolink::ProLinkDevice& device);
     void onDeviceLost(const QByteArray& mac);
@@ -76,6 +82,31 @@ class ProLinkFeature : public LibraryFeature {
     void refreshStatusPage();
     QString statusHtml() const;
 
+    /// State of one (device, slot) pair.
+    ///
+    /// Keyed on `mac|slot` rather than held on the TreeItem, so a device that
+    /// blips offline and returns keeps its parsed library: the tree node may be
+    /// rebuilt, this is not. It is also what stops a second click while a fetch
+    /// is in flight from starting a second fetch.
+    struct Medium {
+        enum class State {
+            Unknown,  ///< Never opened. We cannot know if a slot has media
+                      ///< without announcing, so both are always offered.
+            Fetching,
+            Ready,
+            Failed,
+        };
+        State state = State::Unknown;
+        QString error;
+        mixxx::prolink::PdbContents contents;
+    };
+    static QString mediumKey(const QByteArray& mac, mixxx::prolink::MediaSlot slot);
+    /// Add the USB and SD children under a device row.
+    void addSlotNodes(int deviceRow, const QByteArray& mac);
+    /// Splice a medium's playlists under its slot node.
+    void showPlaylists(const QByteArray& mac, mixxx::prolink::MediaSlot slot);
+    int rowForSlot(int deviceRow, mixxx::prolink::MediaSlot slot) const;
+
     parented_ptr<TreeItemModel> m_pSidebarModel;
     std::unique_ptr<mixxx::prolink::ProLinkNetworkService> m_pNetwork;
 
@@ -88,6 +119,8 @@ class ProLinkFeature : public LibraryFeature {
     /// go. QPointer because WLibrary owns it and may outlive or predecease us
     /// depending on teardown order.
     QPointer<WLibraryTextBrowser> m_pStatusView;
+
+    QHash<QString, Medium> m_media;
 
     bool m_listening = false;
     QString m_error;
