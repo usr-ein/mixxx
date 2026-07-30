@@ -1070,6 +1070,7 @@ add_library(mixxx-lib STATIC EXCLUDE_FROM_ALL
   src/network/jsonwebtask.cpp
   src/network/networktask.cpp
   src/network/prolink/prolinkdiscovery.cpp
+  src/util/posixsignalhandler.cpp
   src/network/prolink/nfs/nfsfiletransfer.cpp
   src/network/prolink/nfs/nfsv2client.cpp
   src/network/prolink/rpc/rpcclient.cpp

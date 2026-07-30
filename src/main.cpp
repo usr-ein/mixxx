@@ -1,4 +1,8 @@
 #include <QApplication>
+
+#ifndef __WINDOWS__
+#include "util/posixsignalhandler.h"
+#endif
 #include <QDir>
 #include <QPixmapCache>
 #include <QString>
@@ -229,6 +233,14 @@ int main(int argc, char * argv[]) {
     adjustScaleFactor(&args);
 
     MixxxApplication app(argc, argv);
+
+#ifndef __WINDOWS__
+    // Turn SIGTERM/SIGINT/SIGHUP into a normal quit, so that stopping Mixxx
+    // from outside -- `systemctl stop`, a kill, Ctrl-C -- runs the destructors,
+    // writes settings and joins threads, instead of terminating the process
+    // where it stands. On an appliance that is the usual way the session ends.
+    mixxx::PosixSignalHandler::install(&app);
+#endif
 
 #if defined(Q_OS_WIN)
     // The Mixxx style is based on Qt's WindowsVista style
