@@ -39,7 +39,7 @@ FROM ${BASE} AS build
 # and libfftw3-dev, for the statically linked KeyFinder.
 RUN apt-get update && apt-get install -y --no-install-recommends \
         build-essential cmake ninja-build ccache pkg-config git \
-        ca-certificates libgtest-dev \
+        ca-certificates curl libgtest-dev \
         docbook-to-man markdown \
         libglu1-mesa-dev qt6-shadertools-dev libfftw3-dev \
         qtkeychain-qt6-dev qt6-declarative-private-dev qt6-base-private-dev \
@@ -55,6 +55,18 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
         libmp3lame-dev libebur128-dev libwavpack-dev libudev-dev libmsgsl-dev \
     && rm -rf /var/lib/apt/lists/*
 
+# The Pro DJ Link support lives in lib/prolink, a Rust workspace linked
+# statically into the binary. Debian's own rustc is 1.85 and cannot build it --
+# it uses let-chains, stable since 1.88 -- so the toolchain comes from rustup,
+# pinned by lib/prolink/rust-toolchain.toml. Installed in its own layer so a
+# source edit does not re-download it.
+#
+# Nothing from this reaches the Pi: a Rust staticlib is absorbed into the
+# binary, which is the point. upload.sh's ldd check stays as true as it was.
+ENV RUSTUP_HOME=/opt/rustup CARGO_HOME=/opt/cargo PATH=/opt/cargo/bin:$PATH
+RUN curl --proto '=https' --tlsv1.2 -sSf https://sh.rustup.rs \
+      | sh -s -- -y --no-modify-path --default-toolchain none
+
 COPY . /src
 
 # The build tree and the ccache are cache mounts, so editing a couple of files
@@ -66,6 +78,7 @@ COPY . /src
 # scp to the deck short.
 RUN --mount=type=cache,target=/build,sharing=locked \
     --mount=type=cache,target=/ccache,sharing=locked \
+    --mount=type=cache,target=/opt/cargo/registry,sharing=locked \
     export CCACHE_DIR=/ccache \
     && cmake -S /src -B /build -G Ninja \
         -DCMAKE_BUILD_TYPE=RelWithDebInfo \
@@ -110,6 +123,7 @@ RUN apt-get update && apt-get install -y --no-install-recommends libgmock-dev \
 # object files are hits anyway.
 RUN --mount=type=cache,target=/build-test,sharing=locked \
     --mount=type=cache,target=/ccache,sharing=locked \
+    --mount=type=cache,target=/opt/cargo/registry,sharing=locked \
     export CCACHE_DIR=/ccache \
     && cmake -S /src -B /build-test -G Ninja \
         -DCMAKE_BUILD_TYPE=RelWithDebInfo \

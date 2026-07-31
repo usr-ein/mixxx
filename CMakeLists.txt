@@ -2481,6 +2481,12 @@ endif()
 # serve side goes quiet.
 #
 # The library half is what this switch controls. The protocol half under
+# The protocol itself lives in lib/prolink, a Rust workspace linked statically:
+# this binary is swapped onto a Pi that runs the rest of Mixxx from apt, so
+# anything dynamic would have to already be on the device.
+include(ProlinkRust)
+target_link_libraries(mixxx-lib PRIVATE prolink::rust)
+
 # src/network/prolink/ is compiled unconditionally, so it stays buildable and
 # testable without a Library.
 option(PROLINK "Support for the Pioneer Pro DJ Link network protocol" ON)
