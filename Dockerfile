@@ -94,7 +94,13 @@ COPY --from=build /mixxx /mixxx
 
 # Unit tests, for the parts of the tree that can be checked without hardware.
 #
-#   docker build --target unittest --build-arg GTEST_FILTER='ProLinkXdrTest.*' .
+#   docker build --target unittest --build-arg GTEST_FILTER='Library*' .
+#
+# **The Pro DJ Link tests are not here any more.** The protocol moved to
+# lib/prolink and its tests moved with it -- 659 of them, including a replay of
+# 37 captures of real CDJ traffic that must re-encode byte for byte. Run them
+# with `cargo test --workspace` in lib/prolink, or with the prolink-tests stage
+# below, which does it in this same container.
 #
 # Separate stage rather than folded into `build` so a routine binary build for
 # the deck does not pay for compiling the test tree, which is large.
@@ -105,7 +111,7 @@ COPY --from=build /mixxx /mixxx
 # here, so running all of it would fail for reasons unrelated to the change
 # being checked.
 FROM build AS unittest
-ARG GTEST_FILTER=ProLink*
+ARG GTEST_FILTER=*
 # Parallelism is capped rather than $(nproc): the test tree is ~700 translation
 # units and several of Mixxx's are large enough that a full-width build exhausts
 # the Docker VM's memory and the OOM killer takes cc1plus with it. The failure
@@ -133,3 +139,17 @@ RUN --mount=type=cache,target=/build-test,sharing=locked \
         -DCMAKE_CXX_COMPILER_LAUNCHER=ccache \
     && cmake --build /build-test --target mixxx-test --parallel "${BUILD_JOBS}" \
     && QT_QPA_PLATFORM=offscreen /build-test/mixxx-test --gtest_filter="${GTEST_FILTER}"
+
+# The protocol's own tests, in the same container the binary is built in.
+#
+#   docker build --target prolink-tests .
+#
+# Separate from `unittest` because they need no Qt, no display and no audio
+# devices, and because a failure here means something different: the protocol
+# is wrong, rather than Mixxx's use of it.
+FROM build AS prolink-tests
+RUN --mount=type=cache,target=/opt/cargo/registry,sharing=locked \
+    cd /src/lib/prolink \
+    && cargo test --workspace --locked \
+    && cargo clippy --workspace --all-targets --locked -- -D warnings \
+    && cargo fmt --all -- --check
