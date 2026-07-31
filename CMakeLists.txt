@@ -2152,11 +2152,13 @@ if(BUILD_TESTING)
     src-mixxx-test
     src/test/analyserwaveformtest.cpp
     src/test/analyzersilence_test.cpp
+    src/test/prolink_analysiswire_test.cpp
     src/test/prolink_announce_test.cpp
     src/test/prolink_beat_test.cpp
     src/test/prolink_dbserver_test.cpp
     src/test/prolink_pdb_test.cpp
     src/test/prolink_rpc_test.cpp
+    src/test/prolink_vfs_test.cpp
     src/test/prolink_xdr_test.cpp
     src/test/audiotaperpot_test.cpp
     src/test/autodjprocessor_test.cpp
