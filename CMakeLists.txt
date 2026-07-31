@@ -1082,8 +1082,11 @@ add_library(mixxx-lib STATIC EXCLUDE_FROM_ALL
   src/network/prolink/rpc/xdrbuffer.cpp
   src/network/prolink/server/prolinkanalysiswire.cpp
   src/network/prolink/server/prolinkdbserverd.cpp
+  src/network/prolink/server/prolinkmediawatcher.cpp
   src/network/prolink/server/prolinknfsserver.cpp
+  src/network/prolink/server/prolinkserver.cpp
   src/network/prolink/server/prolinkservedmedium.cpp
+  src/network/prolink/server/prolinkstatusserver.cpp
   src/network/prolink/server/prolinkvfs.cpp
   src/network/prolink/prolinknetworkservice.cpp
   src/network/prolink/prolinkbeatlistener.cpp

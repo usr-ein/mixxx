@@ -20,6 +20,10 @@ class ProLinkMediaQuery;
 class ProLinkBeatListener;
 struct MediaInfo;
 
+namespace server {
+class ProLinkServer;
+}
+
 /// Listens on UDP 50000 and maintains the table of devices on the network.
 ///
 /// Listening is passive: discovery works off broadcasts every player already
@@ -90,6 +94,10 @@ class ProLinkDiscovery : public QObject {
     double masterBpm() const;
     int masterDevice() const;
 
+    /// What we are serving to other players, for the ProLink page. Empty until
+    /// we have announced, since the serve side comes up with the announcement.
+    QString serverSummary() const;
+
   signals:
     /// The announcer changed state: claiming, active with a number, or failed.
     void announceStateChanged(int state, int deviceNumber, const QString& detail);
@@ -113,6 +121,9 @@ class ProLinkDiscovery : public QObject {
   private:
     /// Which local interface an address belongs to, for the multi-homed case.
     static QString interfaceForAddress(const QHostAddress& address);
+    /// Hand the serve side the current peer list. Status is unicast per peer, so
+    /// a deck that is not in this list is a deck that never learns we hold media.
+    void updateServerPeers();
 
     /// Raw pointers parented to `this`, not parented_ptr: both are created
     /// lazily in start(), and parented_ptr is deliberately non-assignable.
@@ -124,6 +135,9 @@ class ProLinkDiscovery : public QObject {
     ProLinkVirtualCdj* m_pVirtualCdj = nullptr;
     ProLinkMediaQuery* m_pMediaQuery = nullptr;
     ProLinkBeatListener* m_pBeatListener = nullptr;
+    /// The serve side. Created once we announce, because everything it does
+    /// needs a player number and its socket is the media query's.
+    server::ProLinkServer* m_pServer = nullptr;
     /// Retries the media query. One round is not enough: a player that is busy,
     /// or that joined after we claimed our number, simply does not answer, and
     /// there is no reply that means "empty" to distinguish from a lost one.

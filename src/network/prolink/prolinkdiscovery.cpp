@@ -10,6 +10,7 @@
 #include "network/prolink/prolinkvirtualcdj.h"
 #include "network/prolink/prolinkmediaquery.h"
 #include "network/prolink/prolinkbeatlistener.h"
+#include "network/prolink/server/prolinkserver.h"
 #include "util/assert.h"
 #include "util/logger.h"
 
@@ -52,6 +53,13 @@ bool ProLinkDiscovery::start() {
                 this,
                 [this](int, int deviceNumber, const QString&) {
                     m_pMediaQuery->setRequesterNumber(deviceNumber);
+                    // The serve side is inert without a number too, and for the
+                    // same reason in reverse: a deck validates the number in
+                    // every dbserver request, and a status packet from device 0
+                    // is worse than none at all.
+                    if (m_pServer) {
+                        m_pServer->setDeviceNumber(deviceNumber);
+                    }
                     // The moment we have a number is the first moment a player
                     // will answer us, so ask straight away rather than waiting
                     // for the user to expand something.
@@ -123,6 +131,11 @@ bool ProLinkDiscovery::start() {
 }
 
 void ProLinkDiscovery::stop() {
+    if (m_pServer) {
+        // First: it holds two TCP listeners and three UDP sockets of its own,
+        // and its status timer writes to the media query's socket.
+        m_pServer->stop();
+    }
     if (m_pMediaRetry) {
         m_pMediaRetry->stop();
     }
@@ -281,6 +294,12 @@ void ProLinkDiscovery::reapDevices() {
         kLogger.info() << "removing" << device.label();
         emit deviceLost(mac);
     }
+    // Once a second, which is as responsive as a peer list needs to be. This
+    // has to be on the *reaper*, not on the refresh path: status is unicast per
+    // peer, so an empty list means we transmit nothing at all and a deck never
+    // learns we hold media — which looks exactly like the serve side being
+    // broken rather than the peer list being empty.
+    updateServerPeers();
 }
 
 void ProLinkDiscovery::forgetStaleDevices() {
@@ -295,6 +314,24 @@ void ProLinkDiscovery::forgetStaleDevices() {
         m_reportedStale.remove(mac);
         emit deviceLost(mac);
     }
+    updateServerPeers();
+}
+
+void ProLinkDiscovery::updateServerPeers() {
+    if (!m_pServer) {
+        return;
+    }
+    QList<QHostAddress> peers;
+    for (auto it = m_devices.constBegin(); it != m_devices.constEnd(); ++it) {
+        if (it->online && it->address.protocol() == QAbstractSocket::IPv4Protocol) {
+            peers.append(it->address);
+        }
+    }
+    m_pServer->setPeers(peers);
+}
+
+QString ProLinkDiscovery::serverSummary() const {
+    return m_pServer ? m_pServer->summary() : QString();
 }
 
 
@@ -326,6 +363,18 @@ void ProLinkDiscovery::startAnnouncing() {
     // we are going to announce: an unannounced host receives nothing on 50002.
     m_pMediaQuery->start();
     m_pMediaRetry->start();
+
+    // The serve side comes up with the 50002 socket, and shares it: a media or
+    // settings query arrives *on* 50002 and its answer must leave from 50002,
+    // so a second socket would reply from an ephemeral port and the deck would
+    // ignore it. Constructed here rather than above because the socket does not
+    // exist until ProLinkMediaQuery::start() has made it.
+    if (!m_pServer && m_pMediaQuery->socket()) {
+        m_pServer = new server::ProLinkServer(m_pMediaQuery->socket(), this);
+        m_pMediaQuery->setStatusServer(m_pServer->statusServer());
+        m_pServer->setDeviceNumber(m_pVirtualCdj->deviceNumber());
+        m_pServer->start();
+    }
     // Beat packets are broadcast, so this would work without announcing -- but
     // there is nothing to compare a phase against until we are on the network
     // anyway, so it starts here with the rest.

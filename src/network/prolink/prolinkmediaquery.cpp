@@ -4,6 +4,7 @@
 #include <QUdpSocket>
 
 #include "moc_prolinkmediaquery.cpp"
+#include "network/prolink/server/prolinkstatusserver.h"
 #include "util/logger.h"
 
 namespace {
@@ -185,6 +186,13 @@ void ProLinkMediaQuery::readPendingDatagrams() {
         MediaSlot slot = MediaSlot::Empty;
         MediaInfo info;
         const QByteArray data = datagram.data();
+
+        // The serve half gets first refusal: a media or settings query is
+        // addressed to *us* and is nothing this class can make sense of.
+        if (m_pStatusServer &&
+                m_pStatusServer->handleDatagram(data, datagram.senderAddress())) {
+            continue;
+        }
 
         // Ordinary status, four a second per deck now that we are announced.
         // Watched only for who is master, which is published here and nowhere

@@ -12,6 +12,10 @@ class QUdpSocket;
 namespace mixxx {
 namespace prolink {
 
+namespace server {
+class ProLinkStatusServer;
+}
+
 /// What a player says is in one of its slots.
 struct MediaInfo {
     /// The volume label the DJ formatted the medium with — `Sam CDJ1000mk3`,
@@ -72,6 +76,21 @@ class ProLinkMediaQuery : public QObject {
         m_requesterNumber = number;
     }
 
+    /// The serve half of this port, which shares our socket.
+    ///
+    /// Both halves have to live behind one socket: a query arrives *on* 50002
+    /// and its answer must leave from 50002, so a second socket would answer
+    /// from an ephemeral port and the deck would ignore it. Every datagram is
+    /// offered to the server first; what it does not claim is a peer's own
+    /// status or media response, which is what this class reads.
+    void setStatusServer(server::ProLinkStatusServer* pServer) {
+        m_pStatusServer = pServer;
+    }
+    /// The socket, for the server to reply through. Null until start().
+    QUdpSocket* socket() const {
+        return m_pSocket;
+    }
+
     /// The player currently acting as tempo master, or 0 if none is. Read off
     /// the ordinary status packets that arrive on this same socket.
     int masterDevice() const {
@@ -93,6 +112,9 @@ class ProLinkMediaQuery : public QObject {
 
   private:
     QUdpSocket* m_pSocket = nullptr;
+    /// Not owned: it belongs to ProLinkServer, which outlives us on the same
+    /// thread.
+    server::ProLinkStatusServer* m_pStatusServer = nullptr;
     int m_requesterNumber = 0;
     int m_masterDevice = 0;
 };
