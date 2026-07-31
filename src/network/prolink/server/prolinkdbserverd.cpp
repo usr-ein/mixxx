@@ -518,6 +518,62 @@ const QHash<quint32, QString>* namesFor(const PdbContents& library, Filter filte
     return nullptr;
 }
 
+/// The rows of a side table that at least one track actually references.
+///
+/// **A category menu is not the table.** A rekordbox medium carries artist rows
+/// nothing points at — 39 of 329 on the author's own stick, including plausible
+/// names like `Various Artists` and `Modeselektor`. They survive a track being
+/// removed, and they arrive through `original_artist_id`, `remixer_id` and
+/// `composer_id`, which are references a track list does not browse by. Listing
+/// the whole table puts them in the ARTIST menu, where each one opens onto
+/// nothing.
+///
+/// Confirmed against hardware rather than reasoned: in `captures/S06`, one
+/// CDJ-2000NXS asked another for the ARTIST menu of a medium whose table holds
+/// 329 rows and was answered **290** — exactly the number a track references.
+///
+/// Unnamed rows are dropped too, which is what `itemsByName` does everywhere
+/// else. No medium we have carries one, so that half is consistency rather than
+/// evidence.
+QHash<quint32, QString> referencedRows(const PdbContents& library, Filter filter) {
+    const QHash<quint32, QString>* pNames = namesFor(library, filter);
+    if (!pNames) {
+        return {};
+    }
+    QHash<quint32, QString> out;
+    for (const PdbTrack& track : library.tracks) {
+        const quint32 id = filterValueOf(track, filter);
+        if (id == 0 || out.contains(id)) {
+            continue;
+        }
+        const QString name = pNames->value(id);
+        if (!name.isEmpty()) {
+            out.insert(id, name);
+        }
+    }
+    return out;
+}
+
+/// Whether any of *tracks* would be invisible below a level narrowed by *filter*.
+///
+/// A track with no album — 12 of 651 on the author's stick — belongs to no entry
+/// in an album list, so the only way to reach it is the ALL entry. Where a real
+/// reply heads a list with ALL "only when there is a choice to make", that rule
+/// was read off levels where every track had the attribute; it cannot mean
+/// stranding the ones that do not.
+bool hasUnclassified(const QList<const PdbTrack*>& tracks,
+        const PdbContents& library,
+        Filter filter) {
+    const QHash<quint32, QString>* pNames = namesFor(library, filter);
+    for (const PdbTrack* pTrack : tracks) {
+        const quint32 id = filterValueOf(*pTrack, filter);
+        if (id == 0 || (pNames && pNames->value(id).isEmpty())) {
+            return true;
+        }
+    }
+    return false;
+}
+
 /// The envelope every binary reply shares:
 /// `[request type, 0, byte length, blob, *trailing]`.
 ///
@@ -968,17 +1024,18 @@ QList<Message> ProLinkDbServer::buildMenu(const Message& request,
         return trackItems(tracks, sort);
     }
 
+    // Every category lists only the rows a track references; see referencedRows.
     case MessageType::MenuArtist:
-        return itemsByName(library.artists, ItemType::Artist);
+        return itemsByName(referencedRows(library, Filter::Artist), ItemType::Artist);
     case MessageType::MenuAlbum:
-        return itemsByName(library.albums, ItemType::Album);
+        return itemsByName(referencedRows(library, Filter::Album), ItemType::Album);
     case MessageType::MenuGenre:
-        return itemsByName(library.genres, ItemType::Genre);
+        return itemsByName(referencedRows(library, Filter::Genre), ItemType::Genre);
     case MessageType::MenuLabel:
-        return itemsByName(library.labels, ItemType::Label);
+        return itemsByName(referencedRows(library, Filter::Label), ItemType::Label);
     case MessageType::MenuKey:
         // Wheel order, not alphabetical. See keySortValue.
-        return itemsByName(library.keys, ItemType::Key, true);
+        return itemsByName(referencedRows(library, Filter::Key), ItemType::Key, true);
 
     case MessageType::MenuHistory:
         // Empty on a medium that has never played anywhere, which is the normal
@@ -1356,9 +1413,21 @@ QList<Message> ProLinkDbServer::buildMenu(const Message& request,
                             static_cast<quint32>(itemTypeOf(next))));
                 }
             }
+            // A level with nothing to show is a dead end, and on a real medium
+            // it happens: seven artists on the author's stick have tracks that
+            // carry no album at all, so ARTIST -> albums came back empty and
+            // their music was unreachable. Skip the level rather than show a
+            // blank screen — the same fall-through the KEY drill above takes for
+            // a key it cannot place on the wheel.
+            if (items.isEmpty()) {
+                sortTracks(&tracks, sort);
+                return trackItems(tracks, sort);
+            }
             // A real reply heads the list with ALL, but only when there is a
-            // choice to make: a single-entry level goes out bare.
-            if (items.size() > 1) {
+            // choice to make: a single-entry level goes out bare. Also when some
+            // of these tracks have no value at this level, since ALL is then the
+            // only entry that includes them.
+            if (items.size() > 1 || hasUnclassified(tracks, library, next)) {
                 items.prepend(allItem());
             }
             return items;
