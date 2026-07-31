@@ -1071,29 +1071,9 @@ add_library(mixxx-lib STATIC EXCLUDE_FROM_ALL
   src/nativeeventhandlerwin.cpp
   src/network/jsonwebtask.cpp
   src/network/networktask.cpp
-  src/network/prolink/prolinkdiscovery.cpp
   src/util/posixsignalhandler.cpp
-  src/network/prolink/dbserver/dbserverclient.cpp
-  src/network/prolink/dbserver/dbservermessage.cpp
-  src/network/prolink/nfs/nfsfiletransfer.cpp
-  src/network/prolink/nfs/nfsv2client.cpp
-  src/network/prolink/rpc/rpcclient.cpp
-  src/network/prolink/rpc/rpcmessage.cpp
-  src/network/prolink/rpc/xdrbuffer.cpp
-  src/network/prolink/server/prolinkanalysiswire.cpp
-  src/network/prolink/server/prolinkdbserverd.cpp
-  src/network/prolink/server/prolinkmediawatcher.cpp
-  src/network/prolink/server/prolinknfsserver.cpp
-  src/network/prolink/server/prolinkserver.cpp
-  src/network/prolink/server/prolinkservedmedium.cpp
-  src/network/prolink/server/prolinkstatusserver.cpp
-  src/network/prolink/server/prolinkvfs.cpp
   src/network/prolink/prolinknetworkservice.cpp
-  src/network/prolink/prolinkbeatlistener.cpp
-  src/network/prolink/prolinkmediaquery.cpp
-  src/network/prolink/prolinkpacket.cpp
   src/network/prolink/prolinkpdb.cpp
-  src/network/prolink/prolinkvirtualcdj.cpp
   src/network/webtask.cpp
   src/preferences/colorpaletteeditor.cpp
   src/preferences/colorpaletteeditor.cpp
@@ -2152,14 +2132,6 @@ if(BUILD_TESTING)
     src-mixxx-test
     src/test/analyserwaveformtest.cpp
     src/test/analyzersilence_test.cpp
-    src/test/prolink_analysiswire_test.cpp
-    src/test/prolink_announce_test.cpp
-    src/test/prolink_beat_test.cpp
-    src/test/prolink_dbserver_test.cpp
-    src/test/prolink_pdb_test.cpp
-    src/test/prolink_rpc_test.cpp
-    src/test/prolink_vfs_test.cpp
-    src/test/prolink_xdr_test.cpp
     src/test/audiotaperpot_test.cpp
     src/test/autodjprocessor_test.cpp
     src/test/beatgridtest.cpp
@@ -2762,29 +2734,6 @@ elseif(CMAKE_CXX_COMPILER_ID MATCHES "MSVC")
     target_compile_options(rekordbox_metadata PRIVATE /w44063)
 endif()
 
-# Pro DJ Link wire formats, generated from prolinks-compat/ksy/*.ksy by that
-# directory's regenerate.sh. Checked in exactly as rekordbox_metadata above is,
-# so building Mixxx never needs a JVM.
-#
-# Its own target rather than plain sources on mixxx-lib, for the same reason
-# rekordbox_metadata is one: generated Kaitai code is warning-noisy, and this
-# keeps -Wno-switch off the hand-written ProLink code next to it.
-add_library(prolink_protocol STATIC EXCLUDE_FROM_ALL
-  src/network/prolink/generated/prolink_dbserver.cpp
-  src/network/prolink/generated/prolink_djl.cpp
-  src/network/prolink/generated/prolink_rpc.cpp
-  src/network/prolink/generated/prolink_status.cpp
-)
-target_include_directories(prolink_protocol SYSTEM PUBLIC src/network/prolink/generated)
-target_link_libraries(mixxx-lib PRIVATE prolink_protocol)
-
-#silence "enumeration values not handled in switch" in generated code
-if(CMAKE_CXX_COMPILER_ID MATCHES "GNU|Clang")
-    target_compile_options(prolink_protocol PRIVATE -Wno-switch)
-elseif(CMAKE_CXX_COMPILER_ID MATCHES "MSVC")
-    target_compile_options(prolink_protocol PRIVATE /w44063)
-endif()
-
 # Kaitai for reading Rekordbox libraries
 add_library(Kaitai STATIC EXCLUDE_FROM_ALL
   lib/kaitai/kaitai/kaitaistream.cpp
@@ -2792,7 +2741,6 @@ add_library(Kaitai STATIC EXCLUDE_FROM_ALL
 target_include_directories(Kaitai SYSTEM PUBLIC lib/kaitai)
 target_compile_definitions(Kaitai PRIVATE KS_STR_ENCODING_NONE)
 target_link_libraries(rekordbox_metadata PRIVATE Kaitai)
-target_link_libraries(prolink_protocol PRIVATE Kaitai)
 target_link_libraries(mixxx-lib PRIVATE Kaitai)
 
 # For determining MP3 timing offset cases in Rekordbox library feature

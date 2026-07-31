@@ -1,33 +1,16 @@
 #pragma once
 
+#include <QByteArray>
 #include <QHash>
 #include <QList>
 #include <QObject>
-#include <QSet>
-#include <QThread>
+#include <QString>
 #include <memory>
 
-#include "network/prolink/nfs/nfsfiletransfer.h"
 #include "network/prolink/prolinkdevice.h"
 #include "network/prolink/prolinkmediaquery.h"
 #include "network/prolink/server/prolinkservestatus.h"
 
-namespace mixxx {
-namespace prolink {
-
-namespace nfs {
-class NfsFileTransfer;
-}
-namespace dbserver {
-class DbServerClient;
-}
-
-class ProLinkDiscovery;
-} // namespace prolink
-} // namespace mixxx
-
-class ControlObject;
-class ControlPushButton;
 class QTimer;
 
 namespace mixxx {
@@ -35,20 +18,25 @@ namespace prolink {
 
 /// The single object the rest of Mixxx talks to about Pro DJ Link.
 ///
-/// Owns the network thread and everything on it. Nothing above this class holds
-/// a socket, a timer or a pointer into the network layer, which is what keeps
-/// the `src/network/prolink/` → `src/library/` direction from ever reversing:
-/// the library side connects to signals and calls slots, and never dereferences
-/// anything that lives on the other thread.
+/// **The protocol is not implemented here.** It lives in `lib/prolink`, a Rust
+/// workspace linked statically into this binary, and this class is the Qt
+/// shell around it: it turns the library's polled state and drained events
+/// into the signals and slots the library feature already expects, and does
+/// nothing else. Everything above it — `src/library/prolink/`, the phase-meter
+/// widget, the skin — is unchanged by the swap.
 ///
-/// **Why a dedicated thread rather than the GUI thread or QtConcurrent.** The
-/// serve side, when it lands, does blocking reads off a USB stick to answer NFS
-/// requests, and it must not delay a keep-alive: five missed keep-alives and we
-/// disappear from every deck on the network, mid-set. Establishing the thread
-/// boundary now, while there is only a listener behind it, is much cheaper than
-/// retrofitting it later. QtConcurrent is wrong for a different reason — a
-/// long-lived socket conversation is not a CPU job, and parking a pool thread on
-/// one would starve the analyzer.
+/// # Why there is no longer a network thread
+///
+/// The C++ this replaces owned a `QThread` because it held the sockets, and a
+/// blocking NFS read on the GUI thread would have delayed a keep-alive: five
+/// missed keep-alives and Mixxx disappears from every deck on the network,
+/// mid-set. The Rust library owns its own runtime and its own threads, so the
+/// sockets are already off this thread and that reason is gone.
+///
+/// What is left here is a timer that drains an event queue and reads two
+/// vectors. Draining on our own thread is deliberate: a callback from a
+/// network thread would make every handler here have to be thread-safe and
+/// re-entrant, and a slow one would stall the protocol.
 class ProLinkNetworkService : public QObject {
     Q_OBJECT
 
@@ -56,19 +44,12 @@ class ProLinkNetworkService : public QObject {
     explicit ProLinkNetworkService(QObject* parent = nullptr);
     ~ProLinkNetworkService() override;
 
-    /// Start the network thread and begin listening. Safe to call twice.
+    /// Start listening. Safe to call twice.
     void start();
 
-    /// Stop listening, quit the thread and wait for it.
-    ///
-    /// Must be called before the owning feature starts tearing itself down,
-    /// not from its destructor body: a queued signal already in flight would
-    /// otherwise land on a half-destroyed receiver, and that crash only
-    /// reproduces with a CDJ actually on the network.
+    /// Stop, releasing the device number.
     void shutdown();
 
-    /// Snapshot of the peer table. Thread-safe by construction: it is served
-    /// from a copy the network thread pushes to us, not by reaching across.
     QList<ProLinkDevice> devices() const {
         return m_devices;
     }
@@ -79,72 +60,49 @@ class ProLinkNetworkService : public QObject {
     bool isListening() const {
         return m_listening;
     }
-    /// The player number we have claimed, or 0 while the handshake is still
-    /// running or if it failed. Everything dbserver needs this to be non-zero.
     int announcedNumber() const {
         return m_announcedNumber;
     }
-    /// Human-readable announcer state, for the preferences pane.
     QString announceDetail() const {
         return m_announceDetail;
     }
-    /// Empty unless the socket could not be bound.
     QString lastError() const {
         return m_lastError;
     }
 
-    /// What we are serving and who is consuming it. A GUI-thread mirror, pushed
-    /// to us by the network thread like the peer table above — never read
-    /// across.
     server::ServeStatus serveStatus() const {
         return m_serveStatus;
     }
 
   public slots:
-    /// Drop devices that are currently offline, rather than waiting out the
-    /// removal grace period.
+    /// Drop any held browse connection so the next request reconnects.
     void refresh();
 
-    /// Pull `export.pdb` off the first player that has one, and log what
-    /// happened: byte count, SHA-1, elapsed time, throughput.
-    ///
-    /// This is a diagnostic, not the real import path -- nothing is parsed or
-    /// kept. It exists because it is the strongest check available on the whole
-    /// RPC/NFS stack and it needs no GUI: the digest it logs can be compared
-    /// against the same file read off the physically ejected stick, and
-    /// byte-identical is the only acceptable answer. Triggered by the
-    /// `[ProLink],pull_db` control.
+    /// Fetch `export.pdb` from the first player with media in `slot`.
     void pullDatabase(MediaSlot slot = MediaSlot::Usb);
 
-    /// Fetch a player's `export.pdb` for the browse path.
+    /// Fetch a player's `export.pdb`.
     ///
-    /// Asynchronous: the answer arrives as databaseFetched(). Keyed on MAC
-    /// rather than on a device copy, so a request outliving the device it named
-    /// resolves to "no longer on the network" instead of dereferencing anything.
+    /// Keyed on MAC rather than on a device number, and that is not a
+    /// convenience: a number can be reassigned, so a request that outlived the
+    /// device it named would otherwise reach a different deck.
     void fetchDatabase(const QByteArray& mac, MediaSlot slot);
 
-    /// Fetch one file from a medium into *localPath*.
+    /// Fetch one file from a medium into `localPath`.
     ///
-    /// *remotePath* is taken verbatim from `export.pdb`, which stores paths
-    /// relative to the medium root with a leading slash. The answer arrives as
-    /// fileFetched().
-    /// *priority* jumps the queue. A track the user is waiting on must not sit
-    /// behind a few hundred queued cover images.
+    /// `remotePath` is taken verbatim from `export.pdb`, which stores paths
+    /// relative to the medium root with a leading slash.
+    ///
+    /// `priority` is accepted and ignored. The library serialises transfers
+    /// itself, because two pulls from one deck contend for its filehandle
+    /// table and it then answers `NFSERR_STALE` to everything.
     void fetchFile(const QByteArray& mac,
             MediaSlot slot,
             const QString& remotePath,
             const QString& localPath,
             bool priority = false);
 
-    /// Fetch one cover image by its rekordbox artwork id, over dbserver.
-    ///
-    /// **Not over NFS**, deliberately. A real CDJ never asks NFS for an image
-    /// (F49), and doing it anyway fails in a way that looks like a protocol
-    /// mystery: the player's filehandle table churns under the extra lookups and
-    /// it starts answering NFSERR_STALE to handles a millisecond old. dbserver
-    /// answers by id, so no handle is minted and nothing accumulates.
-    ///
-    /// Silently does nothing if *localPath* already exists.
+    /// Fetch a track's artwork into `localPath`.
     void fetchArtwork(const QByteArray& mac,
             MediaSlot slot,
             quint32 artworkId,
@@ -154,150 +112,63 @@ class ProLinkNetworkService : public QObject {
     void deviceFound(const mixxx::prolink::ProLinkDevice& device);
     void deviceChanged(const mixxx::prolink::ProLinkDevice& device);
     void deviceLost(const QByteArray& mac);
-    /// Emitted once the socket is up, or once it has failed to come up, so the
-    /// UI can say which without polling.
     void listeningChanged(bool listening, const QString& error);
-    /// We claimed a number, lost one, or gave up trying.
     void announceChanged(int deviceNumber, const QString& detail);
-    /// The serve side changed: a slot came or went, or a player loaded or
-    /// released one of our tracks.
     void serveStatusChanged(const mixxx::prolink::server::ServeStatus& status);
-    /// A player described one of its slots: volume name and counts.
     void mediaInfoFound(const QByteArray& mac,
             mixxx::prolink::MediaSlot slot,
             const mixxx::prolink::MediaInfo& info);
-    /// The result of fetchDatabase(). *error* is empty on success.
+    /// The result of fetchDatabase(). `error` is empty on success.
+    ///
+    /// Carries the bytes rather than the path they were written to: the
+    /// caller parses them and never wants the file, and reading it back would
+    /// be a second failure to report for no gain.
     void databaseFetched(const QByteArray& mac,
             mixxx::prolink::MediaSlot slot,
             const QByteArray& data,
             const QString& error);
-    /// Result of fetchFile(). *error* is empty on success.
     void fileFetched(const QString& localPath, const QString& error);
-    /// Result of fetchArtwork(). *error* is empty on success, including the
-    /// success where the track simply has no art and nothing was written.
     void artworkFetched(const QString& localPath, const QString& error);
-    /// Bytes so far and total, for whatever is waiting on that file.
     void fileFetchProgress(const QString& localPath, quint32 done, quint32 total);
 
-  private slots:
-    void onDeviceFound(const mixxx::prolink::ProLinkDevice& device);
-    void onDeviceChanged(const mixxx::prolink::ProLinkDevice& device);
-    void onDeviceLost(const QByteArray& mac);
-    void onAnnounceStateChanged(int state, int deviceNumber, const QString& detail);
-
   private:
-    void fetchOnNetworkThread(const ProLinkDevice& device, MediaSlot slot);
-    struct FileRequest {
-        ProLinkDevice device;
+    /// Drain the library's events and re-read its tables. On a timer.
+    void poll();
+
+    /// Re-read the device table, emitting found, changed and lost as it moves.
+    void syncDevices();
+
+    /// Re-read what each player has in its slots, emitting `mediaInfoFound`.
+    void syncMedia(int deviceNumber, MediaSlot slot);
+
+    /// What a transfer was asked for, so its end can be reported as the signal
+    /// the caller is waiting on.
+    ///
+    /// The library reports a transfer id and the path it wrote. Which *kind*
+    /// of fetch it was is this class's business, because only the slots above
+    /// know which signal was promised.
+    struct Pending {
+        bool isDatabase = false;
+        QByteArray mac;
         MediaSlot slot = MediaSlot::Usb;
-        QString remotePath;
         QString localPath;
-        /// Set once a NFSERR_STALE has already cost this request a re-mount, so
-        /// a genuinely missing file cannot loop.
-        bool remounted = false;
     };
-    /// Start the next queued request, if the network thread is idle.
-    void pumpFileQueue();
-    void runFileRequest(const FileRequest& request);
-    /// The mount for one medium, kept open across requests.
-    struct MountedMedium {
-        nfs::NfsV2Client* pClient = nullptr;
-        QByteArray rootHandle;
-    };
-    void onFetchFinished(const QByteArray& mac,
-            MediaSlot slot,
-            const QByteArray& data,
-            const QString& error);
-    void reportPull(const nfs::NfsFileTransfer::Result& result);
 
-    /// A device number we may claim when talking to *target*'s dbserver.
-    ///
-    /// The server validates it: 1-4, belonging to a device actually on the
-    /// network, and not the player being asked. We do not announce, so there is
-    /// no number of our own to use and one has to be borrowed from another
-    /// player — which is exactly what a two-deck rig provides. Returns 0 when
-    /// there is nobody to borrow from, in which case artwork is unavailable
-    /// until we announce (Phase B step 10).
-    /// Create the master-phase controls and start the 30 Hz republish.
-    void startPhasePublishing();
-    int pickRequesterNumber(const ProLinkDevice& target) const;
-    /// Get or create the dbserver connection for one player. Network thread.
-    dbserver::DbServerClient* dbClientFor(const ProLinkDevice& device, int requesterNumber);
-    void runArtworkRequest(const ProLinkDevice& device,
-            MediaSlot slot,
-            quint32 artworkId,
-            const QString& localPath,
-            int requesterNumber);
+    /// The device number a MAC currently holds, or 0.
+    int numberFor(const QByteArray& mac) const;
 
-    /// Raw and parented to `this`, not parented_ptr: created lazily in start(),
-    /// and parented_ptr is deliberately non-assignable.
-    QThread* m_pThread = nullptr;
-    /// Lives on the network thread; never dereferenced from the GUI thread.
-    ProLinkDiscovery* m_pDiscovery = nullptr;
+    /// Opaque, so the generated `cxx` header does not reach every translation
+    /// unit that includes this one.
+    struct Impl;
+    std::unique_ptr<Impl> m_pImpl;
 
-    /// GUI-thread mirror of the peer table, kept in step by the three slots
-    /// above. Duplicating it is cheaper and far safer than locking the real one.
+    QTimer* m_pTimer = nullptr;
     QList<ProLinkDevice> m_devices;
-
-    /// `[ProLink],pull_db` -- fires the diagnostic above. Owned here rather than
-    /// by the library feature so the two layers stay independent, and so this
-    /// works even if the feature is not shown.
-    std::unique_ptr<ControlPushButton> m_pPullDbControl;
-
-    /// The tempo master's phase, published for the phase meter widget.
-    ///
-    /// Controls rather than a signal, because the consumer is a skin widget: it
-    /// already knows how to bind a ControlProxy, it repaints on its own timer,
-    /// and going through the control system means the values are visible in the
-    /// developer tools and usable from a controller mapping without any more
-    /// plumbing.
-    ///
-    /// `master_bar_phase` is 0..1 across the four-beat bar, or **-1 when there
-    /// is nothing to sync to** -- no master, or a master that is paused. -1
-    /// rather than 0 so the meter can say so instead of parking a marker on the
-    /// downbeat and looking authoritative about it.
-    std::unique_ptr<ControlObject> m_pMasterDeviceControl;
-    std::unique_ptr<ControlObject> m_pMasterBpmControl;
-    std::unique_ptr<ControlObject> m_pMasterBarPhaseControl;
-    /// Drives the three above. 30 Hz: fast enough that the marker moves
-    /// smoothly, slow enough to be free on a Pi.
-    QTimer* m_pPhaseTimer = nullptr;
-
-    /// Non-empty while a `[ProLink],pull_db` diagnostic is in flight, so its
-    /// extra logging and file-saving apply to that fetch and not to ordinary
-    /// browsing — which would otherwise hash and write a megabyte on every
-    /// expand.
-    QByteArray m_diagnosticPull;
-
-    /// File fetches are strictly serialised.
-    ///
-    /// They used to get an NfsV2Client each -- its own socket, its own portmap
-    /// and mount -- which was survivable for one file and catastrophic for the
-    /// artwork prefetch: a few hundred simultaneous clients, and every RPC on
-    /// the deck timed out, including the track the user was waiting for. One
-    /// mount per medium, one request at a time.
-    QList<FileRequest> m_fileQueue;
-    bool m_fileBusy = false;
-    QTimer* m_pQueueWatchdog = nullptr;
-    /// Keyed mac|slot. Lives on the network thread.
-    QHash<QString, MountedMedium> m_mounts;
-
-    /// One dbserver connection per player, keyed on MAC hex, living on the
-    /// network thread and parented into it. Both slots share it: which medium a
-    /// request is about is the descriptor's slot byte, not the connection (F37).
-    QHash<QString, dbserver::DbServerClient*> m_dbClients;
-    /// Cover fetches already asked for, keyed on local path, so the same image
-    /// is not queued twice. An album's tracks share one cover, so without this a
-    /// 651-track medium would ask for a few hundred images a dozen times each.
-    QSet<QString> m_artworkInFlight;
-
+    QHash<quint32, Pending> m_pending;
     bool m_listening = false;
-    QString m_lastError;
-
-    /// GUI-thread mirror of the announcer's claimed number. Pushed to us rather
-    /// than read across, like the peer table above.
     int m_announcedNumber = 0;
     QString m_announceDetail;
+    QString m_lastError;
     server::ServeStatus m_serveStatus;
 };
 

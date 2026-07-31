@@ -1,325 +1,192 @@
 #include "network/prolink/prolinknetworkservice.h"
 
-#include <QCryptographicHash>
 #include <QDir>
 #include <QFile>
-#include <QFileInfo>
-#include <QMetaObject>
+#include <QHostAddress>
 #include <QTimer>
-#include <QNetworkInterface>
+#include <exception>
 
 #include "moc_prolinknetworkservice.cpp"
-#include "control/controlobject.h"
-#include "control/controlpushbutton.h"
-#include "util/cmdlineargs.h"
-#include "network/prolink/dbserver/dbserverclient.h"
-#include "network/prolink/nfs/nfsfiletransfer.h"
-#include "network/prolink/nfs/nfsv2client.h"
-#include "network/prolink/prolinkdiscovery.h"
+#include "prolink-cxx/src/lib.rs.h"
 #include "util/logger.h"
 
 namespace {
 const mixxx::Logger kLogger("ProLinkNetworkService");
-/// How long shutdown waits for the network thread before giving up on it.
-/// Generous: the thread only ever has to finish one datagram or one timer tick,
-/// so exceeding this means something is genuinely wedged, and hanging Mixxx's
-/// exit would be worse than leaking a thread.
-constexpr int kThreadQuitTimeoutMs = 2000;
 
-/// Longest one queued file may take before the queue is assumed stuck. Well
-/// above a large track over NFS, and far below anything a user would wait out.
-constexpr int kQueueStallTimeoutMs = 150000;
-
-/// How often the master's phase is republished for the meter. 30 Hz.
-constexpr int kPhasePublishIntervalMs = 33;
-
-/// Our own address on the interface a device's announcements arrived on.
+/// How often the library's events are drained and its tables re-read.
 ///
-/// Not cosmetic on the deck, which has eth0 on the CDJ network and wlan0 on the
-/// house LAN: bind the wrong one and the kernel routes link-local traffic out
-/// the wrong NIC, after which every RPC times out with nothing to point at.
-QHostAddress localAddressFor(const mixxx::prolink::ProLinkDevice& device) {
-    const QNetworkInterface iface = QNetworkInterface::interfaceFromName(device.interfaceName);
-    for (const QNetworkAddressEntry& entry : iface.addressEntries()) {
-        if (entry.ip().protocol() == QAbstractSocket::IPv4Protocol) {
-            return entry.ip();
-        }
+/// A beat at 145 BPM is 414 ms apart and the phase meter interpolates between
+/// them, so this only has to be fast enough that a beat is not *late* — it is
+/// not what is being drawn. 50 ms costs one queue drain and two vector reads
+/// twenty times a second.
+constexpr int kPollIntervalMs = 50;
+
+mixxx::prolink::MediaSlot toMixxxSlot(::prolink::Slot slot) {
+    switch (slot) {
+    case ::prolink::Slot::Cd:
+        return mixxx::prolink::MediaSlot::Cd;
+    case ::prolink::Slot::Sd:
+        return mixxx::prolink::MediaSlot::Sd;
+    case ::prolink::Slot::Usb:
+        return mixxx::prolink::MediaSlot::Usb;
+    case ::prolink::Slot::Rekordbox:
+        return mixxx::prolink::MediaSlot::Rekordbox;
+    default:
+        return mixxx::prolink::MediaSlot::Empty;
     }
-    // Falling back to Any is better than refusing: on a single-homed host it is
-    // correct, and on a multi-homed one it at least tries.
-    return QHostAddress(QHostAddress::AnyIPv4);
 }
-/// Write a fetched file, atomically.
-///
-/// Via a .part and a rename, because SoundSource::getTypeFromFile classifies by
-/// *reading bytes* (QMimeDatabase::MatchContent). A half-written file would be
-/// classified as unsupported, and the failure would look like an unsupported
-/// format rather than an interrupted download.
-QString writeFetchedFile(const QString& path, const QByteArray& data) {
-    QFileInfo info(path);
-    if (!QDir().mkpath(info.absolutePath())) {
-        return QStringLiteral("could not create %1").arg(info.absolutePath());
+
+::prolink::Slot toRustSlot(mixxx::prolink::MediaSlot slot) {
+    switch (slot) {
+    case mixxx::prolink::MediaSlot::Cd:
+        return ::prolink::Slot::Cd;
+    case mixxx::prolink::MediaSlot::Sd:
+        return ::prolink::Slot::Sd;
+    case mixxx::prolink::MediaSlot::Rekordbox:
+        return ::prolink::Slot::Rekordbox;
+    case mixxx::prolink::MediaSlot::Usb:
+    default:
+        // USB for anything unnamed: it is the slot a deck browses first, and
+        // the one a caller means when it has not thought about it.
+        return ::prolink::Slot::Usb;
     }
-    const QString partPath = path + QStringLiteral(".part");
-    QFile part(partPath);
-    if (!part.open(QIODevice::WriteOnly | QIODevice::Truncate)) {
-        return QStringLiteral("could not write %1: %2").arg(partPath, part.errorString());
+}
+
+mixxx::prolink::DeviceKind toMixxxKind(::prolink::DeviceKind kind) {
+    switch (kind) {
+    case ::prolink::DeviceKind::Mixer:
+        return mixxx::prolink::DeviceKind::Mixer;
+    case ::prolink::DeviceKind::Rekordbox:
+        return mixxx::prolink::DeviceKind::RekordboxOrCdj3000;
+    case ::prolink::DeviceKind::Cdj:
+    default:
+        return mixxx::prolink::DeviceKind::Cdj;
     }
-    const qint64 written = part.write(data);
-    part.close();
-    if (written != data.size()) {
-        QFile::remove(partPath);
-        return QStringLiteral("short write to %1").arg(partPath);
-    }
-    QFile::remove(path);
-    if (!QFile::rename(partPath, path)) {
-        QFile::remove(partPath);
-        return QStringLiteral("could not rename %1").arg(partPath);
-    }
-    return QString();
+}
+
+QString toQString(const ::rust::String& text) {
+    return QString::fromUtf8(text.data(), static_cast<qsizetype>(text.size()));
+}
+
+mixxx::prolink::ProLinkDevice toMixxxDevice(const ::prolink::Device& device) {
+    mixxx::prolink::ProLinkDevice out;
+    out.mac = toQString(device.mac).toLatin1();
+    out.address = QHostAddress(toQString(device.address));
+    out.name = toQString(device.name);
+    out.nameRaw = out.name.toUtf8();
+    out.deviceNumber = device.number;
+    out.kind = toMixxxKind(device.kind);
+    out.online = device.online;
+    return out;
 }
 } // namespace
 
 namespace mixxx {
 namespace prolink {
 
+/// Everything that would otherwise drag the generated bridge header into every
+/// translation unit that includes ours.
+struct ProLinkNetworkService::Impl {
+    /// Null until `start()`, and again after `shutdown()`.
+    ///
+    /// A `rust::Box` has no empty state — it is a non-null owning pointer by
+    /// construction — so the optionality lives here rather than in the Box.
+    std::unique_ptr<::rust::Box<::prolink::Session>> pSession;
+
+    void stop() {
+        // Dropping the Box drops the session, which releases the device number
+        // and closes the sockets.
+        pSession.reset();
+    }
+};
+
 ProLinkNetworkService::ProLinkNetworkService(QObject* parent)
         : QObject(parent),
-          m_pPullDbControl(std::make_unique<ControlPushButton>(
-                  ConfigKey(QStringLiteral("[ProLink]"), QStringLiteral("pull_db")))) {
-    connect(m_pPullDbControl.get(),
-            &ControlPushButton::valueChanged,
-            this,
-            [this](double value) {
-                if (value > 0) {
-                    pullDatabase();
-                }
-            });
-}
-
-void ProLinkNetworkService::startPhasePublishing() {
-    if (m_pPhaseTimer) {
-        return;
-    }
-    m_pMasterDeviceControl = std::make_unique<ControlObject>(
-            ConfigKey(QStringLiteral("[ProLink]"), QStringLiteral("master_device")));
-    m_pMasterBpmControl = std::make_unique<ControlObject>(
-            ConfigKey(QStringLiteral("[ProLink]"), QStringLiteral("master_bpm")));
-    m_pMasterBarPhaseControl = std::make_unique<ControlObject>(
-            ConfigKey(QStringLiteral("[ProLink]"), QStringLiteral("master_bar_phase")));
-    m_pMasterDeviceControl->setReadOnly();
-    m_pMasterBpmControl->setReadOnly();
-    m_pMasterBarPhaseControl->setReadOnly();
-    m_pMasterBarPhaseControl->forceSet(-1.0);
-
-    m_pPhaseTimer = new QTimer(this);
-    m_pPhaseTimer->setInterval(kPhasePublishIntervalMs);
-    connect(m_pPhaseTimer, &QTimer::timeout, this, [this]() {
-        if (!m_pDiscovery) {
-            return;
-        }
-        // Read across from the GUI thread, which is not how anything else here
-        // talks to the network thread. Deliberate: these are three plain
-        // doubles behind trivial getters, read far more often than they change,
-        // and hopping a queued signal 30 times a second to move a marker would
-        // cost more than it protects. The worst case is one frame of a marker
-        // drawn from a phase a millisecond stale.
-        m_pMasterDeviceControl->forceSet(m_pDiscovery->masterDevice());
-        m_pMasterBpmControl->forceSet(m_pDiscovery->masterBpm());
-        m_pMasterBarPhaseControl->forceSet(m_pDiscovery->masterBarPhase());
-    });
-    m_pPhaseTimer->start();
+          m_pImpl(std::make_unique<Impl>()) {
 }
 
 ProLinkNetworkService::~ProLinkNetworkService() {
-    // Idempotent, so this is a backstop rather than the intended path: callers
-    // should shutdown() explicitly while they are still fully constructed.
     shutdown();
 }
 
 void ProLinkNetworkService::start() {
-    if (m_pThread) {
+    if (m_pImpl->pSession) {
+        return;
+    }
+    try {
+        ::prolink::Config config = ::prolink::default_config();
+        // Announcing is what makes players unicast their status to us, and
+        // status is the only place the loaded track, the play state and the
+        // tempo master are published. Without it we would see beats and
+        // nothing else.
+        config.announce = true;
+        m_pImpl->pSession = std::make_unique<::rust::Box<::prolink::Session>>(
+                ::prolink::open(config));
+    } catch (const std::exception& error) {
+        m_lastError = QString::fromUtf8(error.what());
+        m_listening = false;
+        kLogger.warning() << "could not start:" << m_lastError;
+        emit listeningChanged(false, m_lastError);
         return;
     }
 
-    m_pThread = new QThread(this);
-    m_pThread->setObjectName(QStringLiteral("ProLink Net"));
+    m_listening = true;
+    m_lastError.clear();
+    m_announcedNumber = static_cast<int>((*m_pImpl->pSession)->device_number());
+    m_announceDetail = m_announcedNumber > 0
+            ? tr("announced as player %1").arg(m_announcedNumber)
+            : tr("listening without a player number");
+    kLogger.info() << "started;" << m_announceDetail;
 
-    // Constructed here, then moved. Its socket is *not* created yet -- that
-    // happens in the lambda below, which runs on the network thread, because a
-    // QUdpSocket belongs to whichever thread created it and Qt will not service
-    // it from another.
-    m_pDiscovery = new ProLinkDiscovery();
-    m_pDiscovery->moveToThread(m_pThread);
+    emit listeningChanged(true, QString());
+    emit announceChanged(m_announcedNumber, m_announceDetail);
 
-    // Queued automatically, sender and receiver being on different threads.
-    // Every payload is a value type, so each arrives as a plain copy.
-    connect(m_pDiscovery,
-            &ProLinkDiscovery::deviceFound,
-            this,
-            &ProLinkNetworkService::onDeviceFound);
-    connect(m_pDiscovery,
-            &ProLinkDiscovery::deviceChanged,
-            this,
-            &ProLinkNetworkService::onDeviceChanged);
-    connect(m_pDiscovery,
-            &ProLinkDiscovery::deviceLost,
-            this,
-            &ProLinkNetworkService::onDeviceLost);
-    connect(m_pDiscovery,
-            &ProLinkDiscovery::announceStateChanged,
-            this,
-            &ProLinkNetworkService::onAnnounceStateChanged);
-    connect(m_pDiscovery,
-            &ProLinkDiscovery::mediaInfoFound,
-            this,
-            &ProLinkNetworkService::mediaInfoFound);
-    // Mirrored rather than read across, like the peer table: the whole struct
-    // arrives as a copy on a queued connection, so the GUI never touches an
-    // object the network thread is mutating.
-    connect(m_pDiscovery,
-            &ProLinkDiscovery::serveStatusChanged,
-            this,
-            [this](const server::ServeStatus& status) {
-                m_serveStatus = status;
-                emit serveStatusChanged(status);
-            });
-
-    m_pThread->start();
-    startPhasePublishing();
-
-    // Bind on the network thread, then hop the outcome back here rather than
-    // writing our own members from over there.
-    ProLinkDiscovery* pDiscovery = m_pDiscovery;
-    QMetaObject::invokeMethod(
-            m_pDiscovery,
-            [this, pDiscovery] {
-                const bool listening = pDiscovery->start();
-                const QString error = pDiscovery->lastError();
-                QMetaObject::invokeMethod(
-                        this,
-                        [this, listening, error] {
-                            m_listening = listening;
-                            m_lastError = error;
-                            emit listeningChanged(listening, error);
-                        },
-                        Qt::QueuedConnection);
-            },
-            Qt::QueuedConnection);
+    if (m_pTimer == nullptr) {
+        m_pTimer = new QTimer(this);
+        connect(m_pTimer, &QTimer::timeout, this, &ProLinkNetworkService::poll);
+    }
+    m_pTimer->start(kPollIntervalMs);
 }
 
 void ProLinkNetworkService::shutdown() {
-    if (!m_pThread) {
-        return;
+    if (m_pTimer != nullptr) {
+        m_pTimer->stop();
     }
-    if (m_pDiscovery) {
-        // Blocking, so the socket is provably closed before the thread is asked
-        // to quit. Safe from the GUI thread because the network thread is purely
-        // event-driven and never blocks waiting on us, so there is no inversion
-        // to deadlock on.
-        //
-        // Functor form, not a method-name string: checked at compile time, so a
-        // rename cannot quietly turn this into a no-op.
-        ProLinkDiscovery* pDiscovery = m_pDiscovery;
-        QMetaObject::invokeMethod(
-                m_pDiscovery,
-                [pDiscovery] { pDiscovery->stop(); },
-                Qt::BlockingQueuedConnection);
-    }
-
-    // Drop queued work before the thread goes: a request that starts during
-    // shutdown would build sockets on a thread about to stop servicing them.
-    m_fileQueue.clear();
-    m_fileBusy = false;
-    m_mounts.clear();
-    m_artworkInFlight.clear();
-    // The clients themselves are children of m_pDiscovery and go with it below;
-    // only our index of them is dropped here.
-    m_dbClients.clear();
-
-    if (m_pPhaseTimer) {
-        m_pPhaseTimer->stop();
-    }
-
-    m_pThread->quit();
-    const bool exited = m_pThread->wait(kThreadQuitTimeoutMs);
-    if (!exited) {
-        kLogger.warning() << "network thread did not exit in" << kThreadQuitTimeoutMs
-                          << "ms; leaking it rather than hanging shutdown";
-    }
-
-    // Delete outright rather than via deleteLater(): the thread's event loop has
-    // already exited, so a posted deletion event would never be dispatched and
-    // the object would simply leak. Deleting directly is safe precisely because
-    // wait() returned -- nothing is running on it any more.
-    //
-    // If wait() timed out we leak deliberately: destroying an object under a
-    // thread still using it is a crash, and a leak on the way out is not.
-    if (exited) {
-        delete m_pDiscovery;
-    }
-    m_pDiscovery = nullptr;
-
-    delete m_pThread;
-    m_pThread = nullptr;
-
-    m_devices.clear();
+    const bool wasListening = m_listening;
+    m_pImpl->stop();
     m_listening = false;
+    m_announcedNumber = 0;
+    m_announceDetail.clear();
+
+    // Report what is gone, so nothing above keeps drawing a device that is no
+    // longer there.
+    const QList<ProLinkDevice> had = m_devices;
+    m_devices.clear();
+    m_pending.clear();
+    for (const ProLinkDevice& device : had) {
+        emit deviceLost(device.mac);
+    }
+
+    if (wasListening) {
+        emit listeningChanged(false, QString());
+        emit announceChanged(0, QString());
+    }
 }
 
 void ProLinkNetworkService::refresh() {
-    if (!m_pDiscovery) {
+    if (!m_pImpl->pSession) {
+        start();
         return;
     }
-    ProLinkDiscovery* pDiscovery = m_pDiscovery;
-    QMetaObject::invokeMethod(
-            m_pDiscovery,
-            [pDiscovery] {
-                pDiscovery->forgetStaleDevices();
-                // Media can be swapped without the device going anywhere, so a
-                // refresh has to re-ask rather than trust the cached names.
-                pDiscovery->queryAllMedia(/*force*/ true);
-            },
-            Qt::QueuedConnection);
+    (*m_pImpl->pSession)->refresh();
 }
 
-void ProLinkNetworkService::fetchDatabase(const QByteArray& mac, MediaSlot slot) {
-    ProLinkDevice target;
-    for (const ProLinkDevice& device : m_devices) {
-        if (device.mac == mac) {
-            target = device;
-            break;
-        }
+int ProLinkNetworkService::numberFor(const QByteArray& mac) const {
+    if (!m_pImpl->pSession) {
+        return 0;
     }
-    if (!target.isValid() || !m_pDiscovery) {
-        emit databaseFetched(mac, slot, QByteArray(), tr("player is no longer on the network"));
-        return;
-    }
-    if (!target.online) {
-        emit databaseFetched(mac, slot, QByteArray(), tr("player is offline"));
-        return;
-    }
-
-    // Hop onto the network thread: everything below opens sockets.
-    const ProLinkDevice device = target;
-    QMetaObject::invokeMethod(
-            m_pDiscovery,
-            [this, device, slot] { fetchOnNetworkThread(device, slot); },
-            Qt::QueuedConnection);
-}
-
-void ProLinkNetworkService::pullDatabase(MediaSlot slot) {
-    // The [ProLink],pull_db diagnostic: first player, log the result. Kept
-    // deliberately separate from the browse path so it stays usable when
-    // browsing is broken -- which is exactly when it is worth having.
-    for (const ProLinkDevice& device : m_devices) {
-        if (device.isPlayer() && device.online) {
-            m_diagnosticPull = device.mac;
-            fetchDatabase(device.mac, slot);
-            return;
-        }
-    }
-    kLogger.warning() << "pull_db: no player on the network to pull from";
+    return static_cast<int>(
+            (*m_pImpl->pSession)->device_number_of(::rust::Str(mac.constData(), mac.size())));
 }
 
 void ProLinkNetworkService::fetchFile(const QByteArray& mac,
@@ -327,530 +194,246 @@ void ProLinkNetworkService::fetchFile(const QByteArray& mac,
         const QString& remotePath,
         const QString& localPath,
         bool priority) {
-    ProLinkDevice target;
-    for (const ProLinkDevice& device : m_devices) {
-        if (device.mac == mac) {
-            target = device;
-            break;
-        }
+    Q_UNUSED(priority);
+    if (!m_pImpl->pSession) {
+        emit fileFetched(localPath, tr("Pro DJ Link is not running"));
+        return;
     }
-    if (!target.isValid() || !target.online || !m_pDiscovery) {
-        emit fileFetched(localPath, tr("player is no longer on the network"));
+    const int number = numberFor(mac);
+    if (number == 0) {
+        emit fileFetched(localPath, tr("that player is no longer on the network"));
         return;
     }
 
-    // Already queued? Asking twice is normal -- the artwork prefetch and a
-    // deliberate load can want the same cover -- and enqueuing it twice would
-    // fetch it twice and emit two results, one of which nobody is waiting for.
-    for (const FileRequest& queued : m_fileQueue) {
-        if (queued.localPath == localPath) {
-            return;
-        }
+    const QByteArray remote = remotePath.toUtf8();
+    const QByteArray local = localPath.toUtf8();
+    try {
+        const quint32 id = (*m_pImpl->pSession)
+                                   ->fetch_file(static_cast<::std::uint8_t>(number),
+                                           toRustSlot(slot),
+                                           ::rust::Str(remote.constData(), remote.size()),
+                                           ::rust::Str(local.constData(), local.size()));
+        Pending pending;
+        pending.isDatabase = false;
+        pending.mac = mac;
+        pending.slot = slot;
+        pending.localPath = localPath;
+        m_pending.insert(id, pending);
+    } catch (const std::exception& error) {
+        emit fileFetched(localPath, QString::fromUtf8(error.what()));
     }
-
-    FileRequest request;
-    request.device = target;
-    request.slot = slot;
-    request.remotePath = remotePath;
-    request.localPath = localPath;
-    if (priority) {
-        m_fileQueue.prepend(request);
-    } else {
-        m_fileQueue.append(request);
-    }
-    pumpFileQueue();
 }
 
-int ProLinkNetworkService::pickRequesterNumber(const ProLinkDevice& target) const {
-    Q_UNUSED(target);
-    // Our own, claimed through the virtual CDJ. Nothing else works.
-    //
-    // Borrowing another deck's number was the previous answer and it fails in
-    // the worst available way: the target accepts the Introduce and then
-    // silently ignores every request, because that number already has a session
-    // with it. Deck A browsing deck B's USB is enough to poison it -- covers
-    // load from one deck and not the other, with nothing in the log but a
-    // timeout. See research/04 section 2.3, fourth bullet.
-    return m_announcedNumber;
+void ProLinkNetworkService::fetchDatabase(const QByteArray& mac, MediaSlot slot) {
+    if (!m_pImpl->pSession) {
+        emit databaseFetched(mac, slot, QByteArray(), tr("Pro DJ Link is not running"));
+        return;
+    }
+    const int number = numberFor(mac);
+    if (number == 0) {
+        emit databaseFetched(
+                mac, slot, QByteArray(), tr("that player is no longer on the network"));
+        return;
+    }
+
+    // One file per (player, slot), so a second pull overwrites rather than
+    // accumulating copies of a database that is often several megabytes.
+    const QString localPath = QStringLiteral("%1/prolink-%2-%3.pdb")
+                                      .arg(QDir::tempPath(),
+                                              QString::fromLatin1(mac.toHex()),
+                                              QString::number(static_cast<int>(slot)));
+    const QByteArray local = localPath.toUtf8();
+    try {
+        const quint32 id = (*m_pImpl->pSession)
+                                   ->fetch_database(static_cast<::std::uint8_t>(number),
+                                           toRustSlot(slot),
+                                           ::rust::Str(local.constData(), local.size()));
+        Pending pending;
+        pending.isDatabase = true;
+        pending.mac = mac;
+        pending.slot = slot;
+        pending.localPath = localPath;
+        m_pending.insert(id, pending);
+    } catch (const std::exception& error) {
+        emit databaseFetched(mac, slot, QByteArray(), QString::fromUtf8(error.what()));
+    }
+}
+
+void ProLinkNetworkService::pullDatabase(MediaSlot slot) {
+    if (!m_pImpl->pSession) {
+        return;
+    }
+    // The first player that says it has something in that slot. Occupancy is
+    // published in status packets and nowhere else, which is why this reads
+    // the library's view rather than guessing from the device list.
+    for (const ::prolink::MediaInfo& info : (*m_pImpl->pSession)->media()) {
+        if (!info.has_media || toMixxxSlot(info.slot) != slot) {
+            continue;
+        }
+        for (const ProLinkDevice& device : m_devices) {
+            if (device.deviceNumber == static_cast<int>(info.device)) {
+                fetchDatabase(device.mac, slot);
+                return;
+            }
+        }
+    }
+    kLogger.info() << "no player has media in that slot yet";
 }
 
 void ProLinkNetworkService::fetchArtwork(const QByteArray& mac,
         MediaSlot slot,
         quint32 artworkId,
         const QString& localPath) {
-    if (artworkId == 0 || localPath.isEmpty() || QFile::exists(localPath)) {
+    if (!m_pImpl->pSession) {
+        emit artworkFetched(localPath, tr("Pro DJ Link is not running"));
         return;
     }
-    if (m_artworkInFlight.contains(localPath)) {
+    const int number = numberFor(mac);
+    if (number == 0) {
+        emit artworkFetched(localPath, tr("that player is no longer on the network"));
         return;
     }
 
-    ProLinkDevice target;
-    for (const ProLinkDevice& device : m_devices) {
-        if (device.mac == mac) {
-            target = device;
+    // Artwork comes over the dbserver connection rather than NFS: it is small,
+    // and this blocks for one round trip rather than returning an id.
+    const QByteArray local = localPath.toUtf8();
+    try {
+        (*m_pImpl->pSession)
+                ->fetch_artwork(static_cast<::std::uint8_t>(number),
+                        toRustSlot(slot),
+                        artworkId,
+                        ::rust::Str(local.constData(), local.size()));
+        emit artworkFetched(localPath, QString());
+    } catch (const std::exception& error) {
+        emit artworkFetched(localPath, QString::fromUtf8(error.what()));
+    }
+}
+
+void ProLinkNetworkService::poll() {
+    if (!m_pImpl->pSession) {
+        return;
+    }
+
+    for (const ::prolink::Event& event : (*m_pImpl->pSession)->drain_events()) {
+        if (event.dropped > 0) {
+            // The queue overflowed, so the running picture is stale and the
+            // table has to be re-read rather than patched. Clearing it makes
+            // the diff below re-announce everything.
+            kLogger.debug() << "missed" << event.dropped << "events; re-reading";
+            m_devices.clear();
+        }
+        switch (event.kind) {
+        case ::prolink::EventKind::MediaInfo:
+            syncMedia(static_cast<int>(event.device), toMixxxSlot(event.slot));
+            break;
+        case ::prolink::EventKind::TransferProgress: {
+            const auto found = m_pending.constFind(event.transfer);
+            if (found != m_pending.constEnd()) {
+                emit fileFetchProgress(found->localPath,
+                        static_cast<quint32>(event.done),
+                        static_cast<quint32>(event.total));
+            }
+            break;
+        }
+        case ::prolink::EventKind::TransferDone: {
+            const Pending pending = m_pending.take(event.transfer);
+            const QString error = event.ok ? QString() : toQString(event.detail);
+            if (!error.isEmpty()) {
+                m_lastError = error;
+            }
+            if (pending.isDatabase) {
+                // The caller parses the bytes and never wants the file, so
+                // the temp copy is read back and dropped here rather than
+                // becoming something it has to clean up.
+                QByteArray data;
+                QString reason = error;
+                if (reason.isEmpty()) {
+                    QFile file(pending.localPath);
+                    if (file.open(QIODevice::ReadOnly)) {
+                        data = file.readAll();
+                        file.close();
+                    } else {
+                        reason = tr("could not read the database back: %1")
+                                         .arg(file.errorString());
+                    }
+                    QFile::remove(pending.localPath);
+                }
+                emit databaseFetched(pending.mac, pending.slot, data, reason);
+            } else {
+                emit fileFetched(pending.localPath, error);
+            }
+            break;
+        }
+        default:
+            // Beats, player state and tempo master are read from the tables
+            // below rather than acted on here.
             break;
         }
     }
-    if (!target.isValid() || !target.online || !m_pDiscovery) {
-        emit artworkFetched(localPath, tr("player is no longer on the network"));
-        return;
-    }
 
-    const int requesterNumber = pickRequesterNumber(target);
-    if (requesterNumber == 0) {
-        // We have not finished claiming a number. Transient -- the handshake
-        // takes about four seconds from the first keep-alive we hear -- so this
-        // is not an error so much as "too early", and the medium's next browse
-        // will pick the covers up.
-        emit artworkFetched(localPath, tr("not announced yet"));
-        return;
-    }
-
-    m_artworkInFlight.insert(localPath);
-    const ProLinkDevice device = target;
-    QMetaObject::invokeMethod(
-            m_pDiscovery,
-            [this, device, slot, artworkId, localPath, requesterNumber] {
-                runArtworkRequest(device, slot, artworkId, localPath, requesterNumber);
-            },
-            Qt::QueuedConnection);
+    syncDevices();
 }
 
-dbserver::DbServerClient* ProLinkNetworkService::dbClientFor(
-        const ProLinkDevice& device, int requesterNumber) {
-    const QString key = QString::fromLatin1(device.mac.toHex());
-    auto existing = m_dbClients.constFind(key);
-    if (existing != m_dbClients.constEnd()) {
-        // The borrowed number can change under us -- the deck we took it from
-        // can be renumbered or leave -- and the server bound it at Introduce, so
-        // the client re-handshakes rather than sending requests under a number
-        // the peer no longer accepts.
-        (*existing)->setRequesterNumber(requesterNumber);
-        return *existing;
+void ProLinkNetworkService::syncDevices() {
+    QList<ProLinkDevice> fresh;
+    for (const ::prolink::Device& device : (*m_pImpl->pSession)->devices()) {
+        fresh.append(toMixxxDevice(device));
     }
-    auto* pClient = new dbserver::DbServerClient(device.address,
-            localAddressFor(device),
-            requesterNumber,
-            m_pDiscovery);
-    m_dbClients.insert(key, pClient);
-    return pClient;
+
+    // Diffed rather than replaced wholesale, because the library feature
+    // listens for found/changed/lost and rebuilding its tree on every poll
+    // would collapse the user's selection twenty times a second.
+    for (const ProLinkDevice& now : fresh) {
+        bool seen = false;
+        for (const ProLinkDevice& before : m_devices) {
+            if (before.mac != now.mac) {
+                continue;
+            }
+            seen = true;
+            if (before.deviceNumber != now.deviceNumber || before.name != now.name ||
+                    before.online != now.online || before.address != now.address) {
+                emit deviceChanged(now);
+            }
+            break;
+        }
+        if (!seen) {
+            emit deviceFound(now);
+        }
+    }
+    for (const ProLinkDevice& before : m_devices) {
+        bool still = false;
+        for (const ProLinkDevice& now : fresh) {
+            if (before.mac == now.mac) {
+                still = true;
+                break;
+            }
+        }
+        if (!still) {
+            emit deviceLost(before.mac);
+        }
+    }
+
+    m_devices = fresh;
 }
 
-void ProLinkNetworkService::runArtworkRequest(const ProLinkDevice& device,
-        MediaSlot slot,
-        quint32 artworkId,
-        const QString& localPath,
-        int requesterNumber) {
-    dbClientFor(device, requesterNumber)
-            ->requestArtwork(slot,
-                    artworkId,
-                    [this, localPath](
-                            bool ok, const QByteArray& image, const QString& error) {
-                        // A track with no art answers with an empty blob. That
-                        // is a success: nothing to write, and no error to report
-                        // for a cover that does not exist.
-                        const QString outcome = !ok ? error
-                                : image.isEmpty()   ? QString()
-                                                    : writeFetchedFile(localPath, image);
-                        QMetaObject::invokeMethod(
-                                this,
-                                [this, localPath, outcome] {
-                                    m_artworkInFlight.remove(localPath);
-                                    emit artworkFetched(localPath, outcome);
-                                },
-                                Qt::QueuedConnection);
-                    });
-}
-
-void ProLinkNetworkService::pumpFileQueue() {
-    if (m_fileBusy || m_fileQueue.isEmpty() || !m_pDiscovery) {
-        return;
-    }
-    // A stalled queue is silent by nature -- work simply stops -- so it gets a
-    // watchdog rather than being trusted. If a request neither completes nor
-    // fails within this, something below dropped a callback and the queue would
-    // otherwise sit idle with hundreds of entries behind it.
-    if (!m_pQueueWatchdog) {
-        m_pQueueWatchdog = new QTimer(this);
-        m_pQueueWatchdog->setSingleShot(true);
-        m_pQueueWatchdog->setInterval(kQueueStallTimeoutMs);
-        connect(m_pQueueWatchdog, &QTimer::timeout, this, [this]() {
-            if (!m_fileBusy) {
+void ProLinkNetworkService::syncMedia(int deviceNumber, MediaSlot slot) {
+    for (const ::prolink::MediaInfo& found : (*m_pImpl->pSession)->media()) {
+        if (static_cast<int>(found.device) != deviceNumber ||
+                toMixxxSlot(found.slot) != slot) {
+            continue;
+        }
+        MediaInfo info;
+        info.name = toQString(found.volume_name);
+        info.trackCount = found.track_count;
+        info.playlistCount = found.playlist_count;
+        for (const ProLinkDevice& device : m_devices) {
+            if (device.deviceNumber == deviceNumber) {
+                emit mediaInfoFound(device.mac, slot, info);
                 return;
             }
-            kLogger.warning() << "file queue stalled with" << m_fileQueue.size()
-                              << "requests left; releasing it";
-            m_fileBusy = false;
-            pumpFileQueue();
-        });
-    }
-    m_pQueueWatchdog->start();
-    m_fileBusy = true;
-    const FileRequest request = m_fileQueue.takeFirst();
-    QMetaObject::invokeMethod(
-            m_pDiscovery,
-            [this, request] { runFileRequest(request); },
-            Qt::QueuedConnection);
-}
-
-void ProLinkNetworkService::runFileRequest(const FileRequest& request) {
-    const QString key = QStringLiteral("%1|%2")
-                                .arg(QString::fromLatin1(request.device.mac.toHex()))
-                                .arg(static_cast<int>(request.slot));
-    const QString localPath = request.localPath;
-
-    // A cached mount does not stay valid indefinitely. After a few dozen
-    // requests a player starts answering NFSERR_STALE to every LOOKUP made
-    // against handles derived from it -- 495 of 576 cover fetches failed that
-    // way, all on the last lookup of the path, with the successes being simply
-    // whichever requests ran before the mount went sour.
-    //
-    // The documented remedy is to re-mount and retry once, which also covers
-    // the case this error was originally expected for: media swapped mid-
-    // session. Retried at most once per request, so a file that is genuinely
-    // gone fails rather than looping.
-    auto retryAfterRemount = [this, request, key]() {
-        kLogger.info() << "mount went stale; re-mounting and retrying"
-                       << request.remotePath;
-        auto stale = m_mounts.take(key);
-        if (stale.pClient) {
-            stale.pClient->forgetDirectoryHandles();
-            stale.pClient->deleteLater();
-        }
-        FileRequest again = request;
-        again.remounted = true;
-        QMetaObject::invokeMethod(
-                this,
-                [this, again] {
-                    m_fileBusy = false;
-                    m_fileQueue.prepend(again);
-                    pumpFileQueue();
-                },
-                Qt::QueuedConnection);
-    };
-
-    // Report, release the slot, and start the next one. Every exit path goes
-    // through here so the queue cannot stall on a failure.
-    auto finish = [this, localPath](const QString& error) {
-        QMetaObject::invokeMethod(
-                this,
-                [this, localPath, error] {
-                    m_fileBusy = false;
-                    if (!error.isEmpty()) {
-                        // Logged here rather than left to the caller: most
-                        // fetches are fire-and-forget prefetches whose results
-                        // nobody looks at, and an unlogged failure there is
-                        // indistinguishable from one that never ran.
-                        kLogger.warning() << "fetch of" << localPath << "failed:" << error;
-                    }
-                    emit fileFetched(localPath, error);
-                    pumpFileQueue();
-                },
-                Qt::QueuedConnection);
-    };
-
-    const bool canRetry = !request.remounted;
-    auto withRoot = [this, request, key, localPath, finish, retryAfterRemount, canRetry](
-                            const QByteArray& rootHandle) {
-        nfs::NfsV2Client* pClient = m_mounts.value(key).pClient;
-        auto* pTransfer = new nfs::NfsFileTransfer(pClient, pClient);
-        pTransfer->setProgressCallback([this, localPath](quint32 done, quint32 total) {
-            QMetaObject::invokeMethod(
-                    this,
-                    [this, localPath, done, total] {
-                        emit fileFetchProgress(localPath, done, total);
-                    },
-                    Qt::QueuedConnection);
-        });
-        pClient->resolvePath(rootHandle,
-                request.remotePath,
-                [this, pClient, pTransfer, localPath, finish, retryAfterRemount, canRetry](
-                        const nfs::NfsV2Client::Outcome<QByteArray>& file) {
-                    if (!file.ok) {
-                        pTransfer->deleteLater();
-                        if (canRetry && file.error.contains(QLatin1String("NFSERR_STALE"))) {
-                            retryAfterRemount();
-                            return;
-                        }
-                        finish(file.error);
-                        return;
-                    }
-                    pClient->getAttributes(file.value,
-                            [this, pTransfer, localPath, file, finish](
-                                    const nfs::NfsV2Client::Outcome<
-                                            nfs::FileAttributes>& attrs) {
-                                if (!attrs.ok) {
-                                    pTransfer->deleteLater();
-                                    finish(attrs.error);
-                                    return;
-                                }
-                                pTransfer->fetch(file.value,
-                                        attrs.value.size,
-                                        [pTransfer, localPath, finish](
-                                                const nfs::NfsFileTransfer::Result&
-                                                        result) {
-                                            const QString error = result.ok
-                                                    ? writeFetchedFile(localPath,
-                                                              result.data)
-                                                    : result.error;
-                                            pTransfer->deleteLater();
-                                            finish(error);
-                                        });
-                            });
-                });
-    };
-
-    // Reuse the mount if we have one. Mounting per file was what turned the
-    // artwork prefetch into a few hundred simultaneous portmap conversations.
-    const auto mounted = m_mounts.constFind(key);
-    if (mounted != m_mounts.constEnd() && !mounted->rootHandle.isEmpty()) {
-        withRoot(mounted->rootHandle);
-        return;
-    }
-
-    auto* pClient = new nfs::NfsV2Client(
-            request.device.address, localAddressFor(request.device), m_pDiscovery);
-    MountedMedium record;
-    record.pClient = pClient;
-    m_mounts.insert(key, record);
-
-    pClient->mount(exportPathForSlot(request.slot),
-            [this, key, withRoot, finish](
-                    const nfs::NfsV2Client::Outcome<QByteArray>& result) {
-                if (!result.ok) {
-                    // Drop the record so the next request retries the mount
-                    // rather than inheriting a broken one.
-                    auto record = m_mounts.take(key);
-                    if (record.pClient) {
-                        record.pClient->deleteLater();
-                    }
-                    finish(result.error);
-                    return;
-                }
-                m_mounts[key].rootHandle = result.value;
-                withRoot(result.value);
-            });
-}
-
-void ProLinkNetworkService::fetchOnNetworkThread(
-        const ProLinkDevice& device, MediaSlot slot) {
-    const QString exportPath = exportPathForSlot(slot);
-    const QByteArray mac = device.mac;
-    kLogger.info() << "fetching" << exportPath << "from" << device.label();
-
-    // The transfer is a child of the client, so one deleteLater takes both and
-    // Qt destroys the child while the parent is still intact.
-    auto* pNfs = new nfs::NfsV2Client(device.address, localAddressFor(device), m_pDiscovery);
-    auto* pTransfer = new nfs::NfsFileTransfer(pNfs, pNfs);
-
-    // Every failure path funnels through here, so none can forget to report or
-    // to clean up -- with a chain this deep that is not a hypothetical.
-    auto fail = [this, pNfs, mac, slot](const QString& error) {
-        kLogger.warning() << "fetch failed:" << error;
-        QMetaObject::invokeMethod(
-                this,
-                [this, mac, slot, error] { onFetchFinished(mac, slot, QByteArray(), error); },
-                Qt::QueuedConnection);
-        pNfs->deleteLater();
-    };
-
-    pNfs->mount(exportPath,
-            [this, pNfs, pTransfer, exportPath, mac, slot, fail](
-                    const nfs::NfsV2Client::Outcome<QByteArray>& mounted) {
-                if (!mounted.ok) {
-                    fail(mounted.error);
-                    return;
-                }
-                pNfs->resolvePath(mounted.value,
-                        QStringLiteral("PIONEER/rekordbox/export.pdb"),
-                        [this, pNfs, pTransfer, exportPath, mac, slot, fail](
-                                const nfs::NfsV2Client::Outcome<QByteArray>& file) {
-                            if (!file.ok) {
-                                fail(file.error);
-                                return;
-                            }
-                            pNfs->getAttributes(file.value,
-                                    [this, pNfs, pTransfer, exportPath, mac, slot, file, fail](
-                                            const nfs::NfsV2Client::Outcome<
-                                                    nfs::FileAttributes>& attrs) {
-                                        if (!attrs.ok) {
-                                            fail(attrs.error);
-                                            return;
-                                        }
-                                        pTransfer->fetch(file.value,
-                                                attrs.value.size,
-                                                [this, pNfs, exportPath, mac, slot](
-                                                        const nfs::NfsFileTransfer::
-                                                                Result& result) {
-                                                    reportPull(result);
-                                                    const QByteArray data =
-                                                            result.ok ? result.data
-                                                                      : QByteArray();
-                                                    const QString error =
-                                                            result.ok ? QString()
-                                                                      : result.error;
-                                                    QMetaObject::invokeMethod(
-                                                            this,
-                                                            [this, mac, slot, data, error] {
-                                                                onFetchFinished(mac,
-                                                                        slot,
-                                                                        data,
-                                                                        error);
-                                                            },
-                                                            Qt::QueuedConnection);
-                                                    pNfs->unmount(exportPath);
-                                                    pNfs->deleteLater();
-                                                });
-                                    });
-                        });
-            });
-}
-
-void ProLinkNetworkService::reportPull(const nfs::NfsFileTransfer::Result& result) {
-    if (m_diagnosticPull.isEmpty()) {
-        // An ordinary browse fetch. Hashing and writing a megabyte on every
-        // expand would be pure cost, so just say what happened.
-        if (result.ok) {
-            kLogger.info() << "fetched" << result.data.size() << "bytes in"
-                           << result.reads << "reads," << result.elapsedMs << "ms";
         }
         return;
     }
-    m_diagnosticPull.clear();
-
-    if (!result.ok) {
-        kLogger.warning() << "pull_db FAILED after" << result.reads
-                          << "reads:" << result.error;
-        return;
-    }
-
-    // Two digests, because one is not enough to interpret.
-    //
-    // A player rewrites its own bookkeeping into the pdb header as it operates:
-    // a play count or a history entry lands in the sequence counter at 0x14, and
-    // pulling the same database twice produced files differing in exactly that
-    // window and nothing else (F13). So a raw digest that fails to match the
-    // stick proves nothing on its own -- the deck may simply have written to it
-    // between the fetch and the eject.
-    //
-    // The stable digest zeroes 0x10..0x18 before hashing. Raw differs but stable
-    // matches -> the player's own bookkeeping, and the transfer was perfect.
-    // Both differ -> a real bug. One line each, no file comparison needed.
-    constexpr int kVolatileStart = 0x10;
-    constexpr int kVolatileEnd = 0x18;
-    const QByteArray digest =
-            QCryptographicHash::hash(result.data, QCryptographicHash::Sha1).toHex();
-    QByteArray stabilised = result.data;
-    if (stabilised.size() >= kVolatileEnd) {
-        memset(stabilised.data() + kVolatileStart, 0, kVolatileEnd - kVolatileStart);
-    }
-    const QByteArray stableDigest =
-            QCryptographicHash::hash(stabilised, QCryptographicHash::Sha1).toHex();
-
-    // Keep the bytes too: without them a digest mismatch can only be guessed at,
-    // and `cmp -l` against the stick is the difference between "the header
-    // moved" and "the transfer is broken".
-    const QString savedPath = QDir(CmdlineArgs::Instance().getSettingsPath())
-                                      .filePath(QStringLiteral("prolink-pull.pdb"));
-    QFile saved(savedPath);
-    if (saved.open(QIODevice::WriteOnly | QIODevice::Truncate)) {
-        saved.write(result.data);
-        saved.close();
-        kLogger.info() << "pull_db saved:" << savedPath;
-    } else {
-        kLogger.warning() << "pull_db: could not save to" << savedPath << ":"
-                          << saved.errorString();
-    }
-
-    const double seconds = result.elapsedMs / 1000.0;
-    const double kib = result.data.size() / 1024.0;
-    kLogger.info() << "pull_db OK:" << result.data.size() << "bytes in" << result.reads
-                   << "reads," << result.shortReads << "short," << result.elapsedMs
-                   << "ms," << (seconds > 0 ? qRound(kib / seconds) : 0) << "KiB/s";
-    kLogger.info() << "pull_db sha1       :" << digest;
-    kLogger.info() << "pull_db sha1 stable:" << stableDigest
-                   << "(header 0x10-0x18 zeroed; compare this one if the raw "
-                      "digests differ)";
-}
-
-void ProLinkNetworkService::onFetchFinished(const QByteArray& mac,
-        MediaSlot slot,
-        const QByteArray& data,
-        const QString& error) {
-    emit databaseFetched(mac, slot, data, error);
-}
-
-void ProLinkNetworkService::onDeviceFound(const ProLinkDevice& device) {
-    m_devices.append(device);
-    // First player seen is also the first moment we know which NIC faces the
-    // rig, and announcing needs that: the deck Pi has eth0 on the CDJ network
-    // and wlan0 on the house LAN, and a broadcast out the wrong one is both
-    // useless and rude. Idempotent, so calling it per device is fine.
-    if (m_pDiscovery && device.isPlayer()) {
-        ProLinkDiscovery* pDiscovery = m_pDiscovery;
-        QMetaObject::invokeMethod(
-                m_pDiscovery,
-                [pDiscovery] { pDiscovery->startAnnouncing(); },
-                Qt::QueuedConnection);
-    }
-    emit deviceFound(device);
-}
-
-void ProLinkNetworkService::onAnnounceStateChanged(
-        int state, int deviceNumber, const QString& detail) {
-    m_announcedNumber = deviceNumber;
-    m_announceDetail = detail;
-    emit announceChanged(deviceNumber, detail);
-    if (deviceNumber > 0) {
-        kLogger.info() << "announcing as device" << deviceNumber
-                       << "- dbserver requests will use it";
-    }
-    Q_UNUSED(state);
-}
-
-void ProLinkNetworkService::onDeviceChanged(const ProLinkDevice& device) {
-    for (auto& known : m_devices) {
-        if (known.sameDeviceAs(device)) {
-            known = device;
-            emit deviceChanged(device);
-            return;
-        }
-    }
-    // Changed before we were told it was found. Should not happen, but treating
-    // it as a discovery keeps the mirror from silently drifting out of step with
-    // the real table, which would be much harder to notice.
-    m_devices.append(device);
-    emit deviceFound(device);
-}
-
-void ProLinkNetworkService::onDeviceLost(const QByteArray& mac) {
-    for (int i = 0; i < m_devices.size(); ++i) {
-        if (m_devices.at(i).mac == mac) {
-            m_devices.removeAt(i);
-            break;
-        }
-    }
-
-    // Drop its dbserver connection. Not merely tidiness: the session carries a
-    // borrowed device number, and a player that comes back has to be introduced
-    // to again anyway. Done on the network thread, which is the only thread that
-    // touches the map.
-    if (m_pDiscovery) {
-        const QString key = QString::fromLatin1(mac.toHex());
-        QMetaObject::invokeMethod(
-                m_pDiscovery,
-                [this, key] {
-                    auto* pClient = m_dbClients.take(key);
-                    if (pClient) {
-                        pClient->abortAll(tr("player left the network"));
-                        pClient->deleteLater();
-                    }
-                },
-                Qt::QueuedConnection);
-    }
-
-    emit deviceLost(mac);
 }
 
 } // namespace prolink

@@ -15,10 +15,16 @@
 #     to the imported target rather than to the source tree, and anything that
 #     includes it must depend on `prolink::rust`.
 #
-#   - **cargo decides when to rebuild, not CMake.** Listing every .rs file as a
-#     dependency would be a second source of truth that goes stale silently;
-#     the custom target is always considered out of date and cargo's own
+#   - **cargo decides when to rebuild, not CMake, and that needs a custom
+#     *target* rather than a custom command.** A command producing a file that
+#     already exists, with no DEPENDS, is never re-run -- so with the build
+#     tree cached between Docker builds the archive and its generated header
+#     would go stale in silence, and the C++ would compile against a header
+#     describing an older bridge. A target's COMMAND always runs; cargo's own
 #     fingerprinting makes the no-op case fast.
+#
+#     Listing every .rs file as a dependency instead would be a second source
+#     of truth that goes stale the first time a file is added.
 
 find_program(CARGO_EXECUTABLE cargo
   HINTS "$ENV{CARGO_HOME}/bin" "$ENV{HOME}/.cargo/bin" /opt/cargo/bin)
@@ -50,17 +56,15 @@ set(PROLINK_RUST_LIB
 # resolves under this.
 set(PROLINK_RUST_INCLUDE_DIR "${PROLINK_RUST_TARGET_DIR}/cxxbridge")
 
-add_custom_command(
-  OUTPUT "${PROLINK_RUST_LIB}"
+add_custom_target(prolink-rust-build ALL
   COMMAND "${CMAKE_COMMAND}" -E env
           "CARGO_TARGET_DIR=${PROLINK_RUST_TARGET_DIR}"
           "${CARGO_EXECUTABLE}" build --locked --${PROLINK_RUST_PROFILE}
           --package prolink-cxx
   WORKING_DIRECTORY "${PROLINK_RUST_DIR}"
+  BYPRODUCTS "${PROLINK_RUST_LIB}"
   COMMENT "Building lib/prolink (Rust, static)"
   VERBATIM)
-
-add_custom_target(prolink-rust-build DEPENDS "${PROLINK_RUST_LIB}")
 
 add_library(prolink::rust STATIC IMPORTED GLOBAL)
 add_dependencies(prolink::rust prolink-rust-build)

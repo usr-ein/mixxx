@@ -1,329 +1,120 @@
 #include "network/prolink/prolinkpdb.h"
 
-#include <QByteArray>
-#include <QStringDecoder>
-#include <string>
-
-#include "rekordbox_pdb.h"
-#include "util/logger.h"
+#include "prolink-cxx/src/lib.rs.h"
 
 namespace {
-const mixxx::Logger kLogger("ProLinkPdb");
-
-template<typename Base, typename T>
-bool isA(const T* pointer) {
-    return dynamic_cast<const Base*>(pointer) != nullptr;
+QString toQString(const ::rust::String& text) {
+    return QString::fromUtf8(text.data(), static_cast<qsizetype>(text.size()));
 }
 
-/// Decode one DeviceSQL string, in whichever of its three forms it is stored.
-///
-/// QStringDecoder rather than QTextCodec: the latter is Qt5 compatibility API,
-/// and the Rekordbox feature's use of it is the older idiom rather than the one
-/// to copy.
-QString textOf(rekordbox_pdb_t::device_sql_string_t* pString) {
-    if (pString == nullptr) {
-        return QString();
+QHash<quint32, QString> toHash(const ::rust::Vec<::prolink::PdbNamed>& table) {
+    QHash<quint32, QString> out;
+    out.reserve(static_cast<int>(table.size()));
+    for (const ::prolink::PdbNamed& row : table) {
+        out.insert(row.id, toQString(row.name));
     }
-    auto* pBody = pString->body();
-    if (isA<rekordbox_pdb_t::device_sql_short_ascii_t>(pBody)) {
-        return QString::fromStdString(
-                static_cast<rekordbox_pdb_t::device_sql_short_ascii_t*>(pBody)->text());
-    }
-    if (isA<rekordbox_pdb_t::device_sql_long_ascii_t>(pBody)) {
-        return QString::fromStdString(
-                static_cast<rekordbox_pdb_t::device_sql_long_ascii_t*>(pBody)->text());
-    }
-    if (isA<rekordbox_pdb_t::device_sql_long_utf16le_t>(pBody)) {
-        const std::string& raw =
-                static_cast<rekordbox_pdb_t::device_sql_long_utf16le_t*>(pBody)->text();
-        // Little-endian, and the schema says so. Do not "fix" this to BE.
-        QStringDecoder decoder(QStringDecoder::Utf16LE);
-        QString text = decoder(QByteArrayView(raw.data(), static_cast<qsizetype>(raw.size())));
-        // The form carries a trailing NUL inside its length.
-        while (text.endsWith(QChar(0))) {
-            text.chop(1);
-        }
-        return text;
-    }
-    return QString();
+    return out;
 }
 } // namespace
 
 namespace mixxx {
 namespace prolink {
 
+QString PdbTrack::analyzeExtPath() const {
+    if (!analyzePath.endsWith(QStringLiteral(".DAT"))) {
+        return QString();
+    }
+    // Upper case deliberately: rekordbox writes both extensions that way and a
+    // deck looks for exactly those names.
+    return analyzePath.left(analyzePath.size() - 4) + QStringLiteral(".EXT");
+}
+
 int PdbContents::folderCount() const {
     int count = 0;
     for (const PdbPlaylist& playlist : playlists) {
         if (playlist.isFolder) {
-            count++;
+            ++count;
         }
     }
     return count;
 }
 
 int PdbContents::playlistCount() const {
-    return playlists.size() - folderCount();
-}
-
-QString PdbTrack::analyzeExtPath() const {
-    if (analyzePath.isEmpty()) {
-        return QString();
-    }
-    const int dot = analyzePath.lastIndexOf(QLatin1Char('.'));
-    if (dot < 0) {
-        return QString();
-    }
-    return analyzePath.left(dot) + QStringLiteral(".EXT");
+    return static_cast<int>(playlists.size()) - folderCount();
 }
 
 PdbContents parsePdb(const QByteArray& data) {
-    PdbContents contents;
+    const ::prolink::PdbContents parsed = ::prolink::read_pdb_bytes(
+            ::rust::Slice<const ::std::uint8_t>(
+                    reinterpret_cast<const ::std::uint8_t*>(data.constData()),
+                    static_cast<::std::size_t>(data.size())));
 
-    // Kaitai throws on anything it cannot make sense of. A pdb arrives over the
-    // network from a device we do not control, so a malformed one must be an
-    // error value rather than an exception escaping into the network thread.
-    try {
-        const std::string buffer(data.constData(), data.size());
-        kaitai::kstream stream(buffer);
-        rekordbox_pdb_t database(&stream);
-
-        // Sanity-check the header before trusting the walk.
-        //
-        // Kaitai does not object to a buffer of zeroes: num_tables comes out 0,
-        // the walk finds nothing, and we would report a perfectly valid database
-        // that happens to contain no tracks. That is the worst possible outcome
-        // for a file arriving over a network -- a corrupt or truncated download
-        // would present as an empty medium, which looks exactly like a stick
-        // with nothing on it and gives the user nothing to act on.
-        constexpr quint32 kPageSize = 4096;
-        if (database.len_page() != kPageSize || database.num_tables() == 0) {
-            contents.error = QStringLiteral(
-                    "not a rekordbox database: page size %1, %2 tables")
-                                     .arg(database.len_page())
-                                     .arg(database.num_tables());
-            kLogger.warning() << contents.error;
-            return contents;
-        }
-
-        // Same table order as the Rekordbox feature, and for the same reason:
-        // the lookup tables must be populated before the track rows that
-        // reference them are read. HISTORY is skipped -- its rows do not contain
-        // valid row_ref_t structures, which the Rekordbox feature discovered the
-        // hard way.
-        const rekordbox_pdb_t::page_type_t tableOrder[] = {
-                rekordbox_pdb_t::PAGE_TYPE_KEYS,
-                rekordbox_pdb_t::PAGE_TYPE_GENRES,
-                rekordbox_pdb_t::PAGE_TYPE_ARTISTS,
-                rekordbox_pdb_t::PAGE_TYPE_ALBUMS,
-                rekordbox_pdb_t::PAGE_TYPE_LABELS,
-                rekordbox_pdb_t::PAGE_TYPE_COLORS,
-                rekordbox_pdb_t::PAGE_TYPE_ARTWORK,
-                rekordbox_pdb_t::PAGE_TYPE_PLAYLIST_ENTRIES,
-                rekordbox_pdb_t::PAGE_TYPE_TRACKS,
-                rekordbox_pdb_t::PAGE_TYPE_PLAYLIST_TREE,
-        };
-
-        QHash<quint32, QString>& keys = contents.keys;
-        QHash<quint32, QString>& genres = contents.genres;
-        QHash<quint32, QString>& artists = contents.artists;
-        QHash<quint32, QString>& albums = contents.albums;
-        QHash<quint32, QString>& labels = contents.labels;
-        QHash<quint32, QString>& colors = contents.colors;
-        QHash<quint32, QString>& artwork = contents.artwork;
-        // playlist id -> entry index -> track id. A map, not a list, because
-        // entry indices are one-based and need not arrive in order.
-        QMap<quint32, QMap<quint32, quint32>> playlistEntries;
-
-        for (const auto pageType : tableOrder) {
-            for (const auto& table : *database.tables()) {
-                if (table->type() != pageType) {
-                    continue;
-                }
-                const uint16_t lastIndex = table->last_page()->index();
-                rekordbox_pdb_t::page_ref_t* pCurrent = table->first_page();
-
-                while (true) {
-                    rekordbox_pdb_t::page_t* pPage = pCurrent->body();
-                    // "Strange" chain-head pages carry no rows and must be
-                    // stepped over rather than treated as empty data pages.
-                    if (pPage->is_data_page()) {
-                        for (const auto& rowGroup : *pPage->row_groups()) {
-                            for (const auto& rowRef : *rowGroup->rows()) {
-                                // The presence bitmask: an absent slot is a
-                                // deleted row, and its bytes are stale.
-                                if (!rowRef->present()) {
-                                    continue;
-                                }
-                                switch (pageType) {
-                                case rekordbox_pdb_t::PAGE_TYPE_KEYS: {
-                                    auto* pRow = static_cast<rekordbox_pdb_t::key_row_t*>(
-                                            rowRef->body());
-                                    keys[pRow->id()] = textOf(pRow->name());
-                                } break;
-                                case rekordbox_pdb_t::PAGE_TYPE_GENRES: {
-                                    auto* pRow = static_cast<rekordbox_pdb_t::genre_row_t*>(
-                                            rowRef->body());
-                                    genres[pRow->id()] = textOf(pRow->name());
-                                } break;
-                                case rekordbox_pdb_t::PAGE_TYPE_ARTISTS: {
-                                    auto* pRow = static_cast<rekordbox_pdb_t::artist_row_t*>(
-                                            rowRef->body());
-                                    artists[pRow->id()] = textOf(pRow->name());
-                                } break;
-                                case rekordbox_pdb_t::PAGE_TYPE_ALBUMS: {
-                                    auto* pRow = static_cast<rekordbox_pdb_t::album_row_t*>(
-                                            rowRef->body());
-                                    // Only subtype 0x80 rows have their name at
-                                    // `ofs_name`.
-                                    //
-                                    // artist_row picks between a near and a far
-                                    // offset on its subtype:
-                                    //   pos: row_base + (subtype == 0x64 ?
-                                    //                    ofs_name_far : ofs_name_near)
-                                    // album_row has no such conditional in the
-                                    // schema -- it always uses the 1-byte
-                                    // ofs_name -- yet real media carry album rows
-                                    // of another subtype. On one 274-row table,
-                                    // 273 were 0x80 and one was 0x84 with
-                                    // ofs_name = 0, so its "name" was decoded
-                                    // from the row header itself and then
-                                    // overwrote a real album under the id read
-                                    // from the same misaligned bytes.
-                                    //
-                                    // Skipping the row loses that album's name
-                                    // rather than corrupting a different one,
-                                    // which is the better failure: one track
-                                    // shows a blank album instead of mojibake.
-                                    // Reading it properly needs the far offset
-                                    // adding to the shared crate-digger schema,
-                                    // which the Rekordbox feature also uses.
-                                    constexpr quint16 kAlbumSubtypeNearName = 0x80;
-                                    if (pRow->_unnamed0() != kAlbumSubtypeNearName) {
-                                        break;
-                                    }
-                                    albums[pRow->id()] = textOf(pRow->name());
-                                } break;
-                                case rekordbox_pdb_t::PAGE_TYPE_LABELS: {
-                                    auto* pRow = static_cast<rekordbox_pdb_t::label_row_t*>(
-                                            rowRef->body());
-                                    labels[pRow->id()] = textOf(pRow->name());
-                                } break;
-                                case rekordbox_pdb_t::PAGE_TYPE_COLORS: {
-                                    auto* pRow = static_cast<rekordbox_pdb_t::color_row_t*>(
-                                            rowRef->body());
-                                    colors[pRow->id()] = textOf(pRow->name());
-                                } break;
-                                case rekordbox_pdb_t::PAGE_TYPE_ARTWORK: {
-                                    auto* pRow = static_cast<
-                                            rekordbox_pdb_t::artwork_row_t*>(
-                                            rowRef->body());
-                                    artwork[pRow->id()] = textOf(pRow->path());
-                                } break;
-                                case rekordbox_pdb_t::PAGE_TYPE_PLAYLIST_ENTRIES: {
-                                    auto* pRow = static_cast<
-                                            rekordbox_pdb_t::playlist_entry_row_t*>(
-                                            rowRef->body());
-                                    playlistEntries[pRow->playlist_id()]
-                                                   [pRow->entry_index()] =
-                                            pRow->track_id();
-                                } break;
-                                case rekordbox_pdb_t::PAGE_TYPE_TRACKS: {
-                                    auto* pRow = static_cast<rekordbox_pdb_t::track_row_t*>(
-                                            rowRef->body());
-                                    PdbTrack track;
-                                    track.id = pRow->id();
-                                    track.title = textOf(pRow->title());
-                                    track.artist = artists.value(pRow->artist_id());
-                                    track.album = albums.value(pRow->album_id());
-                                    track.genre = genres.value(pRow->genre_id());
-                                    track.key = keys.value(pRow->key_id());
-                                    track.label = labels.value(pRow->label_id());
-                                    track.color = colors.value(pRow->color_id());
-                                    track.comment = textOf(pRow->comment());
-                                    track.filePath = textOf(pRow->file_path());
-                                    track.analyzePath = textOf(pRow->analyze_path());
-                                    track.dateAdded = textOf(pRow->date_added());
-                                    track.year = pRow->year();
-                                    track.durationSeconds = pRow->duration();
-                                    track.bitrate = pRow->bitrate();
-                                    track.tempoCentiBpm = pRow->tempo();
-                                    track.rating = pRow->rating();
-                                    track.artworkId = pRow->artwork_id();
-                                    track.sampleRate = pRow->sample_rate();
-                                    track.fileSize = pRow->file_size();
-                                    track.trackNumber = pRow->track_number();
-                                    track.discNumber = pRow->disc_number();
-                                    track.playCount = pRow->play_count();
-                                    track.artistId = pRow->artist_id();
-                                    track.albumId = pRow->album_id();
-                                    track.genreId = pRow->genre_id();
-                                    track.keyId = pRow->key_id();
-                                    track.labelId = pRow->label_id();
-                                    track.colorId = pRow->color_id();
-                                    // Row offset 0x5a. The schema leaves it
-                                    // unnamed -- hence _unnamed29, the 30th
-                                    // field in the seq -- and documents it as
-                                    // flesniak's "always 1?", which holds only
-                                    // if every track is an MP3. It is the
-                                    // container: mp3 1, m4a 4, flac 5, wav 11,
-                                    // aiff 12, across 651 rows with no
-                                    // exceptions (F34). Announcing the wrong one
-                                    // makes a deck fetch a file, try to decode
-                                    // an AAC as an MP3, and give up.
-                                    track.fileType = pRow->_unnamed29();
-                                    track.artworkPath = artwork.value(pRow->artwork_id());
-                                    contents.tracks.append(track);
-                                } break;
-                                case rekordbox_pdb_t::PAGE_TYPE_PLAYLIST_TREE: {
-                                    auto* pRow = static_cast<
-                                            rekordbox_pdb_t::playlist_tree_row_t*>(
-                                            rowRef->body());
-                                    PdbPlaylist playlist;
-                                    playlist.id = pRow->id();
-                                    playlist.parentId = pRow->parent_id();
-                                    playlist.sortOrder = pRow->sort_order();
-                                    playlist.name = textOf(pRow->name());
-                                    playlist.isFolder = pRow->is_folder();
-                                    contents.playlists.insert(playlist.id, playlist);
-                                } break;
-                                default:
-                                    break;
-                                }
-                            }
-                        }
-                    }
-                    if (pCurrent->index() == lastIndex) {
-                        break;
-                    }
-                    pCurrent = pPage->next_page();
-                }
-            }
-        }
-
-        // Attach entries once every playlist row is known, since entries and
-        // tree rows live in different tables and either can be read first.
-        for (auto it = playlistEntries.constBegin(); it != playlistEntries.constEnd(); ++it) {
-            auto playlist = contents.playlists.find(it.key());
-            if (playlist == contents.playlists.end()) {
-                continue;
-            }
-            // QMap iterates by key, so the curated order is preserved.
-            for (const quint32 trackId : it.value()) {
-                playlist->trackIds.append(trackId);
-            }
-        }
-
-        contents.ok = true;
-    } catch (const std::exception& e) {
-        contents.error = QStringLiteral("could not parse export.pdb: %1")
-                                 .arg(QString::fromUtf8(e.what()));
-        kLogger.warning() << contents.error;
-    } catch (...) {
-        contents.error = QStringLiteral("could not parse export.pdb");
-        kLogger.warning() << contents.error;
+    PdbContents out;
+    out.ok = parsed.ok;
+    out.error = toQString(parsed.error);
+    if (!out.ok) {
+        return out;
     }
-    return contents;
+
+    out.tracks.reserve(static_cast<int>(parsed.tracks.size()));
+    for (const ::prolink::PdbTrack& from : parsed.tracks) {
+        PdbTrack track;
+        track.id = from.id;
+        track.title = toQString(from.title);
+        track.artist = toQString(from.artist);
+        track.album = toQString(from.album);
+        track.genre = toQString(from.genre);
+        track.key = toQString(from.key);
+        track.label = toQString(from.label);
+        track.color = toQString(from.color);
+        track.comment = toQString(from.comment);
+        track.filePath = toQString(from.file_path);
+        track.analyzePath = toQString(from.analyze_path);
+        track.artworkPath = toQString(from.artwork_path);
+        track.dateAdded = toQString(from.date_added);
+        track.year = from.year;
+        track.durationSeconds = from.duration_seconds;
+        track.bitrate = from.bitrate;
+        track.tempoCentiBpm = from.tempo_centibpm;
+        track.rating = from.rating;
+        track.artworkId = from.artwork_id;
+        track.sampleRate = from.sample_rate;
+        track.fileSize = from.file_size;
+        track.trackNumber = from.track_number;
+        track.discNumber = from.disc_number;
+        track.playCount = from.play_count;
+        track.fileType = from.file_type;
+        track.artistId = from.artist_id;
+        track.albumId = from.album_id;
+        track.genreId = from.genre_id;
+        track.keyId = from.key_id;
+        track.labelId = from.label_id;
+        track.colorId = from.color_id;
+        out.tracks.append(track);
+    }
+
+    for (const ::prolink::PdbPlaylist& from : parsed.playlists) {
+        PdbPlaylist playlist;
+        playlist.id = from.id;
+        playlist.parentId = from.parent_id;
+        playlist.sortOrder = from.sort_order;
+        playlist.name = toQString(from.name);
+        playlist.isFolder = from.is_folder;
+        playlist.trackIds.reserve(static_cast<int>(from.track_ids.size()));
+        for (const ::std::uint32_t id : from.track_ids) {
+            playlist.trackIds.append(id);
+        }
+        out.playlists.insert(playlist.id, playlist);
+    }
+
+    out.artists = toHash(parsed.artists);
+    out.albums = toHash(parsed.albums);
+    out.genres = toHash(parsed.genres);
+    out.keys = toHash(parsed.keys);
+    out.labels = toHash(parsed.labels);
+    out.colors = toHash(parsed.colors);
+    out.artwork = toHash(parsed.artwork);
+    return out;
 }
 
 } // namespace prolink
