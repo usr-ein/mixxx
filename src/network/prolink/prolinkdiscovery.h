@@ -8,6 +8,7 @@
 
 #include "network/prolink/prolinkdevice.h"
 #include "network/prolink/prolinkmediaquery.h"
+#include "network/prolink/server/prolinkservestatus.h"
 
 class QUdpSocket;
 class QTimer;
@@ -94,9 +95,15 @@ class ProLinkDiscovery : public QObject {
     double masterBpm() const;
     int masterDevice() const;
 
-    /// What we are serving to other players, for the ProLink page. Empty until
-    /// we have announced, since the serve side comes up with the announcement.
-    QString serverSummary() const;
+    /// What we are serving to other players, and who is consuming it. Inactive
+    /// until we have announced, since the serve side comes up with the
+    /// announcement.
+    server::ServeStatus serveStatus() const;
+
+  signals:
+    /// The serve side changed: a slot came or went, or a player loaded or
+    /// released one of our tracks.
+    void serveStatusChanged(const mixxx::prolink::server::ServeStatus& status);
 
   signals:
     /// The announcer changed state: claiming, active with a number, or failed.

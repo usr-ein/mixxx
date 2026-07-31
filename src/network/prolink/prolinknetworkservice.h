@@ -10,6 +10,7 @@
 #include "network/prolink/nfs/nfsfiletransfer.h"
 #include "network/prolink/prolinkdevice.h"
 #include "network/prolink/prolinkmediaquery.h"
+#include "network/prolink/server/prolinkservestatus.h"
 
 namespace mixxx {
 namespace prolink {
@@ -92,6 +93,13 @@ class ProLinkNetworkService : public QObject {
         return m_lastError;
     }
 
+    /// What we are serving and who is consuming it. A GUI-thread mirror, pushed
+    /// to us by the network thread like the peer table above — never read
+    /// across.
+    server::ServeStatus serveStatus() const {
+        return m_serveStatus;
+    }
+
   public slots:
     /// Drop devices that are currently offline, rather than waiting out the
     /// removal grace period.
@@ -151,6 +159,9 @@ class ProLinkNetworkService : public QObject {
     void listeningChanged(bool listening, const QString& error);
     /// We claimed a number, lost one, or gave up trying.
     void announceChanged(int deviceNumber, const QString& detail);
+    /// The serve side changed: a slot came or went, or a player loaded or
+    /// released one of our tracks.
+    void serveStatusChanged(const mixxx::prolink::server::ServeStatus& status);
     /// A player described one of its slots: volume name and counts.
     void mediaInfoFound(const QByteArray& mac,
             mixxx::prolink::MediaSlot slot,
@@ -287,6 +298,7 @@ class ProLinkNetworkService : public QObject {
     /// than read across, like the peer table above.
     int m_announcedNumber = 0;
     QString m_announceDetail;
+    server::ServeStatus m_serveStatus;
 };
 
 } // namespace prolink

@@ -275,7 +275,68 @@ bool ProLinkStatusServer::handleDatagram(
         answerSettingsQuery(datagram, sender);
         return true;
     }
+    if (type == static_cast<quint8>(prolink_status_t::PACKET_TYPE_CDJ_STATUS)) {
+        notePeerStatus(datagram, sender);
+        // Deliberately false: we read it, we did not answer it, and the caller
+        // still needs it to work out who holds tempo master.
+        return false;
+    }
     return false;
+}
+
+QList<ServeConsumer> ProLinkStatusServer::consumers() const {
+    return m_consumers.values();
+}
+
+void ProLinkStatusServer::notePeerStatus(
+        const QByteArray& datagram, const QHostAddress& sender) {
+    std::string buffer(datagram.constData(), static_cast<size_t>(datagram.size()));
+    std::istringstream stream(buffer);
+    ServeConsumer consumer;
+    int sourcePlayer = 0;
+    try {
+        kaitai::kstream ks(&stream);
+        prolink_status_t packet(&ks);
+        consumer.deviceNumber = packet.sender_device();
+        consumer.deviceName = QString::fromStdString(packet.device_name());
+        consumer.address = sender;
+        sourcePlayer = packet.status_source_player();
+        consumer.slot = static_cast<MediaSlot>(packet.status_source_slot());
+        consumer.trackId = packet.status_track_id();
+        // Play states above 0x06 are the stopped/cued/ended family; the playing
+        // ones are 0x03 (playing), 0x04 (looping) and 0x05 (nearing the end).
+        const quint8 playState = packet.status_play_state();
+        consumer.playing = playState >= 0x03 && playState <= 0x05;
+    } catch (const std::exception&) {
+        // A status packet shorter than the fields we want. Not worth a log line
+        // four times a second per deck.
+        return;
+    }
+    if (consumer.deviceNumber == 0) {
+        return;
+    }
+
+    // Only tracks whose source is *us*. A deck playing off its own stick, or off
+    // the other deck's, is not our business and would otherwise fill this list.
+    const bool oursIsLoaded = sourcePlayer == m_deviceNumber && consumer.trackId != 0 &&
+            m_slots.contains(static_cast<int>(consumer.slot));
+
+    const auto existing = m_consumers.constFind(consumer.deviceNumber);
+    if (!oursIsLoaded) {
+        if (existing != m_consumers.constEnd()) {
+            m_consumers.remove(consumer.deviceNumber);
+            emit consumersChanged();
+        }
+        return;
+    }
+    // Four packets a second per deck arrive saying the same thing. Only signal
+    // when something a reader would notice has actually changed.
+    if (existing != m_consumers.constEnd() && existing->trackId == consumer.trackId &&
+            existing->slot == consumer.slot && existing->playing == consumer.playing) {
+        return;
+    }
+    m_consumers.insert(consumer.deviceNumber, consumer);
+    emit consumersChanged();
 }
 
 void ProLinkStatusServer::answerMediaQuery(

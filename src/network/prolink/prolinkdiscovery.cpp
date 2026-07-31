@@ -330,8 +330,8 @@ void ProLinkDiscovery::updateServerPeers() {
     m_pServer->setPeers(peers);
 }
 
-QString ProLinkDiscovery::serverSummary() const {
-    return m_pServer ? m_pServer->summary() : QString();
+server::ServeStatus ProLinkDiscovery::serveStatus() const {
+    return m_pServer ? m_pServer->status() : server::ServeStatus();
 }
 
 
@@ -373,6 +373,10 @@ void ProLinkDiscovery::startAnnouncing() {
         m_pServer = new server::ProLinkServer(m_pMediaQuery->socket(), this);
         m_pMediaQuery->setStatusServer(m_pServer->statusServer());
         m_pServer->setDeviceNumber(m_pVirtualCdj->deviceNumber());
+        m_pServer->setIdentity(m_pVirtualCdj->address(), interfaceName);
+        connect(m_pServer, &server::ProLinkServer::statusChanged, this, [this] {
+            emit serveStatusChanged(m_pServer->status());
+        });
         m_pServer->start();
     }
     // Beat packets are broadcast, so this would work without announcing -- but

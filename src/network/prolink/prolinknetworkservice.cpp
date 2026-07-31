@@ -174,6 +174,16 @@ void ProLinkNetworkService::start() {
             &ProLinkDiscovery::mediaInfoFound,
             this,
             &ProLinkNetworkService::mediaInfoFound);
+    // Mirrored rather than read across, like the peer table: the whole struct
+    // arrives as a copy on a queued connection, so the GUI never touches an
+    // object the network thread is mutating.
+    connect(m_pDiscovery,
+            &ProLinkDiscovery::serveStatusChanged,
+            this,
+            [this](const server::ServeStatus& status) {
+                m_serveStatus = status;
+                emit serveStatusChanged(status);
+            });
 
     m_pThread->start();
     startPhasePublishing();

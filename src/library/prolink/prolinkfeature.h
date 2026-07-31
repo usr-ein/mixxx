@@ -97,6 +97,9 @@ class ProLinkFeature : public BaseExternalLibraryFeature {
     /// of.
     void refreshStatusPage();
     QString statusHtml() const;
+    /// The "shared with other players" half of the page: what we expose, and
+    /// which player has one of our tracks loaded.
+    QString serveHtml() const;
 
     /// State of one (device, slot) pair.
     ///

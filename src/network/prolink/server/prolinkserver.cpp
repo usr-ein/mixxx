@@ -28,6 +28,10 @@ ProLinkServer::ProLinkServer(QUdpSocket* pStatusSocket, QObject* parent)
     // logged, because "no query arrived" and "the query went nowhere" look
     // identical from here.
     m_pStatus = new ProLinkStatusServer(m_pStatusSocket, this);
+    connect(m_pStatus,
+            &ProLinkStatusServer::consumersChanged,
+            this,
+            &ProLinkServer::statusChanged);
 }
 
 ProLinkServer::~ProLinkServer() = default;
@@ -106,6 +110,7 @@ void ProLinkServer::onMediumMounted(
     // either once status says the slot holds something.
     m_pNfs->addExport(slot, path);
     m_pDb->setMedium(slot, medium);
+    m_media.insert(static_cast<int>(slot), medium);
 
     SlotAdvertisement advertisement;
     advertisement.occupied = true;
@@ -121,6 +126,7 @@ void ProLinkServer::onMediumMounted(
                    << "as" << exportPathForSlot(slot) << "-" << medium.trackCount()
                    << "tracks," << medium.playlistCount() << "playlists, indexed in"
                    << timer.elapsed() << "ms";
+    emit statusChanged();
 }
 
 void ProLinkServer::onMediumUnmounted(MediaSlot slot) {
@@ -137,32 +143,68 @@ void ProLinkServer::onMediumUnmounted(MediaSlot slot) {
     if (m_pNfs) {
         m_pNfs->removeExport(slot);
     }
+    m_media.remove(static_cast<int>(slot));
     kLogger.info() << "slot" << static_cast<int>(slot) << "is now empty";
+    emit statusChanged();
 }
 
-QString ProLinkServer::summary() const {
+void ProLinkServer::setIdentity(const QHostAddress& address, const QString& interfaceName) {
+    m_address = address;
+    m_interfaceName = interfaceName;
+}
+
+ServeStatus ProLinkServer::status() const {
+    ServeStatus out;
+    out.deviceNumber = m_deviceNumber;
+    out.active = m_deviceNumber > 0;
+    out.deviceName = QString::fromLatin1(kVirtualCdjName);
+    out.address = m_address;
+    out.interfaceName = m_interfaceName;
     if (!m_pNfs) {
-        return QStringLiteral("not started");
+        return out;
     }
-    QStringList lines;
-    lines.append(QStringLiteral("device %1, dbserver %2, mountd %3, nfsd %4%5")
-                         .arg(m_deviceNumber)
-                         .arg(m_pDb ? m_pDb->port() : 0)
-                         .arg(m_pNfs->mountdPort())
-                         .arg(m_pNfs->nfsdPort())
-                         .arg(m_pNfs->portmapAvailable()
-                                         ? QString()
-                                         : QStringLiteral(", NO PORTMAP")));
-    if (m_pWatcher) {
-        const QMap<int, QString> media = m_pWatcher->media();
-        for (auto it = media.constBegin(); it != media.constEnd(); ++it) {
-            lines.append(QStringLiteral("%1 %2")
-                                 .arg(QString::fromLatin1(exportPathForSlot(
-                                         static_cast<MediaSlot>(it.key()))),
-                                         it.value()));
+
+    out.portmapPort = m_pNfs->portmapAvailable() ? kPortmapPort : 0;
+    out.mountdPort = m_pNfs->mountdPort();
+    out.nfsdPort = m_pNfs->nfsdPort();
+    out.dbserverPort = m_pDb ? m_pDb->port() : 0;
+
+    for (auto it = m_media.constBegin(); it != m_media.constEnd(); ++it) {
+        const ProLinkServedMedium& medium = it.value();
+        ServedSlot served;
+        served.slot = medium.slot();
+        served.exportPath = QString::fromLatin1(exportPathForSlot(medium.slot()));
+        served.volumeName = medium.volumeName();
+        served.localPath = medium.rootPath();
+        served.trackCount = medium.trackCount();
+        served.playlistCount = medium.playlistCount();
+        out.media.append(served);
+    }
+
+    if (m_pStatus) {
+        out.mediaQueriesAnswered = m_pStatus->mediaQueriesAnswered();
+        // Name each consumer's track. The status server sees an id and a slot
+        // and nothing else; the libraries live here, so this is the only place
+        // that can turn `track 0xc8` into something a DJ recognises.
+        for (ServeConsumer consumer : m_pStatus->consumers()) {
+            const auto medium = m_media.constFind(static_cast<int>(consumer.slot));
+            if (medium != m_media.constEnd()) {
+                if (const PdbTrack* pTrack = medium->track(consumer.trackId)) {
+                    consumer.title = pTrack->title;
+                    consumer.artist = pTrack->artist;
+                }
+            }
+            out.consumers.append(consumer);
         }
     }
-    return lines.join(QLatin1Char('\n'));
+
+    const QHash<QString, int> rpc = m_pNfs->statistics();
+    out.mountCalls = rpc.value(QStringLiteral("mountd:MNT"));
+    out.readCalls = rpc.value(QStringLiteral("nfsd:READ"));
+    if (m_pDb) {
+        out.dbserverClients = m_pDb->statistics().value(QStringLiteral("0x0000"));
+    }
+    return out;
 }
 
 } // namespace server

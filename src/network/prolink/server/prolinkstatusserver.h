@@ -8,6 +8,7 @@
 #include <QString>
 
 #include "network/prolink/prolinkdefs.h"
+#include "network/prolink/server/prolinkservestatus.h"
 
 class QTimer;
 class QUdpSocket;
@@ -72,7 +73,17 @@ class ProLinkStatusServer : public QObject {
 
     /// Offer a received datagram. True if it was a query we answered, so the
     /// caller knows not to treat it as something else.
+    ///
+    /// A peer's own status packet returns **false** even though we read it:
+    /// answering is not the only reason to look at a datagram, and the caller
+    /// still needs it for tempo-master detection. What we take from it is who
+    /// has one of our tracks loaded — see ServeConsumer.
     bool handleDatagram(const QByteArray& datagram, const QHostAddress& sender);
+
+    /// Players currently holding a track of ours, newest information first.
+    /// Track ids are unresolved here; ProLinkServer names them, since it owns
+    /// the libraries.
+    QList<ServeConsumer> consumers() const;
 
     int mediaQueriesAnswered() const {
         return m_mediaQueriesAnswered;
@@ -85,12 +96,20 @@ class ProLinkStatusServer : public QObject {
     /// real deck's, which is the acceptance test for impersonation.
     QByteArray buildStatus() const;
 
+  signals:
+    /// The set of players holding our tracks changed — someone loaded, ejected,
+    /// or started or stopped playing. Not emitted for the four status packets a
+    /// second that say nothing new.
+    void consumersChanged();
+
   private slots:
     void emitStatus();
 
   private:
     void answerMediaQuery(const QByteArray& datagram, const QHostAddress& sender);
     void answerSettingsQuery(const QByteArray& datagram, const QHostAddress& sender);
+    /// Read a peer's status packet for whether it is holding a track of ours.
+    void notePeerStatus(const QByteArray& datagram, const QHostAddress& sender);
 
     QUdpSocket* const m_pSocket;
     QTimer* m_pTimer = nullptr;
@@ -102,6 +121,9 @@ class ProLinkStatusServer : public QObject {
 
     int m_mediaQueriesAnswered = 0;
     int m_settingsQueriesAnswered = 0;
+
+    /// Keyed on the consumer's device number.
+    QMap<int, ServeConsumer> m_consumers;
 };
 
 /// Describe one of our slots, in reply to a type-0x05 query.

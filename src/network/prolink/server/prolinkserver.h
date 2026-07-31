@@ -2,10 +2,14 @@
 
 #include <QHostAddress>
 #include <QList>
+#include <QMap>
 #include <QObject>
 #include <QString>
 
+#include "network/prolink/server/prolinkservedmedium.h"
+
 #include "network/prolink/prolinkdefs.h"
+#include "network/prolink/server/prolinkservestatus.h"
 
 class QUdpSocket;
 
@@ -66,8 +70,18 @@ class ProLinkServer : public QObject {
         return m_pStatus;
     }
 
-    /// One line per slot, plus the listener ports, for the ProLink page.
-    QString summary() const;
+    /// Everything the ProLink page shows about the serve side: what we expose,
+    /// on which ports, and who is currently holding one of our tracks.
+    ServeStatus status() const;
+
+    /// Our own address and interface, so the page can say where we are exposed
+    /// as well as what. Set by discovery, which is what resolved them.
+    void setIdentity(const QHostAddress& address, const QString& interfaceName);
+
+  signals:
+    /// Something a reader of status() would notice has changed: a slot came or
+    /// went, or a player loaded or released one of our tracks.
+    void statusChanged();
 
   private slots:
     void onMediumMounted(mixxx::prolink::MediaSlot slot,
@@ -82,6 +96,10 @@ class ProLinkServer : public QObject {
     ProLinkStatusServer* m_pStatus = nullptr;
     ProLinkMediaWatcher* m_pWatcher = nullptr;
     int m_deviceNumber = 0;
+    QHostAddress m_address;
+    QString m_interfaceName;
+    /// slot -> the medium serving it, so a consumer's track id can be named.
+    QMap<int, ProLinkServedMedium> m_media;
 };
 
 } // namespace server

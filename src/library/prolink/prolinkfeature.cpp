@@ -161,6 +161,13 @@ ProLinkFeature::ProLinkFeature(Library* pLibrary, UserSettingsPointer pConfig)
             &ProLinkNetworkService::mediaInfoFound,
             this,
             &ProLinkFeature::onMediaInfo);
+    // Only fires when something a reader would notice changed -- a slot coming
+    // or going, or a player loading or releasing one of our tracks -- not on the
+    // four status packets a second that say the same thing.
+    connect(m_pNetwork.get(),
+            &ProLinkNetworkService::serveStatusChanged,
+            this,
+            [this](const mixxx::prolink::server::ServeStatus&) { refreshStatusPage(); });
 
     // The columns the track table can show. analyze_path rides along because
     // ColumnCache keys on the plain column name, so it maps for free.
@@ -751,8 +758,126 @@ QString ProLinkFeature::statusHtml() const {
         html += QStringLiteral("</table>");
     }
 
+    html += serveHtml();
     html += QStringLiteral("<p><i>%1</i></p>")
-                    .arg(tr("Expand a player and open USB or SD to fetch its "
-                            "database. Loading tracks is not implemented yet."));
+                    .arg(tr("Expand a player and open USB or SD to browse it."));
+    return html;
+}
+
+QString ProLinkFeature::serveHtml() const {
+    const mixxx::prolink::server::ServeStatus serve = m_pNetwork->serveStatus();
+    QString html = QStringLiteral("<h3>%1</h3>").arg(tr("Shared with other players"));
+
+    if (!serve.active) {
+        html += QStringLiteral("<p>%1</p>")
+                        .arg(tr("Nothing is shared until Mixxx has a player "
+                                "number."));
+        return html;
+    }
+
+    // What we expose, and where. Not decoration: a CDJ addresses us by player
+    // number and reaches our files by IP, so these two lines are what a DJ
+    // matches against the "player 4" they can see on the deck's own screen.
+    html += QStringLiteral("<p>%1</p>")
+                    .arg(tr("Other players see this machine as "
+                            "<b>player %1</b>, named <b>%2</b>, at %3 on %4.")
+                                    .arg(QString::number(serve.deviceNumber),
+                                            serve.deviceName.toHtmlEscaped(),
+                                            serve.address.isNull()
+                                                    ? tr("an unknown address")
+                                                    : serve.address.toString(),
+                                            serve.interfaceName.isEmpty()
+                                                    ? tr("an unknown interface")
+                                                    : serve.interfaceName));
+
+    if (!serve.servesAnything()) {
+        html += QStringLiteral("<p>%1</p>")
+                        .arg(tr("No rekordbox media is plugged in, so the slots "
+                                "are advertised as empty. Plug in a USB stick "
+                                "prepared by rekordbox and it appears here "
+                                "within a couple of seconds."));
+        return html;
+    }
+
+    html += QStringLiteral("<table cellpadding='4'><tr><th align='left'>%1</th>"
+                           "<th align='left'>%2</th><th align='left'>%3</th>"
+                           "<th align='left'>%4</th></tr>")
+                    .arg(tr("Slot"), tr("Volume"), tr("Contents"), tr("Mounted at"));
+    for (const auto& slot : serve.media) {
+        html += QStringLiteral("<tr><td>%1 %2</td><td>%3</td><td>%4</td>"
+                               "<td><i>%5</i></td></tr>")
+                        .arg(slot.slot == mixxx::prolink::MediaSlot::Usb ? tr("USB")
+                                                                         : tr("SD"),
+                                slot.exportPath,
+                                slot.volumeName.isEmpty()
+                                        ? tr("(no label)")
+                                        : slot.volumeName.toHtmlEscaped(),
+                                tr("%1 tracks, %2 playlists")
+                                        .arg(slot.trackCount)
+                                        .arg(slot.playlistCount),
+                                slot.localPath.toHtmlEscaped());
+    }
+    html += QStringLiteral("</table>");
+
+    // Who has one of our tracks loaded *right now*. Taken from each player's own
+    // status packets rather than from what it asked us for, because a request
+    // log says what was browsed: a deck scrolling a list fetches metadata for
+    // rows nobody loads, and a track loaded ten minutes ago has stopped
+    // generating requests entirely.
+    html += QStringLiteral("<h4>%1</h4>").arg(tr("In use now"));
+    if (serve.consumers.isEmpty()) {
+        html += QStringLiteral("<p>%1</p>")
+                        .arg(tr("No player has one of our tracks loaded."));
+    } else {
+        html += QStringLiteral("<table cellpadding='4'><tr><th align='left'>%1</th>"
+                               "<th align='left'>%2</th><th align='left'>%3</th>"
+                               "<th align='left'>%4</th></tr>")
+                        .arg(tr("Player"), tr("From"), tr("Track"), tr("State"));
+        for (const auto& consumer : serve.consumers) {
+            QString track = consumer.title.isEmpty()
+                    // A track we cannot name is not an error: the deck may have
+                    // loaded it from a medium we have since swapped out.
+                    ? tr("track %1").arg(consumer.trackId)
+                    : consumer.title.toHtmlEscaped();
+            if (!consumer.artist.isEmpty()) {
+                track += QStringLiteral(" — %1").arg(consumer.artist.toHtmlEscaped());
+            }
+            html += QStringLiteral("<tr><td>%1 %2</td><td>%3</td><td>%4</td>"
+                                   "<td>%5</td></tr>")
+                            .arg(QString::number(consumer.deviceNumber),
+                                    consumer.deviceName.toHtmlEscaped(),
+                                    QString::fromLatin1(mixxx::prolink::exportPathForSlot(
+                                            consumer.slot)),
+                                    track,
+                                    consumer.playing ? tr("playing") : tr("loaded"));
+        }
+        html += QStringLiteral("</table>");
+    }
+
+    // The chain a deck walks, in order. A zero further down than a non-zero
+    // above it is where a failure is: no mounts means the portmapper never
+    // answered, no dbserver clients means the mount failed, and so on.
+    html += QStringLiteral("<p><i>%1</i></p>")
+                    .arg(tr("Ports: portmap %1, mountd %2, nfsd %3, dbserver %4. "
+                            "%5 media answers, %6 mounts, %7 file reads, "
+                            "%8 browse sessions.")
+                                    .arg(serve.portmapPort == 0
+                                                    ? tr("UNAVAILABLE")
+                                                    : QString::number(serve.portmapPort))
+                                    .arg(serve.mountdPort)
+                                    .arg(serve.nfsdPort)
+                                    .arg(serve.dbserverPort)
+                                    .arg(serve.mediaQueriesAnswered)
+                                    .arg(serve.mountCalls)
+                                    .arg(serve.readCalls)
+                                    .arg(serve.dbserverClients));
+    if (serve.portmapPort == 0) {
+        // The one failure that stops everything downstream while leaving the
+        // rest of the feature looking healthy (F46).
+        html += QStringLiteral("<p><b>%1</b></p>")
+                        .arg(tr("UDP port 111 could not be bound, so players "
+                                "cannot discover our file server. On Linux, set "
+                                "net.ipv4.ip_unprivileged_port_start=111."));
+    }
     return html;
 }
