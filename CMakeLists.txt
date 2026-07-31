@@ -2469,12 +2469,20 @@ elseif(SQLite3_IS_STATIC)
   target_link_libraries(mixxx-lib PRIVATE SQLite::SQLite3)
 endif()
 
-# Pioneer Pro DJ Link support: see other CDJs on the network in the sidebar.
+# Pioneer Pro DJ Link support, in both directions: see other CDJs' media in the
+# sidebar, and let them see ours.
 #
-# Default ON but inert unless [Library]/ShowProLinkLibrary is set, and even then
-# the feature only ever listens -- it does not transmit on any Pro DJ Link port,
-# so it cannot disturb a live rig. Serving our own media (which does transmit,
-# and needs a privileged port) is a later, separately-gated addition.
+# Default ON but inert unless [Library]/ShowProLinkLibrary is set. Note what
+# "inert" no longer means: once shown, the feature announces itself as a player
+# and claims a device number, then emits status and serves NFS and dbserver, so
+# it does transmit on Pro DJ Link ports and it is a participant on the rig
+# rather than an observer of it. Serving needs UDP/111 to be bindable -- see
+# pi_config/99-prolink-ports.conf; without it the rest still works and only the
+# serve side goes quiet.
+#
+# The library half is what this switch controls. The protocol half under
+# src/network/prolink/ is compiled unconditionally, so it stays buildable and
+# testable without a Library.
 option(PROLINK "Support for the Pioneer Pro DJ Link network protocol" ON)
 if(PROLINK)
   target_sources(mixxx-lib PRIVATE
