@@ -283,6 +283,20 @@ TreeItemModel* ProLinkFeature::sidebarModel() const {
 }
 
 void ProLinkFeature::activate() {
+    // Clicking the feature reconnects, as well as showing the status page.
+    //
+    // There is otherwise nothing a user can do from the UI when the network
+    // is not working: the interface is chosen when the session opens, so a
+    // Mixxx started before the ethernet was plugged in listens on the wrong
+    // one for ever, and no amount of waiting or re-clicking a deck helps.
+    // This is the one place a user reliably clicks when nothing is appearing.
+    //
+    // Cheap when it is already working: rebinding costs the device number and
+    // a second of re-discovery, and the sidebar repopulates from the
+    // keep-alives that follow.
+    if (m_pNetwork) {
+        m_pNetwork->refresh();
+    }
     showStatusPage();
 }
 

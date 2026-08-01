@@ -6,6 +6,8 @@
 #include <QTimer>
 #include <exception>
 
+#include "control/controlobject.h"
+#include "control/controlpushbutton.h"
 #include "moc_prolinknetworkservice.cpp"
 #include "prolink-cxx/src/lib.rs.h"
 #include "util/logger.h"
@@ -15,11 +17,11 @@ const mixxx::Logger kLogger("ProLinkNetworkService");
 
 /// How often the library's events are drained and its tables re-read.
 ///
-/// A beat at 145 BPM is 414 ms apart and the phase meter interpolates between
-/// them, so this only has to be fast enough that a beat is not *late* — it is
-/// not what is being drawn. 50 ms costs one queue drain and two vector reads
-/// twenty times a second.
-constexpr int kPollIntervalMs = 50;
+/// 33 ms, which is what the phase publisher this replaced used: the bar-phase
+/// marker is animated from `[ProLink] master_bar_phase`, so this is the rate
+/// that marker moves at. A beat at 145 BPM is 414 ms apart, so events are far
+/// less demanding than the marker is.
+constexpr int kPollIntervalMs = 33;
 
 mixxx::prolink::MediaSlot toMixxxSlot(::prolink::Slot slot) {
     switch (slot) {
@@ -102,7 +104,63 @@ struct ProLinkNetworkService::Impl {
 
 ProLinkNetworkService::ProLinkNetworkService(QObject* parent)
         : QObject(parent),
-          m_pImpl(std::make_unique<Impl>()) {
+          m_pImpl(std::make_unique<Impl>()),
+          m_pPullDbControl(std::make_unique<ControlPushButton>(
+                  ConfigKey(QStringLiteral("[ProLink]"), QStringLiteral("pull_db")))),
+          m_pMasterDeviceControl(std::make_unique<ControlObject>(
+                  ConfigKey(QStringLiteral("[ProLink]"), QStringLiteral("master_device")))),
+          m_pMasterBpmControl(std::make_unique<ControlObject>(
+                  ConfigKey(QStringLiteral("[ProLink]"), QStringLiteral("master_bpm")))),
+          m_pMasterBarPhaseControl(std::make_unique<ControlObject>(ConfigKey(
+                  QStringLiteral("[ProLink]"), QStringLiteral("master_bar_phase")))) {
+    connect(m_pPullDbControl.get(),
+            &ControlPushButton::valueChanged,
+            this,
+            [this](double value) {
+                if (value > 0) {
+                    pullDatabase();
+                }
+            });
+
+    // Read-only: nothing in Mixxx may tell a CDJ what phase it is at, and a
+    // skin binding that could write these would look like it worked.
+    //
+    // Created in the constructor rather than when the network comes up,
+    // because the phase-meter widget resolves them once when the skin loads —
+    // and a widget that resolved nothing logs
+    // "getControl returning NULL" and then never looks again.
+    m_pMasterDeviceControl->setReadOnly();
+    m_pMasterBpmControl->setReadOnly();
+    m_pMasterBarPhaseControl->setReadOnly();
+    m_pMasterBarPhaseControl->forceSet(-1.0);
+    m_pMasterBpmControl->forceSet(0.0);
+    m_pMasterDeviceControl->forceSet(0.0);
+}
+
+void ProLinkNetworkService::publishMaster() {
+    if (!m_pImpl->pSession) {
+        m_pMasterDeviceControl->forceSet(0.0);
+        m_pMasterBpmControl->forceSet(0.0);
+        m_pMasterBarPhaseControl->forceSet(-1.0);
+        return;
+    }
+    for (const ::prolink::Player& player : (*m_pImpl->pSession)->players()) {
+        if (!player.is_master) {
+            continue;
+        }
+        m_pMasterDeviceControl->forceSet(player.number);
+        // The tempo actually playing, with the pitch fader applied. The
+        // library reports a negative for "not known", which the widget must
+        // not draw as a tempo.
+        m_pMasterBpmControl->forceSet(player.effective_bpm);
+        m_pMasterBarPhaseControl->forceSet(player.bar_phase);
+        return;
+    }
+    // Nobody holds master. Not the same as a master at phase zero, which is
+    // why the phase goes to -1 rather than to 0.
+    m_pMasterDeviceControl->forceSet(0.0);
+    m_pMasterBpmControl->forceSet(0.0);
+    m_pMasterBarPhaseControl->forceSet(-1.0);
 }
 
 ProLinkNetworkService::~ProLinkNetworkService() {
@@ -120,6 +178,13 @@ void ProLinkNetworkService::start() {
         // tempo master are published. Without it we would see beats and
         // nothing else.
         config.announce = true;
+        // The number we held before a restart, so a refresh keeps the identity
+        // the decks already know. Zero on a cold start, which means "negotiate
+        // for whichever of 1-4 is free" -- and 1-4 is a requirement, not a
+        // preference: at any other number a deck accepts our announcement in
+        // full and then never offers us as a LINK source or asks us anything.
+        config.preferred_number = static_cast<::std::uint8_t>(
+                m_preferredNumber >= 1 && m_preferredNumber <= 4 ? m_preferredNumber : 0);
         m_pImpl->pSession = std::make_unique<::rust::Box<::prolink::Session>>(
                 ::prolink::open(config));
     } catch (const std::exception& error) {
@@ -132,10 +197,12 @@ void ProLinkNetworkService::start() {
 
     m_listening = true;
     m_lastError.clear();
-    m_announcedNumber = static_cast<int>((*m_pImpl->pSession)->device_number());
-    m_announceDetail = m_announcedNumber > 0
-            ? tr("announced as player %1").arg(m_announcedNumber)
-            : tr("listening without a player number");
+    // Zero for now, and that is not a failure. Claiming a player number means
+    // watching the network and then negotiating for it, about five seconds in
+    // all, and open() deliberately returns before that so the GUI is not frozen
+    // for the duration. poll() announces the number when it arrives.
+    m_announcedNumber = 0;
+    m_announceDetail = tr("joining the network...");
     kLogger.info() << "started;" << m_announceDetail;
 
     emit listeningChanged(true, QString());
@@ -163,6 +230,7 @@ void ProLinkNetworkService::shutdown() {
     const QList<ProLinkDevice> had = m_devices;
     m_devices.clear();
     m_pending.clear();
+    m_publishedNumber = 0;
     for (const ProLinkDevice& device : had) {
         emit deviceLost(device.mac);
     }
@@ -178,7 +246,21 @@ void ProLinkNetworkService::refresh() {
         start();
         return;
     }
-    (*m_pImpl->pSession)->refresh();
+
+    // Restart, rather than only dropping the browse connections.
+    //
+    // The interface is chosen when the session opens, and a Mixxx started
+    // before the ethernet was plugged in chose whatever was there — on the
+    // deck that was the wireless interface, and the CDJs that appeared
+    // afterwards were on a network we were not listening to. Nothing about
+    // that resolves itself: no keep-alive can arrive on a socket bound to
+    // another interface, however long the user waits.
+    //
+    // So the only honest thing a refresh can do is bind again. It costs the
+    // device number and a second of re-discovery, which is what a user
+    // clicking "refresh" is asking for.
+    shutdown();
+    start();
 }
 
 int ProLinkNetworkService::numberFor(const QByteArray& mac) const {
@@ -294,16 +376,27 @@ void ProLinkNetworkService::fetchArtwork(const QByteArray& mac,
         return;
     }
 
-    // Artwork comes over the dbserver connection rather than NFS: it is small,
-    // and this blocks for one round trip rather than returning an id.
+    // Artwork comes over the dbserver connection rather than NFS. Asking NFS
+    // for it instead churns the deck's filehandle table until it answers
+    // NFSERR_STALE to everything, including the track a DJ is loading.
+    //
+    // Like a file fetch this returns an id and finishes later: the library
+    // feature asks for every cover on a medium in one loop -- some six hundred
+    // of them -- and a blocking round trip each would freeze the GUI for the
+    // length of all six hundred.
     const QByteArray local = localPath.toUtf8();
     try {
-        (*m_pImpl->pSession)
-                ->fetch_artwork(static_cast<::std::uint8_t>(number),
-                        toRustSlot(slot),
-                        artworkId,
-                        ::rust::Str(local.constData(), local.size()));
-        emit artworkFetched(localPath, QString());
+        const quint32 id = (*m_pImpl->pSession)
+                                   ->fetch_artwork(static_cast<::std::uint8_t>(number),
+                                           toRustSlot(slot),
+                                           artworkId,
+                                           ::rust::Str(local.constData(), local.size()));
+        Pending pending;
+        pending.isArtwork = true;
+        pending.mac = mac;
+        pending.slot = slot;
+        pending.localPath = localPath;
+        m_pending.insert(id, pending);
     } catch (const std::exception& error) {
         emit artworkFetched(localPath, QString::fromUtf8(error.what()));
     }
@@ -312,6 +405,18 @@ void ProLinkNetworkService::fetchArtwork(const QByteArray& mac,
 void ProLinkNetworkService::poll() {
     if (!m_pImpl->pSession) {
         return;
+    }
+    // Startup is asynchronous, so a bind that fails -- another Pro DJ Link
+    // program already holding a port is the usual reason -- surfaces here
+    // rather than as an exception from open().
+    if (m_listening && !(*m_pImpl->pSession)->is_ready()) {
+        const QString error = toQString((*m_pImpl->pSession)->last_error());
+        if (!error.isEmpty() && error != m_lastError) {
+            m_lastError = error;
+            m_listening = false;
+            kLogger.warning() << "could not start:" << error;
+            emit listeningChanged(false, error);
+        }
     }
 
     for (const ::prolink::Event& event : (*m_pImpl->pSession)->drain_events()) {
@@ -328,7 +433,7 @@ void ProLinkNetworkService::poll() {
             break;
         case ::prolink::EventKind::TransferProgress: {
             const auto found = m_pending.constFind(event.transfer);
-            if (found != m_pending.constEnd()) {
+            if (found != m_pending.constEnd() && !found->isArtwork) {
                 emit fileFetchProgress(found->localPath,
                         static_cast<quint32>(event.done),
                         static_cast<quint32>(event.total));
@@ -336,9 +441,21 @@ void ProLinkNetworkService::poll() {
             break;
         }
         case ::prolink::EventKind::TransferDone: {
+            const auto found = m_pending.constFind(event.transfer);
+            if (found == m_pending.constEnd()) {
+                // Not ours. A transfer the library started for its own reasons,
+                // or one left over from a session that has since been
+                // restarted — either way there is nobody waiting on a signal
+                // for it, and emitting one with an empty path would abort a
+                // fetch that is still running under the same empty key.
+                break;
+            }
             const Pending pending = m_pending.take(event.transfer);
             const QString error = event.ok ? QString() : toQString(event.detail);
-            if (!error.isEmpty()) {
+            // A missing cover is not worth reporting as the connection's last
+            // error: a medium has hundreds of them, a few are always absent,
+            // and this string is what the UI shows about the network itself.
+            if (!error.isEmpty() && !pending.isArtwork) {
                 m_lastError = error;
             }
             if (pending.isDatabase) {
@@ -359,6 +476,8 @@ void ProLinkNetworkService::poll() {
                     QFile::remove(pending.localPath);
                 }
                 emit databaseFetched(pending.mac, pending.slot, data, reason);
+            } else if (pending.isArtwork) {
+                emit artworkFetched(pending.localPath, error);
             } else {
                 emit fileFetched(pending.localPath, error);
             }
@@ -372,6 +491,34 @@ void ProLinkNetworkService::poll() {
     }
 
     syncDevices();
+    publishMaster();
+    syncAnnouncement();
+}
+
+void ProLinkNetworkService::syncAnnouncement() {
+    const int number = static_cast<int>((*m_pImpl->pSession)->device_number());
+    if (number == m_publishedNumber) {
+        return;
+    }
+    m_publishedNumber = number;
+    m_announcedNumber = number;
+    if (number >= 1 && number <= 4) {
+        m_preferredNumber = number;
+    }
+    if (number >= 1 && number <= 4) {
+        m_announceDetail = tr("announced as player %1").arg(number);
+    } else if (number > 0) {
+        // Every player number was defended, so the library settled for one
+        // outside the range. Everything passive still works; being browsed does
+        // not, and the detail has to say so rather than read like success.
+        m_announceDetail = tr("watching as device %1; no player number was free").arg(number);
+    } else if ((*m_pImpl->pSession)->is_ready()) {
+        m_announceDetail = tr("listening without a player number");
+    } else {
+        m_announceDetail = tr("joining the network...");
+    }
+    kLogger.info() << "announcement changed:" << m_announceDetail;
+    emit announceChanged(m_announcedNumber, m_announceDetail);
 }
 
 void ProLinkNetworkService::syncDevices() {

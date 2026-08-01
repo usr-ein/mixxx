@@ -76,12 +76,19 @@ COPY . /src
 #
 # Stripped on the way out: Debian ships a stripped binary too, and it keeps the
 # scp to the deck short.
+#
+# BUILD_TESTING=OFF explicitly. It defaults to whether GTest was found, and
+# libgtest-dev is one of Mixxx's build dependencies -- so it turns itself on
+# here, configures the mixxx-test target, and then fails to generate because
+# GTest::gmock is a separate Debian package that only the unittest stage below
+# installs. The failure is a configure error about a target nobody asked for.
 RUN --mount=type=cache,target=/build,sharing=locked \
     --mount=type=cache,target=/ccache,sharing=locked \
     --mount=type=cache,target=/opt/cargo/registry,sharing=locked \
     export CCACHE_DIR=/ccache \
     && cmake -S /src -B /build -G Ninja \
         -DCMAKE_BUILD_TYPE=RelWithDebInfo \
+        -DBUILD_TESTING=OFF \
         -DINSTALL_USER_UDEV_RULES=OFF \
         -DCMAKE_C_COMPILER_LAUNCHER=ccache \
         -DCMAKE_CXX_COMPILER_LAUNCHER=ccache \

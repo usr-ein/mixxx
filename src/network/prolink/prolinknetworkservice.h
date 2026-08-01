@@ -11,6 +11,8 @@
 #include "network/prolink/prolinkmediaquery.h"
 #include "network/prolink/server/prolinkservestatus.h"
 
+class ControlObject;
+class ControlPushButton;
 class QTimer;
 
 namespace mixxx {
@@ -135,8 +137,23 @@ class ProLinkNetworkService : public QObject {
     /// Drain the library's events and re-read its tables. On a timer.
     void poll();
 
+    /// Publish the tempo master's number, tempo and bar phase as controls.
+    ///
+    /// `[ProLink] master_device`, `master_bpm` and `master_bar_phase`, which is
+    /// what the phase-meter widget reads. Read-only, because nothing in Mixxx
+    /// may tell a CDJ what phase it is at.
+    void publishMaster();
+
     /// Re-read the device table, emitting found, changed and lost as it moves.
     void syncDevices();
+
+    /// Emit `announceChanged` when the negotiated player number moves.
+    ///
+    /// The number is not known when `start()` returns: taking one means
+    /// watching the network for a couple of seconds and then sending a claim
+    /// chain, and that is far too long to hold the GUI thread. So it is polled
+    /// for instead, and announced when it settles.
+    void syncAnnouncement();
 
     /// Re-read what each player has in its slots, emitting `mediaInfoFound`.
     void syncMedia(int deviceNumber, MediaSlot slot);
@@ -149,6 +166,7 @@ class ProLinkNetworkService : public QObject {
     /// know which signal was promised.
     struct Pending {
         bool isDatabase = false;
+        bool isArtwork = false;
         QByteArray mac;
         MediaSlot slot = MediaSlot::Usb;
         QString localPath;
@@ -163,10 +181,27 @@ class ProLinkNetworkService : public QObject {
     std::unique_ptr<Impl> m_pImpl;
 
     QTimer* m_pTimer = nullptr;
+    /// `[ProLink] pull_db`, so a controller or a skin button can ask for the
+    /// database without going through the menu.
+    std::unique_ptr<ControlPushButton> m_pPullDbControl;
+    std::unique_ptr<ControlObject> m_pMasterDeviceControl;
+    std::unique_ptr<ControlObject> m_pMasterBpmControl;
+    std::unique_ptr<ControlObject> m_pMasterBarPhaseControl;
     QList<ProLinkDevice> m_devices;
     QHash<quint32, Pending> m_pending;
     bool m_listening = false;
     int m_announcedNumber = 0;
+    /// The number `announceChanged` last carried, so it is emitted on a change
+    /// rather than thirty times a second.
+    int m_publishedNumber = 0;
+    /// The number to ask for next time, kept across a shutdown.
+    ///
+    /// A refresh restarts the session, and restarting with no preference would
+    /// take whatever happens to be free -- so Mixxx could come back as a
+    /// different player than the decks have in their tables and than the user
+    /// just read off the screen. Held here rather than in `m_announcedNumber`
+    /// because that one is cleared by `shutdown()`, which is the whole point.
+    int m_preferredNumber = 0;
     QString m_announceDetail;
     QString m_lastError;
     server::ServeStatus m_serveStatus;
