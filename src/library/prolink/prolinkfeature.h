@@ -4,6 +4,7 @@
 #include <QObject>
 #include <QPointer>
 #include <QString>
+#include <QUrl>
 #include <memory>
 
 #include "library/baseexternallibraryfeature.h"
@@ -82,6 +83,8 @@ class ProLinkFeature : public BaseExternalLibraryFeature {
     void onDeviceLost(const QByteArray& mac);
     void onListeningChanged(bool listening, const QString& error);
     void onRefresh(double value);
+    /// A button on the status page was pressed. Every anchor there is one.
+    void onStatusPageAction(const QUrl& action);
 
   private:
     /// Row of the device with this MAC, or -1. Linear, which is fine: a Pro DJ

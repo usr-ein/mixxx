@@ -283,20 +283,14 @@ TreeItemModel* ProLinkFeature::sidebarModel() const {
 }
 
 void ProLinkFeature::activate() {
-    // Clicking the feature reconnects, as well as showing the status page.
+    // Shows the page, and nothing else.
     //
-    // There is otherwise nothing a user can do from the UI when the network
-    // is not working: the interface is chosen when the session opens, so a
-    // Mixxx started before the ethernet was plugged in listens on the wrong
-    // one for ever, and no amount of waiting or re-clicking a deck helps.
-    // This is the one place a user reliably clicks when nothing is appearing.
-    //
-    // Cheap when it is already working: rebinding costs the device number and
-    // a second of re-discovery, and the sidebar repopulates from the
-    // keep-alives that follow.
-    if (m_pNetwork) {
-        m_pNetwork->refresh();
-    }
+    // It used to reconnect as well, on the reasoning that this is where a user
+    // clicks when nothing is appearing. That was wrong twice over: clicking a
+    // sidebar item to look at it should not cost the device number and a second
+    // of re-discovery, and the reason it was needed is gone -- the library now
+    // watches the interfaces itself and binds when a cable is plugged in. The
+    // page carries a button for the times it is genuinely wanted.
     showStatusPage();
 }
 
@@ -660,13 +654,27 @@ void ProLinkFeature::onRefresh(double value) {
     }
 }
 
+void ProLinkFeature::onStatusPageAction(const QUrl& action) {
+    if (action.path() == QLatin1String("/reconnect")) {
+        kLogger.info() << "reconnecting at the user's request";
+        m_pNetwork->refresh();
+        refreshStatusPage();
+    }
+}
+
 void ProLinkFeature::bindLibraryWidget(WLibrary* pLibraryWidget,
         KeyboardEventFilter* pKeyboard) {
     Q_UNUSED(pKeyboard);
     parented_ptr<WLibraryTextBrowser> pEdit =
             make_parented<WLibraryTextBrowser>(pLibraryWidget);
     pEdit->setHtml(statusHtml());
+    // Links are commands, not navigation. The page has no external links at
+    // all; every anchor in it is a button, handled below.
     pEdit->setOpenLinks(false);
+    connect(pEdit.get(),
+            &QTextBrowser::anchorClicked,
+            this,
+            &ProLinkFeature::onStatusPageAction);
     pLibraryWidget->registerView(kViewName, pEdit);
     m_pStatusView = pEdit;
 }
@@ -674,6 +682,20 @@ void ProLinkFeature::bindLibraryWidget(WLibrary* pLibraryWidget,
 QString ProLinkFeature::statusHtml() const {
     QString html;
     html += QStringLiteral("<h2>%1</h2>").arg(tr("Pro DJ Link"));
+
+    // A real target for a finger, on a machine whose only input is a
+    // touchscreen: the padding is what makes an anchor hittable, since a text
+    // browser gives a bare link only the height of its own text.
+    html += QStringLiteral(
+            "<p><a href='mixxx:/reconnect' "
+            "style='display:inline-block;padding:10px 22px;border:1px solid #888;"
+            "border-radius:6px;text-decoration:none;font-weight:bold'>%1</a>"
+            "&nbsp;&nbsp;<small>%2</small></p>")
+                    .arg(tr("Reconnect"),
+                            tr("Rebinds and asks for a player number again. Not "
+                               "normally needed: the network is joined by "
+                               "itself, and again whenever a cable is plugged "
+                               "in."));
 
     if (!m_listening) {
         html += QStringLiteral("<p><b>%1</b></p>")

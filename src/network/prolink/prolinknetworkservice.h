@@ -155,6 +155,9 @@ class ProLinkNetworkService : public QObject {
     /// for instead, and announced when it settles.
     void syncAnnouncement();
 
+    /// Re-read what we are offering, emitting `serveStatusChanged` on a change.
+    void syncServeStatus();
+
     /// Re-read what each player has in its slots, emitting `mediaInfoFound`.
     void syncMedia(int deviceNumber, MediaSlot slot);
 

@@ -70,6 +70,40 @@ QString toQString(const ::rust::String& text) {
     return QString::fromUtf8(text.data(), static_cast<qsizetype>(text.size()));
 }
 
+/// Whether two serve statuses would draw the same page.
+///
+/// Field by field rather than a memcmp or an operator==: the struct is the
+/// library feature's vocabulary, and adding a comparison to it would put a
+/// definition of "changed" somewhere nothing else looks.
+bool sameServeStatus(const mixxx::prolink::server::ServeStatus& left,
+        const mixxx::prolink::server::ServeStatus& right) {
+    if (left.active != right.active || left.deviceNumber != right.deviceNumber ||
+            left.address != right.address || left.interfaceName != right.interfaceName ||
+            left.portmapPort != right.portmapPort || left.mountdPort != right.mountdPort ||
+            left.nfsdPort != right.nfsdPort || left.dbserverPort != right.dbserverPort ||
+            left.media.size() != right.media.size() ||
+            left.consumers.size() != right.consumers.size()) {
+        return false;
+    }
+    for (int i = 0; i < left.media.size(); ++i) {
+        const mixxx::prolink::server::ServedSlot& a = left.media.at(i);
+        const mixxx::prolink::server::ServedSlot& b = right.media.at(i);
+        if (a.slot != b.slot || a.volumeName != b.volumeName ||
+                a.localPath != b.localPath || a.trackCount != b.trackCount) {
+            return false;
+        }
+    }
+    for (int i = 0; i < left.consumers.size(); ++i) {
+        const mixxx::prolink::server::ServeConsumer& a = left.consumers.at(i);
+        const mixxx::prolink::server::ServeConsumer& b = right.consumers.at(i);
+        if (a.deviceNumber != b.deviceNumber || a.slot != b.slot ||
+                a.trackId != b.trackId || a.playing != b.playing) {
+            return false;
+        }
+    }
+    return true;
+}
+
 mixxx::prolink::ProLinkDevice toMixxxDevice(const ::prolink::Device& device) {
     mixxx::prolink::ProLinkDevice out;
     out.mac = toQString(device.mac).toLatin1();
@@ -171,6 +205,11 @@ void ProLinkNetworkService::start() {
     if (m_pImpl->pSession) {
         return;
     }
+    // The library's own log, to stderr, which on the deck is where Mixxx's
+    // own already goes. Without it the only evidence of what the protocol is
+    // doing is the socket table, read over ssh.
+    ::prolink::init_logging(::rust::Str("prolink=info"));
+
     try {
         ::prolink::Config config = ::prolink::default_config();
         // Announcing is what makes players unicast their status to us, and
@@ -231,6 +270,8 @@ void ProLinkNetworkService::shutdown() {
     m_devices.clear();
     m_pending.clear();
     m_publishedNumber = 0;
+    m_serveStatus = server::ServeStatus();
+    emit serveStatusChanged(m_serveStatus);
     for (const ProLinkDevice& device : had) {
         emit deviceLost(device.mac);
     }
@@ -493,6 +534,58 @@ void ProLinkNetworkService::poll() {
     syncDevices();
     publishMaster();
     syncAnnouncement();
+    syncServeStatus();
+}
+
+void ProLinkNetworkService::syncServeStatus() {
+    const ::prolink::ServeStatus fresh = (*m_pImpl->pSession)->serve_status();
+
+    server::ServeStatus status;
+    status.active = fresh.active;
+    status.deviceNumber = static_cast<int>(fresh.device_number);
+    status.deviceName = tr("Mixxx (this machine)");
+    status.address = QHostAddress(toQString(fresh.address));
+    status.interfaceName = toQString(fresh.interface);
+    status.portmapPort = fresh.portmap_port;
+    status.mountdPort = fresh.mount_port;
+    status.nfsdPort = fresh.nfs_port;
+    status.dbserverPort = fresh.dbserver_port;
+    for (const ::prolink::ServedSlot& slot : fresh.media) {
+        server::ServedSlot served;
+        served.slot = toMixxxSlot(slot.slot);
+        served.exportPath = toQString(slot.export_path);
+        served.volumeName = toQString(slot.volume_name);
+        served.localPath = toQString(slot.local_path);
+        served.trackCount = static_cast<int>(slot.track_count);
+        served.playlistCount = static_cast<int>(slot.playlist_count);
+        status.media.append(served);
+    }
+    for (const ::prolink::ServeConsumer& reader : fresh.consumers) {
+        server::ServeConsumer consumer;
+        consumer.deviceNumber = static_cast<int>(reader.device_number);
+        consumer.slot = toMixxxSlot(reader.slot);
+        consumer.trackId = reader.track_id;
+        consumer.playing = reader.playing;
+        // Named from the device table, which the library fills from
+        // keep-alives; a consumer we have not seen one from still counts,
+        // because its status packet is what put it here.
+        for (const ProLinkDevice& device : m_devices) {
+            if (device.deviceNumber == consumer.deviceNumber) {
+                consumer.deviceName = device.name;
+                consumer.address = device.address;
+                break;
+            }
+        }
+        status.consumers.append(consumer);
+    }
+
+    // Emitted on a change rather than thirty times a second: the page it feeds
+    // rebuilds its whole HTML, and a DJ scrolling it would fight the rebuild.
+    if (sameServeStatus(status, m_serveStatus)) {
+        return;
+    }
+    m_serveStatus = status;
+    emit serveStatusChanged(m_serveStatus);
 }
 
 void ProLinkNetworkService::syncAnnouncement() {
