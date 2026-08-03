@@ -81,6 +81,37 @@ void WDeckToast::onAppeared(mixxx::deck::MediumInfo medium) {
 }
 
 void WDeckToast::onVanished(mixxx::deck::MediumInfo medium) {
+    // Somebody else's deck is playing off this stick, and it now goes on doing
+    // so from a copy in our RAM. Said first, because it is the one a DJ has to
+    // act on: our own deck recovering is our business, but a CDJ on the other
+    // side of the booth about to stop is theirs.
+    MediaRegistry* pRegistry = MediaRegistry::instance();
+    if (pRegistry) {
+        const mixxx::prolink::server::ServeStatus serve = pRegistry->serveStatus();
+        QList<int> fed;
+        for (const mixxx::prolink::server::ServedSlot& slot : serve.media) {
+            if (!slot.phantom || slot.localPath != medium.id.mountPoint()) {
+                continue;
+            }
+            for (const mixxx::prolink::server::ServeConsumer& reader : serve.consumers) {
+                if (reader.slot == slot.slot && !fed.contains(reader.deviceNumber)) {
+                    fed.append(reader.deviceNumber);
+                }
+            }
+        }
+        if (!fed.isEmpty()) {
+            QStringList numbers;
+            for (int number : fed) {
+                numbers.append(QString::number(number));
+            }
+            show(medium,
+                    tr("%1 removed — player %2 is still being fed from cache.")
+                            .arg(medium.name, numbers.join(QStringLiteral(", "))),
+                    true);
+            return;
+        }
+    }
+
     // The deck plays from a copy, so pulling a stick mid-track is survivable --
     // and worth saying, because everything a DJ knows about CDJs says it should
     // not be. The message is only earned when there is genuinely a pinned copy,

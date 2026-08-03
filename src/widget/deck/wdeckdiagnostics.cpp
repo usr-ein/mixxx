@@ -251,6 +251,36 @@ QString WDeckDiagnostics::html() const {
     }
     out += QStringLiteral("</table>");
 
+    // ---- what we are offering ----------------------------------------------
+    //
+    // A phantom row is the one worth spotting: it means a stick has been pulled
+    // while a player was still playing off it, and that player is now being fed
+    // from a copy in RAM. It should clear itself when the player moves on.
+    if (pRegistry) {
+        const mixxx::prolink::server::ServeStatus serve = pRegistry->serveStatus();
+        if (serve.active && (!serve.media.isEmpty() || !serve.consumers.isEmpty())) {
+            out += QStringLiteral("<h2>Serving</h2><table>");
+            out += row(tr("As player"), QString::number(serve.deviceNumber));
+            for (const mixxx::prolink::server::ServedSlot& slot : serve.media) {
+                out += row(slot.volumeName.isEmpty() ? slot.exportPath : slot.volumeName,
+                        slot.phantom
+                                ? QStringLiteral("<span class='warn'>%1</span>")
+                                          .arg(tr("gone — feeding a player from cache"))
+                                : tr("%1 tracks").arg(slot.trackCount));
+            }
+            for (const mixxx::prolink::server::ServeConsumer& reader : serve.consumers) {
+                out += row(tr("Player %1").arg(reader.deviceNumber),
+                        tr("%1 track %2")
+                                .arg(reader.playing ? tr("playing") : tr("holding"))
+                                .arg(reader.trackId));
+            }
+            if (serve.consumers.isEmpty()) {
+                out += row(tr("Consumers"), tr("none"));
+            }
+            out += QStringLiteral("</table>");
+        }
+    }
+
     // ---- streaming ---------------------------------------------------------
     //
     // The question this answers is whether the download is keeping ahead of the

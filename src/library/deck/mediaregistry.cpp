@@ -710,6 +710,10 @@ void MediaRegistry::stopStreaming(const QString& localPath) {
                    << "waits /" << pStream->waitedMs() << "ms:" << localPath;
 }
 
+mixxx::prolink::server::ServeStatus MediaRegistry::serveStatus() const {
+    return m_pNetwork ? m_pNetwork->serveStatus() : mixxx::prolink::server::ServeStatus();
+}
+
 void MediaRegistry::requestArtwork(const QString& coverPath) {
     if (coverPath.isEmpty() || m_artworkAsked.contains(coverPath)) {
         return;
@@ -895,6 +899,10 @@ void MediaRegistry::requestArtwork(const QString& coverPath) {
     // A local medium carries its own images, so there is never anything to ask
     // for without Pro DJ Link.
     Q_UNUSED(coverPath);
+}
+
+mixxx::prolink::server::ServeStatus MediaRegistry::serveStatus() const {
+    return {};
 }
 
 #endif // __PROLINK__

@@ -23,6 +23,14 @@ struct ServedSlot {
     QString localPath;
     int trackCount = 0;
     int playlistCount = 0;
+    /// The stick is **gone**, and a player is still playing off it.
+    ///
+    /// It stays announced -- that is what keeps the consumer's mount valid and
+    /// its player from erroring out mid-track -- and is served from copies made
+    /// while the stick was in. It is no longer browsable, so nobody can start
+    /// something we could not finish, and it leaves for real once the last
+    /// consumer moves on (browser-prd.md 12.5).
+    bool phantom = false;
 };
 
 /// A player that has loaded one of *our* tracks.

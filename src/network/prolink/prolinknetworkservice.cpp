@@ -89,7 +89,8 @@ bool sameServeStatus(const mixxx::prolink::server::ServeStatus& left,
         const mixxx::prolink::server::ServedSlot& a = left.media.at(i);
         const mixxx::prolink::server::ServedSlot& b = right.media.at(i);
         if (a.slot != b.slot || a.volumeName != b.volumeName ||
-                a.localPath != b.localPath || a.trackCount != b.trackCount) {
+                a.localPath != b.localPath || a.trackCount != b.trackCount ||
+                a.phantom != b.phantom) {
             return false;
         }
     }
@@ -598,6 +599,7 @@ void ProLinkNetworkService::syncServeStatus() {
         served.localPath = toQString(slot.local_path);
         served.trackCount = static_cast<int>(slot.track_count);
         served.playlistCount = static_cast<int>(slot.playlist_count);
+        served.phantom = slot.phantom;
         status.media.append(served);
     }
     for (const ::prolink::ServeConsumer& reader : fresh.consumers) {

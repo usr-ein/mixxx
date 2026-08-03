@@ -12,6 +12,7 @@
 #include "network/prolink/prolinkdefs.h"
 #include "network/prolink/prolinkdevice.h"
 #include "network/prolink/prolinkmediaquery.h"
+#include "network/prolink/server/prolinkservestatus.h"
 #include "util/db/dbconnectionpool.h"
 
 namespace mixxx {
@@ -125,6 +126,13 @@ class MediaRegistry : public QObject {
     /// download itself is left to finish — the bytes are already paid for, and
     /// a complete file in tier 1 is what makes loading it again instant.
     void stopStreaming(const QString& localPath);
+
+    /// What we are offering to the players on the network, and who is reading
+    /// it. Empty without Pro DJ Link.
+    ///
+    /// Includes whether a slot has gone **phantom** — the stick pulled while a
+    /// player was still playing off it, now being fed from a copy.
+    mixxx::prolink::server::ServeStatus serveStatus() const;
 
     /// Ask for a cover that is not on disk yet, if it belongs to a remote
     /// medium. Cheap, idempotent, and safe to call from a paint.
