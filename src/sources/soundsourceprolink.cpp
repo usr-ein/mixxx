@@ -1,5 +1,7 @@
 #include "sources/soundsourceprolink.h"
 
+#include <utility>
+
 #include "util/logger.h"
 
 namespace {
@@ -35,6 +37,17 @@ void SoundSourceProLink::close() {
         m_pAvioContext = nullptr;
     }
     m_pStream.reset();
+}
+
+std::pair<SoundSourceProLink::ImportResult, QDateTime>
+SoundSourceProLink::importTrackMetadataAndCoverImage(
+        TrackMetadata* pTrackMetadata,
+        QImage* pCoverImage,
+        bool resetMissingTagMetadata) const {
+    Q_UNUSED(pTrackMetadata)
+    Q_UNUSED(pCoverImage)
+    Q_UNUSED(resetMissingTagMetadata)
+    return std::make_pair(ImportResult::Unavailable, QDateTime());
 }
 
 int SoundSourceProLink::readPacket(void* pOpaque, uint8_t* pBuffer, int size) {

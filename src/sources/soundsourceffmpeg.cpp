@@ -969,6 +969,24 @@ bool SoundSourceFFmpeg::adjustCurrentPosition(SINT startIndex) {
     if (m_pavStream->codecpar->frame_size > 0) {
         seekIndex -= seekIndex % m_pavCodecContext->frame_size;
     }
+    // Never ask libavformat to seek before the stream starts.
+    //
+    // The preroll above is deliberately allowed to run negative -- "start
+    // decoding some frames early so the first one out is exact" -- and near the
+    // beginning of a file there is nothing to run back into. libavformat does
+    // not clamp: seek_frame_generic() sees a timestamp below its first index
+    // entry and returns a bare -1, which av_strerror renders as "Operation not
+    // permitted" and which reads like a permissions problem rather than an
+    // out-of-range seek.
+    //
+    // MP3 is where this bites, and it bites hard: mp3_seek() declines every
+    // seek that is not through a Xing TOC, so every MP3 seek lands in the
+    // generic path, and the preroll for MP3 is nine frames -- 10,368 samples
+    // before a start index that is 0 whenever the deck loads a track. So the
+    // FIRST seek of every MP3 opened through FFmpeg fails, the read test fails
+    // with it, and SoundSourceProxy moves on to the next provider. Ordinarily
+    // nobody notices, because MAD claims MP3 first.
+    seekIndex = math_max(seekIndex, frameIndexMin());
     DEBUG_ASSERT(seekIndex <= startIndex);
 
     if (m_frameBuffer.tryContinueReadingFrom(seekIndex)) {

@@ -39,6 +39,9 @@
 #endif
 
 #include "library/coverartutils.h"
+// Not a decoder: the register of files that are still arriving, which decides
+// whether a failed open may be retried with another provider at all.
+#include "library/deck/streamingfile.h"
 #include "track/globaltrackcache.h"
 #include "track/track.h"
 #include "util/logger.h"
@@ -925,6 +928,22 @@ bool SoundSourceProxy::openSoundSource(
                 DEBUG_ASSERT(openMode == mixxx::SoundSource::OpenMode::Strict);
             }
         }
+        // A file that is still arriving may only be read by the provider that
+        // knows it is arriving.
+        //
+        // Every other decoder opens the path directly, and a range that has not
+        // landed yet reads back as zeros **successfully** -- so falling through
+        // here does not fail, it silently produces a truncated track. That is
+        // exactly what happened: a 291 s MP3 loaded as 160 s, because the
+        // fallback decoder lost frame sync at the download frontier and Mixxx
+        // wrote the shorter duration into the library.
+        if (mixxx::deck::StreamingFileRegistry::lookup(getUrl().toLocalFile())) {
+            kLogger.warning()
+                    << "Refusing to hand a file that is still arriving to another decoder:"
+                    << getUrl().toString(QUrl::PreferLocalFile);
+            return false;
+        }
+
         // Continue with the next available SoundSource provider
         auto nextProviderWithOpenModePair = nextProviderWithOpenMode(openMode);
         auto pNextProvider = std::move(nextProviderWithOpenModePair.first);

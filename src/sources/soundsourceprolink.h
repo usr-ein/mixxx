@@ -24,6 +24,26 @@ class SoundSourceProLink : public SoundSourceFFmpeg {
 
     void close() override;
 
+    /// Nothing. There are no tags here worth reading, and reading them costs
+    /// seconds.
+    ///
+    /// The default implementation hands the *path* to TagLib, which opens the
+    /// file behind our back and scans it. Two things are wrong with that while
+    /// a track is arriving. It is slow: TagLib hunts for an ID3v1 tag and the
+    /// last MPEG frame by scanning backwards from the end, and the end of a
+    /// half-downloaded file is megabytes of sparse zeros with no frame sync in
+    /// them -- measured at 2.2 s of the ~2.6 s it took to load a remote track,
+    /// on the main thread, with the deck frozen. And it is wrong: whatever it
+    /// concludes is drawn from bytes that have not arrived.
+    ///
+    /// Nothing is lost. This file is a byte copy of somebody else's track and
+    /// its metadata comes from the pdb, which the browser has already read and
+    /// applies to the Track straight after the load.
+    std::pair<ImportResult, QDateTime> importTrackMetadataAndCoverImage(
+            TrackMetadata* pTrackMetadata,
+            QImage* pCoverImage,
+            bool resetMissingTagMetadata) const override;
+
   protected:
     AVIOContext* createAvioContext() override;
 
