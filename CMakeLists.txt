@@ -1009,6 +1009,7 @@ add_library(mixxx-lib STATIC EXCLUDE_FROM_ALL
   src/library/deck/decktrackmodel.cpp
   src/library/deck/mediaregistry.cpp
   src/library/deck/pdbingest.cpp
+  src/library/deck/streamingfile.cpp
   src/library/deck/trackcache.cpp
   src/library/deck/volumelabel.cpp
   src/library/rekordbox/rekordboxfeature.cpp
@@ -2236,6 +2237,7 @@ if(BUILD_TESTING)
     src/test/signalpathtest.cpp
     src/test/skincontext_test.cpp
     src/test/softtakeover_test.cpp
+    src/test/streamingfile_test.cpp
     src/test/soundproxy_test.cpp
     src/test/soundsourceproviderregistrytest.cpp
     src/test/sqliteliketest.cpp
