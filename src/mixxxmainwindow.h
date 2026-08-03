@@ -36,6 +36,8 @@ class LibraryExporter;
 /// It sets up the main window providing a menubar.
 /// For the main view, an instance of class MixxxView is
 /// created which creates your view.
+class QMouseEvent;
+
 class MixxxMainWindow : public QMainWindow {
     Q_OBJECT
   public:
@@ -99,6 +101,9 @@ class MixxxMainWindow : public QMainWindow {
   protected:
     /// Event filter to block certain events (eg. tooltips if tooltips are disabled)
     bool eventFilter(QObject *obj, QEvent *event) override;
+    /// Show the menu bar while a real pointer hovers the top edge, hide it
+    /// when it leaves. A touchscreen cannot hover, which is the whole point.
+    void updateMenuBarReveal(QMouseEvent* pEvent);
     void closeEvent(QCloseEvent *event) override;
 
   private:

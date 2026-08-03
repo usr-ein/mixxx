@@ -9,6 +9,7 @@
 
 #if QT_VERSION < QT_VERSION_CHECK(6, 0, 0)
 #include <QGLFormat>
+#include <QMouseEvent>
 #endif
 
 #ifdef __LINUX__
@@ -400,9 +401,29 @@ void MixxxMainWindow::initialize() {
 #endif
 #endif
 
-    // Show the menubar after the launch image is replaced by the skin widget,
-    // otherwise it would shift the launch image shortly before the skin is visible.
-    m_pMenuBar->show();
+    // The menu bar stays HIDDEN, and comes back only for a real mouse.
+    //
+    // This deck has a touchscreen, no pointer and no keyboard. The bar is
+    // unreachable in normal use and costs ~22 px off a panel whose layout is
+    // budgeted to the pixel -- but deleting it would take the preferences
+    // dialog and the developer tools with it, which are exactly what you want
+    // on the one day you have a keyboard plugged in.
+    //
+    // So: reveal it on HOVER in a strip along the top edge. Hover is the
+    // discriminator that matters, and it is not a heuristic -- a touchscreen
+    // can only press, never hover, so a fingertip cannot trigger this however
+    // X11 chooses to synthesise its events. Checking QMouseEvent::source() for
+    // synthesis would be the obvious alternative and is strictly weaker: some
+    // panels present as plain pointer devices and defeat it.
+    //
+    // It overlays rather than reflows. The skin is a fixed 1024x600; giving the
+    // bar its own row would push the last one off the bottom.
+    m_pMenuBar->setParent(m_pCentralWidget);
+    m_pMenuBar->raise();
+    m_pMenuBar->hide();
+    setMouseTracking(true);
+    m_pCentralWidget->setMouseTracking(true);
+    qApp->installEventFilter(this);
 
     // The launch image widget is automatically disposed, but we still have a
     // pointer to it.
@@ -1318,6 +1339,9 @@ void MixxxMainWindow::tryParseAndSetDefaultStyleSheet() {
 
 /// Catch ToolTip and WindowStateChange events
 bool MixxxMainWindow::eventFilter(QObject* obj, QEvent* event) {
+    if (event->type() == QEvent::MouseMove) {
+        updateMenuBarReveal(static_cast<QMouseEvent*>(event));
+    }
     if (event->type() == QEvent::ToolTip) {
         // always show tooltips in the preferences window
         QWidget* activeWindow = QApplication::activeWindow();
@@ -1397,6 +1421,40 @@ bool MixxxMainWindow::eventFilter(QObject* obj, QEvent* event) {
     }
     // standard event processing
     return QMainWindow::eventFilter(obj, event);
+}
+
+void MixxxMainWindow::updateMenuBarReveal(QMouseEvent* pEvent) {
+    if (!m_pMenuBar || !m_pCentralWidget) {
+        return;
+    }
+    // Buttons held means a drag, and a drag is what a finger does. Only a free
+    // pointer counts.
+    if (pEvent->buttons() != Qt::NoButton) {
+        return;
+    }
+    const QPoint local = m_pCentralWidget->mapFromGlobal(pEvent->globalPosition().toPoint());
+
+    if (!m_pMenuBar->isVisible()) {
+        constexpr int kHotZoneHeight = 4;
+        if (local.y() >= 0 && local.y() < kHotZoneHeight &&
+                local.x() >= 0 && local.x() < m_pCentralWidget->width()) {
+            m_pMenuBar->setGeometry(0, 0, m_pCentralWidget->width(),
+                    m_pMenuBar->sizeHint().height());
+            m_pMenuBar->show();
+            m_pMenuBar->raise();
+        }
+        return;
+    }
+
+    // Hide again once the pointer leaves it -- but never while a menu is open,
+    // or picking an item from it would dismiss the bar out from under the
+    // pointer on the way down.
+    if (m_pMenuBar->activeAction()) {
+        return;
+    }
+    if (local.y() > m_pMenuBar->height()) {
+        m_pMenuBar->hide();
+    }
 }
 
 void MixxxMainWindow::closeEvent(QCloseEvent *event) {
