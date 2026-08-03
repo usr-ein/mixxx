@@ -164,6 +164,31 @@ void TrackCache::prefetch(const MediumId& medium, const QString& sourcePath) {
     });
 }
 
+void TrackCache::adopt(const MediumId& medium, const QString& localPath, qint64 size) {
+    if (localPath.isEmpty()) {
+        return;
+    }
+    const QString name = QFileInfo(localPath).fileName();
+    auto it = m_entries.find(name);
+    if (it != m_entries.end()) {
+        // Already known, streamed a second time. Correct the size rather than
+        // double-count it: the file was created at its full length up front, so
+        // this is the same bytes, not more of them.
+        m_ramBytes += size - it->size;
+        it->size = size;
+        it->lastUsed = ++m_clock;
+        return;
+    }
+    Entry entry;
+    entry.medium = medium;
+    entry.localPath = localPath;
+    entry.size = size;
+    entry.lastUsed = ++m_clock;
+    m_entries.insert(name, entry);
+    m_ramBytes += size;
+    kLogger.debug() << "adopted" << name << size << "bytes; tier 1 now" << m_ramBytes;
+}
+
 void TrackCache::touch(const QString& localPath) {
     const QString name = QFileInfo(localPath).fileName();
     auto it = m_entries.find(name);

@@ -278,6 +278,29 @@ TEST_F(StreamingFileTest, CompleteSatisfiesEveryRange) {
     EXPECT_TRUE(stream.isComplete());
 }
 
+TEST_F(StreamingFileTest, AnUnannouncedRangeIsAHoleEvenThoughTheFileIsFullSize) {
+    // The reason this class exists, stated as a test. The file is on disk at
+    // its full length from the first instant, so an ordinary read of any part
+    // of it succeeds immediately and returns zeros. Nothing above would know:
+    // there is no error, no short read, no signal of any kind -- the deck just
+    // plays silence. So "the file exists" must never be taken to mean "the
+    // bytes are there".
+    StreamingFile stream(m_path, kSize);
+    QFile plain(m_path);
+    ASSERT_TRUE(plain.open(QIODevice::ReadOnly));
+    EXPECT_EQ(kSize, plain.size());
+    QByteArray naive = plain.read(256);
+    plain.close();
+    EXPECT_EQ(256, naive.size());
+    EXPECT_EQ(QByteArray(256, '\0'), naive) << "a sparse hole reads back as zeros";
+
+    // The same range through the StreamingFile blocks instead, and here fails
+    // rather than hanging only because the transfer is told it has failed.
+    stream.fail(QStringLiteral("nothing arrived"));
+    QByteArray buffer(256, '\xff');
+    EXPECT_EQ(-1, stream.read(0, buffer.data(), 256));
+}
+
 TEST_F(StreamingFileTest, SeveralReadersAreAllWokenByOneArrival) {
     StreamingFile stream(m_path, kSize);
     QList<QThread*> readers;
@@ -299,6 +322,153 @@ TEST_F(StreamingFileTest, SeveralReadersAreAllWokenByOneArrival) {
         delete pReader;
     }
     EXPECT_EQ(4, succeeded.loadAcquire());
+}
+
+// ---------------------------------------------------------------------------
+// The whole thing, without a network
+//
+// A track arrives head, then tail, then the middle in playhead order, and a
+// decoder reads it front to back while that happens. Everything below the
+// network is real here: a sparse file, a background writer, and a reader that
+// blocks. Only the socket is missing.
+// ---------------------------------------------------------------------------
+
+class StreamingArrivalTest : public testing::Test {
+  protected:
+    void SetUp() override {
+        ASSERT_TRUE(m_dir.isValid());
+        m_path = m_dir.filePath(QStringLiteral("track.mp3"));
+        QFile file(m_path);
+        ASSERT_TRUE(file.open(QIODevice::WriteOnly));
+        // Sparse and full-length from the outset, exactly as the fetcher makes
+        // it. Every byte of it currently reads back as zero.
+        ASSERT_TRUE(file.resize(kSize));
+        file.close();
+    }
+
+    /// The byte a given offset should hold once it has really arrived.
+    ///
+    /// Position-dependent and never zero, so a hole cannot be mistaken for
+    /// content and content cannot be mistaken for the wrong content.
+    static char expectedAt(qint64 offset) {
+        return static_cast<char>((offset % 251) + 1);
+    }
+
+    /// Write and announce one range, as the fetcher does: flushed to disk
+    /// first, announced second. The other order would let a reader through to
+    /// bytes still sitting in a buffer.
+    static void deliver(const QString& path, StreamingFile* pStream, qint64 offset, qint64 length) {
+        QByteArray bytes(static_cast<int>(length), '\0');
+        for (qint64 i = 0; i < length; ++i) {
+            bytes[static_cast<int>(i)] = expectedAt(offset + i);
+        }
+        QFile file(path);
+        ASSERT_TRUE(file.open(QIODevice::ReadWrite));
+        ASSERT_TRUE(file.seek(offset));
+        ASSERT_EQ(length, file.write(bytes));
+        file.close();
+        pStream->markPresent(offset, length);
+    }
+
+    /// The order prolink::consume::nfs::progressive_plan produces: head, tail,
+    /// then the middle in chunks. Kept in step with it by the Rust tests, which
+    /// assert the same shape against the real thing.
+    static QList<QPair<qint64, qint64>> plan(qint64 size, qint64 head, qint64 tail, qint64 chunk) {
+        QList<QPair<qint64, qint64>> steps;
+        const qint64 headLen = qMin(head, size);
+        if (headLen > 0) {
+            steps.append({0, headLen});
+        }
+        const qint64 tailStart = qMax(headLen, size - tail);
+        if (tailStart < size) {
+            steps.append({tailStart, size - tailStart});
+        }
+        for (qint64 at = headLen; at < tailStart; at += chunk) {
+            steps.append({at, qMin(chunk, tailStart - at)});
+        }
+        return steps;
+    }
+
+    static constexpr qint64 kSize = 512 * 1024;
+    static constexpr qint64 kHead = 64 * 1024;
+    static constexpr qint64 kTail = 16 * 1024;
+    static constexpr qint64 kChunk = 32 * 1024;
+    QTemporaryDir m_dir;
+    QString m_path;
+};
+
+TEST_F(StreamingArrivalTest, ADecoderReadingFrontToBackNeverSeesAHole) {
+    StreamingFile stream(m_path, kSize);
+
+    const QList<QPair<qint64, qint64>> steps = plan(kSize, kHead, kTail, kChunk);
+    const QString path = m_path;
+    QThread* pFetcher = QThread::create([path, &stream, steps]() {
+        for (const auto& step : steps) {
+            // Slowly enough that the reader genuinely overtakes it -- otherwise
+            // the test would pass without ever exercising a wait.
+            QThread::msleep(5);
+            deliver(path, &stream, step.first, step.second);
+        }
+        stream.complete();
+    });
+    pFetcher->start();
+
+    // Read it the way FFmpeg does: forward, in buffer-sized bites.
+    constexpr qint64 kBite = 8 * 1024;
+    QByteArray buffer(kBite, '\0');
+    qint64 at = 0;
+    while (at < kSize) {
+        const qint64 read = stream.read(at, buffer.data(), kBite);
+        ASSERT_GT(read, 0) << "read failed at " << at;
+        for (qint64 i = 0; i < read; ++i) {
+            // The assertion that matters. A zero here is a byte the decoder
+            // would have turned into silence.
+            ASSERT_EQ(expectedAt(at + i), buffer.at(static_cast<int>(i)))
+                    << "hole at " << (at + i);
+        }
+        at += read;
+    }
+    pFetcher->wait();
+    delete pFetcher;
+
+    EXPECT_EQ(kSize, at);
+    // It really did have to wait, so the read-ahead path above was exercised.
+    EXPECT_GT(stream.waitCount(), 0);
+}
+
+TEST_F(StreamingArrivalTest, TheTailIsReadableLongBeforeTheMiddle) {
+    // An M4A keeps its moov atom at the end, and a decoder seeks there during
+    // the open. That is why the tail is fetched second: if it waited its turn
+    // in the middle, AAC would not open until the whole track had arrived --
+    // and only AAC, which is a horrible fault to track down.
+    StreamingFile stream(m_path, kSize);
+    const QList<QPair<qint64, qint64>> steps = plan(kSize, kHead, kTail, kChunk);
+    ASSERT_GE(steps.size(), 3);
+
+    deliver(m_path, &stream, steps.at(0).first, steps.at(0).second);
+    deliver(m_path, &stream, steps.at(1).first, steps.at(1).second);
+
+    QByteArray buffer(1024, '\0');
+    const qint64 read = stream.read(kSize - 1024, buffer.data(), 1024);
+    EXPECT_EQ(1024, read);
+    EXPECT_EQ(expectedAt(kSize - 1024), buffer.at(0));
+    // And nothing waited for it: the middle has not been delivered at all.
+    EXPECT_EQ(0, stream.waitCount());
+}
+
+TEST_F(StreamingArrivalTest, RangesArrivingInOneBatchAreAllRecorded) {
+    // The network layer drains its events in batches, so several ranges land
+    // between one look at the queue and the next. Recording only the last would
+    // leave earlier ones looking like holes for good -- the reader would block
+    // on bytes that are sitting on disk, and time out rather than play.
+    StreamingFile stream(m_path, kSize);
+    for (const auto& step : plan(kSize, kHead, kTail, kChunk)) {
+        deliver(m_path, &stream, step.first, step.second);
+    }
+    QByteArray buffer(kSize, '\0');
+    EXPECT_EQ(kSize, stream.read(0, buffer.data(), kSize));
+    EXPECT_EQ(0, stream.waitCount());
+    EXPECT_EQ(expectedAt(kSize - 1), buffer.at(static_cast<int>(kSize) - 1));
 }
 
 } // namespace

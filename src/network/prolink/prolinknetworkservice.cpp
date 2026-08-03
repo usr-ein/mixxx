@@ -347,6 +347,44 @@ void ProLinkNetworkService::fetchFile(const QByteArray& mac,
     }
 }
 
+void ProLinkNetworkService::fetchFileStreaming(const QByteArray& mac,
+        MediaSlot slot,
+        const QString& remotePath,
+        const QString& localPath,
+        quint32 headBytes) {
+    if (!m_pImpl->pSession) {
+        emit fileFetched(localPath, tr("Pro DJ Link is not running"));
+        return;
+    }
+    const int number = numberFor(mac);
+    if (number == 0) {
+        emit fileFetched(localPath, tr("that player is no longer on the network"));
+        return;
+    }
+
+    const QByteArray remote = remotePath.toUtf8();
+    const QByteArray local = localPath.toUtf8();
+    try {
+        const quint32 id = (*m_pImpl->pSession)
+                                   ->fetch_file_streaming(
+                                           static_cast<::std::uint8_t>(number),
+                                           toRustSlot(slot),
+                                           ::rust::Str(remote.constData(), remote.size()),
+                                           ::rust::Str(local.constData(), local.size()),
+                                           headBytes);
+        Pending pending;
+        pending.isDatabase = false;
+        pending.mac = mac;
+        pending.slot = slot;
+        pending.localPath = localPath;
+        m_pending.insert(id, pending);
+        kLogger.info() << "streaming" << remotePath << "from player" << number
+                       << "with a" << headBytes << "byte head";
+    } catch (const std::exception& error) {
+        emit fileFetched(localPath, QString::fromUtf8(error.what()));
+    }
+}
+
 void ProLinkNetworkService::fetchDatabase(const QByteArray& mac, MediaSlot slot) {
     if (!m_pImpl->pSession) {
         emit databaseFetched(mac, slot, QByteArray(), tr("Pro DJ Link is not running"));
@@ -476,8 +514,10 @@ void ProLinkNetworkService::poll() {
             const auto found = m_pending.constFind(event.transfer);
             if (found != m_pending.constEnd() && !found->isArtwork) {
                 emit fileFetchProgress(found->localPath,
-                        static_cast<quint32>(event.done),
-                        static_cast<quint32>(event.total));
+                        static_cast<quint64>(event.done),
+                        static_cast<quint64>(event.total),
+                        static_cast<quint64>(event.offset),
+                        static_cast<quint64>(event.len));
             }
             break;
         }

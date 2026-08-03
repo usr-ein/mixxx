@@ -88,14 +88,23 @@ bool ProLinkTrackFetcher::fetchBlocking(const QByteArray& mac,
     const auto progressConnection = connect(m_pNetwork,
             &mixxx::prolink::ProLinkNetworkService::fileFetchProgress,
             &dialog,
-            [&dialog, localPath](const QString& path, quint32 done, quint32 total) {
+            [&dialog, localPath](const QString& path,
+                    quint64 done,
+                    quint64 total,
+                    quint64 offset,
+                    quint64 length) {
+                Q_UNUSED(offset);
+                Q_UNUSED(length);
+                // This path fetches whole files, so the range a streaming
+                // fetch would report says nothing a ring can show.
                 if (path != localPath) {
                     return;
                 }
                 if (total == 0) {
                     dialog.setIndeterminate();
                 } else {
-                    dialog.setProgress(static_cast<double>(done) / total);
+                    dialog.setProgress(static_cast<double>(done) /
+                            static_cast<double>(total));
                 }
             });
 

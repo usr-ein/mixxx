@@ -114,6 +114,9 @@ class StreamingFileRegistry {
     /// Null when the path is an ordinary file.
     static std::shared_ptr<StreamingFile> lookup(const QString& localPath);
     static int count();
+    /// Everything in flight, for the diagnostics page. A snapshot, so the
+    /// caller is not holding the registry's lock while it draws.
+    static QList<QPair<QString, std::shared_ptr<StreamingFile>>> snapshot();
 };
 
 } // namespace deck

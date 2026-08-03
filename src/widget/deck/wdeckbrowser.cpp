@@ -11,12 +11,14 @@
 #include "control/controlobject.h"
 #include "control/controlpushbutton.h"
 #include "library/basetrackcache.h"
+#include "library/dao/analysisdao.h"
 #include "library/dao/trackschema.h"
 #include "library/deck/deckqueries.h"
 #include "library/deck/decktrackmodel.h"
 #include "library/deck/pdbingest.h"
 #include "library/queryutil.h"
 #include "library/library.h"
+#include "library/rekordbox/rekordboxanalysis.h"
 #include "library/trackcollection.h"
 #include "library/trackcollectionmanager.h"
 #include "track/track.h"
@@ -248,7 +250,15 @@ WDeckBrowser::WDeckBrowser(QWidget* pParent, Library* pLibrary, UserSettingsPoin
         }
         const QString source =
                 m_pTrackModel->index(row, locationColumn).data(Qt::DisplayRole).toString();
-        m_pCache->prefetch(currentMedium(), source);
+        // Local media only. A remote track has no file to copy -- its location
+        // is where the bytes will go, not where they are -- so a prefetch of
+        // one is a worker thread spawned to fail. Remote tracks are not
+        // pre-warmed at all: they stream on load, and starting a download for
+        // every row a DJ pauses on would fill the tmpfs with tracks nobody
+        // played and hold the player's one transfer slot while doing it.
+        if (currentMedium().isLocal()) {
+            m_pCache->prefetch(currentMedium(), source);
+        }
     });
 
     m_pRegistry = std::make_unique<MediaRegistry>(m_pLibrary->dbConnectionPool(), this);
@@ -1045,29 +1055,66 @@ void WDeckBrowser::loadSelectedTrack() {
     const QModelIndex index = m_pTrackModel->index(row, 0);
     m_pTrackModel->willLoadTrack(index);
 
+    // EVERYTHING off the row is read here, before anything below can run a
+    // nested event loop. Streaming a remote track spins one, and during it the
+    // model can be re-sorted or reset -- so `row` and `index` are not touched
+    // again past this block.
+    const auto field = [this, row](const QString& column) {
+        const int c = m_pTrackModel->fieldIndex(column);
+        return c < 0 ? QString()
+                     : m_pTrackModel->index(row, c).data(Qt::DisplayRole).toString();
+    };
+    const QString source = field(TRACKLOCATIONSTABLE_LOCATION);
+    const QString analyzePath = field(QStringLiteral("analyze_path"));
+    const QString artist = field(LIBRARYTABLE_ARTIST);
+    const QString title = field(LIBRARYTABLE_TITLE);
+    const QString album = field(LIBRARYTABLE_ALBUM);
+    // Which deck_library row this is, kept for the play log. Taken here because
+    // this is the only moment it is unambiguous: two sticks can hold clones of
+    // the same file, so afterwards the path alone does not say which medium it
+    // came from.
+    const int trackRowId = field(QStringLiteral("track_id")).toInt();
+    const MediumId medium = currentMedium();
+
     // Play the COPY, never the medium. This is the whole point of the cache:
     // the file under the playhead has to be one that survives the stick being
     // pulled out of the deck.
-    const int locationColumn = m_pTrackModel->fieldIndex(TRACKLOCATIONSTABLE_LOCATION);
-    const QString source = locationColumn >= 0
-            ? m_pTrackModel->index(row, locationColumn).data(Qt::DisplayRole).toString()
-            : QString();
     QString playPath = source;
     if (m_pCache && !source.isEmpty()) {
-        // Usually already there from the dwell prefetch; this is the slow path.
-        const QString cached = m_pCache->ensureLocal(currentMedium(), source);
-        if (!cached.isEmpty()) {
-            playPath = cached;
-            if (!m_pinnedPath.isEmpty()) {
+        QString local;
+        if (medium.isLocal()) {
+            // Usually already there from the dwell prefetch; this is the slow
+            // path, and it copies the whole file before returning.
+            local = m_pCache->ensureLocal(medium, source);
+        } else if (m_pRegistry) {
+            // A remote track is not copied and then played -- it is played
+            // while it copies. What comes back is a file of the right size
+            // whose unwritten parts block a reader instead of handing it the
+            // zeros a sparse file would.
+            local = m_pRegistry->startStreaming(medium, source, analyzePath);
+        }
+        if (!local.isEmpty()) {
+            playPath = local;
+            // Guarded on the paths differing: the same track loaded twice comes
+            // back as the stream already in flight, and letting go of it there
+            // would abandon the one about to be played.
+            if (!m_pinnedPath.isEmpty() && m_pinnedPath != local) {
                 m_pCache->unpin(m_pinnedPath);
+                // The outgoing track: nothing is reading it any more, so wake
+                // anything that still is and let go of it.
+                if (m_pRegistry) {
+                    m_pRegistry->stopStreaming(m_pinnedPath);
+                }
             }
-            m_pCache->pin(cached);
-            m_pinnedPath = cached;
+            // Immediately, and with no event loop between this and the adopt
+            // inside startStreaming(): an eviction sweep in that gap could drop
+            // the very file about to be played.
+            m_pCache->pin(local);
+            m_pinnedPath = local;
         } else {
-            // Could not copy it -- a remote medium whose audio has not been
-            // fetched, or a read error. Falling through to the original path
-            // keeps a local stick playable; a remote one simply will not load,
-            // which is the state the streaming work exists to fix.
+            // A read error, or a player that went away mid-transfer. Falling
+            // through to the original path keeps a local stick playable; a
+            // remote one has nothing to fall through to and will not load.
             kLogger.warning() << "not cached, playing from source:" << source;
         }
     }
@@ -1084,26 +1131,32 @@ void WDeckBrowser::loadSelectedTrack() {
         // The cached file has no tags worth reading -- it is a byte copy of
         // somebody else's file -- so the metadata comes from the pdb, as it
         // does for the row itself.
-        const auto field = [this, row](const QString& column) {
-            const int c = m_pTrackModel->fieldIndex(column);
-            return c < 0 ? QString()
-                         : m_pTrackModel->index(row, c).data(Qt::DisplayRole).toString();
-        };
-        pTrack->setArtist(field(LIBRARYTABLE_ARTIST));
-        pTrack->setTitle(field(LIBRARYTABLE_TITLE));
-        pTrack->setAlbum(field(LIBRARYTABLE_ALBUM));
+        pTrack->setArtist(artist);
+        pTrack->setTitle(title);
+        pTrack->setAlbum(album);
         // Genre is deliberately not set: Track has no plain setter for it (only
         // setGenreFromTrackDAO, which is the DAO's business), and the browser
         // reads genre off the pdb row anyway.
     }
-    // Which deck_library row this is, kept for the play log. Taken here because
-    // this is the only moment it is unambiguous: two sticks can hold clones of
-    // the same file, so afterwards the path alone does not say which medium it
-    // came from.
-    const int idColumn = m_pTrackModel->fieldIndex(QStringLiteral("track_id"));
-    m_loadedTrackRowId = idColumn >= 0
-            ? m_pTrackModel->index(row, idColumn).data(Qt::DisplayRole).toInt()
-            : -1;
+
+    // The beat grid, hot cues, loops and memory cues rekordbox already worked
+    // out, from the ANLZ files beside the track.
+    //
+    // Without this the deck loads a track with no grid and Mixxx analyses it
+    // from scratch -- minutes of CPU for something the medium was carrying all
+    // along, and a grid that disagrees with what every CDJ on the network is
+    // showing. On a stick the files are simply there; for a remote medium
+    // startStreaming() fetched them above, before the audio, and that ordering
+    // is deliberate.
+    if (!analyzePath.isEmpty()) {
+        mixxx::rekordbox::applyAnalysis(pTrack,
+                analyzePath,
+                &m_pLibrary->trackCollectionManager()
+                         ->internalCollection()
+                         ->getAnalysisDAO());
+    }
+
+    m_loadedTrackRowId = trackRowId > 0 ? trackRowId : -1;
     m_loadedTrackLogged = false;
     emit loadTrackToPlayer(pTrack, kDeckGroup, false);
 }

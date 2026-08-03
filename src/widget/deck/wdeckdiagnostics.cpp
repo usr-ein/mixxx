@@ -2,6 +2,7 @@
 
 #include <QDateTime>
 #include <QFile>
+#include <QFileInfo>
 #include <QProcess>
 #include <QScrollBar>
 #include <QStorageInfo>
@@ -10,6 +11,7 @@
 #include "control/controlobject.h"
 #include "control/controlproxy.h"
 #include "library/deck/mediaregistry.h"
+#include "library/deck/streamingfile.h"
 #include "library/deck/trackcache.h"
 #include "util/versionstore.h"
 
@@ -248,6 +250,35 @@ QString WDeckDiagnostics::html() const {
         }
     }
     out += QStringLiteral("</table>");
+
+    // ---- streaming ---------------------------------------------------------
+    //
+    // The question this answers is whether the download is keeping ahead of the
+    // playhead. A healthy remote track waits a handful of times while it opens
+    // and then never again; a growing wait count is the warning that comes
+    // before the audio stutters, and it is invisible everywhere else.
+    const auto streams = StreamingFileRegistry::snapshot();
+    if (!streams.isEmpty()) {
+        out += QStringLiteral("<h2>Streaming</h2><table>");
+        for (const auto& stream : streams) {
+            const auto& pStream = stream.second;
+            if (!pStream) {
+                continue;
+            }
+            const QString waits = pStream->waitCount() == 0
+                    ? tr("never waited")
+                    : QStringLiteral("<span class='warn'>%1 waits / %2 ms</span>")
+                              .arg(pStream->waitCount())
+                              .arg(pStream->waitedMs());
+            out += row(QFileInfo(stream.first).fileName(),
+                    QStringLiteral("%1 · %2 · %3")
+                            .arg(bytes(pStream->size()),
+                                    pStream->isComplete() ? tr("complete")
+                                                          : tr("still arriving"),
+                                    waits));
+        }
+        out += QStringLiteral("</table>");
+    }
 
     // ---- cache -------------------------------------------------------------
     out += QStringLiteral("<h2>Track cache</h2><table>");

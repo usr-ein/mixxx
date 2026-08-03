@@ -104,6 +104,23 @@ class ProLinkNetworkService : public QObject {
             const QString& localPath,
             bool priority = false);
 
+    /// Fetch one file head-first, so it can be played before it has arrived.
+    ///
+    /// The file appears at `localPath` at its full size immediately, sparse,
+    /// and fills in: the head first, then the tail, then the middle. Progress
+    /// arrives as `fileFetchProgress`, whose `offset` and `length` say which
+    /// range has actually landed — and **the rest of the file is a hole that
+    /// reads back as zeros**, so nothing may read a range it has not been told
+    /// about. `StreamingFile` is what enforces that.
+    ///
+    /// The first progress signal carries the size and no bytes, which is the
+    /// moment a caller can size its view of the file and start decoding.
+    void fetchFileStreaming(const QByteArray& mac,
+            MediaSlot slot,
+            const QString& remotePath,
+            const QString& localPath,
+            quint32 headBytes);
+
     /// Fetch a track's artwork into `localPath`.
     void fetchArtwork(const QByteArray& mac,
             MediaSlot slot,
@@ -131,7 +148,19 @@ class ProLinkNetworkService : public QObject {
             const QString& error);
     void fileFetched(const QString& localPath, const QString& error);
     void artworkFetched(const QString& localPath, const QString& error);
-    void fileFetchProgress(const QString& localPath, quint32 done, quint32 total);
+    /// How a transfer is getting on.
+    ///
+    /// `done`/`total` are a fraction to show a user. `offset`/`length` are the
+    /// range that has just landed on disk, and for a streaming fetch they are
+    /// the only safe statement about which bytes exist — `done` counts the head
+    /// and the tail together, which are not contiguous. `length` is zero for an
+    /// event that carries no new bytes: the opening one that announces `total`,
+    /// and the closing summary.
+    void fileFetchProgress(const QString& localPath,
+            quint64 done,
+            quint64 total,
+            quint64 offset,
+            quint64 length);
 
   private:
     /// Drain the library's events and re-read its tables. On a timer.

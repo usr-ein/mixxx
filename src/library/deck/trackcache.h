@@ -59,6 +59,19 @@ class TrackCache : public QObject {
     /// track the prefetch has not reached yet — and it is why prefetch exists.
     QString ensureLocal(const MediumId& medium, const QString& sourcePath);
 
+    /// Take responsibility for a file that got here some other way.
+    ///
+    /// A streamed track is written straight into tier 1 by the network layer,
+    /// so the cache never sees it copied and would otherwise not know it is
+    /// there at all — which means it would neither count against the RAM cap
+    /// nor be reclaimable, and a night of remote loads would quietly fill the
+    /// tmpfs.
+    ///
+    /// Deliberately does **not** evict: the caller pins the file immediately
+    /// afterwards, and running the sweep in between could drop the very file
+    /// being adopted.
+    void adopt(const MediumId& medium, const QString& localPath, qint64 size);
+
     /// Never evict this one. The track on the deck, and anything a Pro DJ Link
     /// peer is reading from us.
     void pin(const QString& localPath);

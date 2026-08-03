@@ -222,5 +222,15 @@ int StreamingFileRegistry::count() {
     return static_cast<int>(s_registry.size());
 }
 
+QList<QPair<QString, std::shared_ptr<StreamingFile>>> StreamingFileRegistry::snapshot() {
+    QMutexLocker locked(&s_registryMutex);
+    QList<QPair<QString, std::shared_ptr<StreamingFile>>> out;
+    out.reserve(s_registry.size());
+    for (auto it = s_registry.constBegin(); it != s_registry.constEnd(); ++it) {
+        out.append({it.key(), it.value()});
+    }
+    return out;
+}
+
 } // namespace deck
 } // namespace mixxx

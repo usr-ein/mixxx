@@ -1,0 +1,26 @@
+# What must not be uploaded as build context.
+#
+# Everything here is build output that the Dockerfile regenerates inside the
+# container. Without this file the context is whatever happens to be lying
+# around: running `cargo test` in lib/prolink once leaves a 6.5 GB target/
+# directory, and every `docker build` afterwards spends minutes uploading it
+# before it can start.
+#
+# Keep this to derived artefacts only. Excluding a source file here fails the
+# build somewhere deep in cmake, with an error that does not mention Docker.
+
+# The Rust workspace's build output. The Dockerfile runs cargo itself, against
+# its own cache mount.
+lib/prolink/target/
+
+# CMake build trees, wherever someone put theirs. The container configures into
+# /build, which is a cache mount and not part of the context at all.
+build/
+build-*/
+cmake-build-*/
+
+# Editor and tooling leftovers.
+.cache/
+compile_commands.json
+.vscode/
+.idea/
