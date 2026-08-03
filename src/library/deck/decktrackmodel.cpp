@@ -64,6 +64,12 @@ void DeckTrackModel::setQuery(const QString& selectSql) {
     // by the data rather than by a sort.
     setDefaultSort(fieldIndex(QStringLiteral("position")), Qt::AscendingOrder);
     setSearch(QString());
+    // **Nothing else will.** setTable() only records the shape and setSearch()
+    // only records the text; the actual SELECT is normally kicked off by
+    // WTrackTableView::loadTrackModel(), and the browser does not use one. Miss
+    // this and the model is correctly configured, reports zero rows, and logs
+    // nothing at all.
+    select();
 
     // Only once the model has moved on. Dropping the view it is still selecting
     // from is how this turns into an empty list for reasons that look like a

@@ -75,6 +75,7 @@ class LegacySkinParser : public QObject, public SkinParser {
     template <class T>
     QWidget* parseLabelWidget(const QDomElement& element);
     void setupLabelWidget(const QDomElement& element, WLabel* pLabel);
+    QWidget* parseDeckBrowser(const QDomElement& node);
     QWidget* parseProLinkPhaseMeter(const QDomElement& node);
     QWidget* parseTempoPanel(const QDomElement& node);
     QWidget* parseText(const QDomElement& node);

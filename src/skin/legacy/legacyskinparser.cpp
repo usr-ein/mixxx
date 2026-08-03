@@ -59,6 +59,7 @@
 #include "widget/wnumberpos.h"
 #include "widget/wnumberrate.h"
 #include "widget/woverview.h"
+#include "widget/deck/wdeckbrowser.h"
 #include "widget/wprolinkphasemeter.h"
 #include "widget/wtempopanel.h"
 #include "widget/wpixmapstore.h"
@@ -540,6 +541,8 @@ QList<QWidget*> LegacySkinParser::parseNode(const QDomElement& node) {
         result = wrapWidget(parseStandardWidget<WComboBox>(node));
     } else if (nodeName == "Overview") {
         result = wrapWidget(parseOverview(node));
+    } else if (nodeName == "DeckBrowser") {
+        result = wrapWidget(parseDeckBrowser(node));
     } else if (nodeName == "ProLinkPhaseMeter") {
         result = wrapWidget(parseProLinkPhaseMeter(node));
     } else if (nodeName == "Visual") {
@@ -1073,6 +1076,18 @@ QWidget* LegacySkinParser::parseVisual(const QDomElement& node) {
     viewer->slotTrackLoaded(pPlayer->getLoadedTrack());
 
     return viewer;
+}
+
+QWidget* LegacySkinParser::parseDeckBrowser(const QDomElement& node) {
+    auto* pBrowser = new mixxx::deck::WDeckBrowser(m_pParent, m_pLibrary, m_pConfig);
+    commonWidgetSetup(node, pBrowser);
+    pBrowser->setup(node, *m_pContext);
+    pBrowser->installEventFilter(m_pKeyboard);
+    // The browser loads tracks itself rather than going through WLibrary: it
+    // has no LibraryView, and Library::slotLoadTrackToPlayer is the same entry
+    // point the track table uses.
+    pBrowser->Init();
+    return pBrowser;
 }
 
 QWidget* LegacySkinParser::parseProLinkPhaseMeter(const QDomElement& node) {

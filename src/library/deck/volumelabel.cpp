@@ -78,8 +78,12 @@ QString volumeLabelFor(const QString& mountPoint) {
     if (!device.isEmpty()) {
         const QFileInfo deviceInfo(device);
         const QDir byLabel(kByLabelDir);
+        // AllEntries|System, not Files|Dirs: every entry here is a symlink to a
+        // BLOCK DEVICE, and a device node is neither a regular file nor a
+        // directory -- so the obvious filter matches nothing at all and every
+        // stick silently falls back to its slot name.
         const QFileInfoList links = byLabel.entryInfoList(
-                QDir::NoDotAndDotDot | QDir::System | QDir::Files | QDir::Dirs);
+                QDir::AllEntries | QDir::System | QDir::Hidden | QDir::NoDotAndDotDot);
         for (const QFileInfo& link : links) {
             // canonicalFilePath resolves ../../sda1 to /dev/sda1.
             if (link.canonicalFilePath() == deviceInfo.canonicalFilePath()) {
