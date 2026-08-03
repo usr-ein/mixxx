@@ -36,7 +36,20 @@ void SoundSourceProLink::close() {
         avio_context_free(&m_pAvioContext);
         m_pAvioContext = nullptr;
     }
-    m_pStream.reset();
+    // **The stream is not part of the open state and must survive this.**
+    //
+    // AudioSource::open() begins with `close(); // reopening is not supported`.
+    // So a close() that let go of the stream ran before every single open, and
+    // createAvioContext() then found nothing to read from and returned null --
+    // which means "open the path normally". FFmpeg duly opened the sparse file
+    // and read the holes as zeros.
+    //
+    // Nothing failed. It looked like it worked, because by the time anything
+    // opened the file enough of it had usually landed for the decoder to find
+    // a stream; the whole streaming path was decorative and never once ran.
+    // What exposed it was making the load *fast*: with the 2.2 s tag scan gone,
+    // the decoder reached the file 17 ms after the transfer began, read a
+    // megabyte of zeros, and reported no audio stream.
 }
 
 std::pair<SoundSourceProLink::ImportResult, QDateTime>
@@ -117,8 +130,17 @@ int64_t SoundSourceProLink::seek(void* pOpaque, int64_t offset, int whence) {
 
 AVIOContext* SoundSourceProLink::createAvioContext() {
     if (!m_pStream) {
-        // Not one of ours after all. Returning null makes the base class open
-        // the path normally, which is the right answer rather than a failure.
+        // Not one of ours after all -- the transfer finished and the file was
+        // unregistered between this object being made and being opened. The
+        // path is now an ordinary complete file, so opening it normally is the
+        // right answer rather than a failure.
+        //
+        // Said out loud, because this is also what a bug here looks like: it is
+        // the difference between decoding the bytes as they arrive and decoding
+        // whatever the sparse file happens to hold, and the second one does not
+        // report an error.
+        kLogger.info() << "not streaming" << getLocalFileName()
+                       << "-- reading it as an ordinary file";
         return nullptr;
     }
     auto* pBuffer = static_cast<unsigned char*>(av_malloc(kAvioBufferSize));
