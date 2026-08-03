@@ -5,12 +5,15 @@
 #include <QFileInfo>
 #include <QProcess>
 #include <QScrollBar>
+#include <QScroller>
+#include <QScrollerProperties>
 #include <QStorageInfo>
 #include <QStringList>
 
 #include "control/controlobject.h"
 #include "control/controlproxy.h"
 #include "library/deck/mediaregistry.h"
+#include "library/deck/ramstore.h"
 #include "library/deck/streamingfile.h"
 #include "library/deck/trackcache.h"
 #include "util/versionstore.h"
@@ -43,8 +46,28 @@ WDeckDiagnostics::WDeckDiagnostics(QWidget* pParent)
     setObjectName(QStringLiteral("DeckDiagnostics"));
     setOpenExternalLinks(false);
     setOpenLinks(false);
+
+    // Dragged with a finger, like every other list on this deck. A QTextBrowser
+    // scrolls with a scrollbar and a wheel out of the box and with neither of
+    // those on a touch panel -- so without this the page is simply stuck at the
+    // top, which is what it was.
+    QScroller::grabGesture(viewport(), QScroller::LeftMouseButtonGesture);
+    QScrollerProperties properties = QScroller::scroller(viewport())->scrollerProperties();
+    properties.setScrollMetric(QScrollerProperties::VerticalOvershootPolicy,
+            QVariant::fromValue(QScrollerProperties::OvershootAlwaysOff));
+    properties.setScrollMetric(QScrollerProperties::HorizontalOvershootPolicy,
+            QVariant::fromValue(QScrollerProperties::OvershootAlwaysOff));
+    QScroller::scroller(viewport())->setScrollerProperties(properties);
     m_timer.setInterval(1000);
     connect(&m_timer, &QTimer::timeout, this, &WDeckDiagnostics::sample);
+}
+
+void WDeckDiagnostics::scrollBy(int steps) {
+    // One detent moves about a third of a screen, which is what it takes to get
+    // from the top of this page to the bottom without spinning the encoder all
+    // night.
+    QScrollBar* pBar = verticalScrollBar();
+    pBar->setValue(pBar->value() + steps * pBar->pageStep() / 3);
 }
 
 void WDeckDiagnostics::setActive(bool active) {
@@ -312,6 +335,16 @@ QString WDeckDiagnostics::html() const {
 
     // ---- cache -------------------------------------------------------------
     out += QStringLiteral("<h2>Track cache</h2><table>");
+    // Where the RAM caches actually landed, and what is left of it. The first
+    // number to look at when caching misbehaves: a store that has filled makes
+    // every downstream symptom look like a different fault.
+    const qint64 storeFree = RamStore::available();
+    out += row(tr("RAM store"),
+            storeFree < 64LL * 1024 * 1024
+                    ? QStringLiteral("%1 — <span class='warn'>%2 free</span>")
+                              .arg(RamStore::root().toHtmlEscaped(), bytes(storeFree))
+                    : QStringLiteral("%1 — %2 free")
+                              .arg(RamStore::root().toHtmlEscaped(), bytes(storeFree)));
     TrackCache* pCache = TrackCache::instance();
     if (pCache) {
         out += row(tr("In RAM"), bytes(pCache->bytesInRam()));

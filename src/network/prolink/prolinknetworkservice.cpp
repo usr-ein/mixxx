@@ -198,12 +198,33 @@ void ProLinkNetworkService::publishMaster() {
     m_pMasterBarPhaseControl->forceSet(-1.0);
 }
 
+/*static*/ ProLinkNetworkService* ProLinkNetworkService::s_pListening = nullptr;
+
 ProLinkNetworkService::~ProLinkNetworkService() {
     shutdown();
 }
 
 void ProLinkNetworkService::start() {
     if (m_pImpl->pSession) {
+        return;
+    }
+    // One session per process, and this is not a style rule.
+    //
+    // Two of these on one machine both bind UDP 50000-50002, both run a
+    // portmapper on 111, and both enter the claim chain -- so they compete with
+    // each other for a player number, and the one that loses becomes a passive
+    // observer that cannot serve or be browsed. That is exactly what happened
+    // here: the browser's registry created one and the old sidebar feature
+    // created another, and the deck spent a session announcing "no player
+    // number was free" against itself.
+    //
+    // Refused rather than allowed, because the failure is otherwise invisible:
+    // everything logs success and the network simply does not work.
+    if (s_pListening != nullptr && s_pListening != this) {
+        m_lastError = tr("another Pro DJ Link session is already running");
+        kLogger.warning() << "refusing to start a second session;"
+                          << "the first one holds the sockets and the player number";
+        emit listeningChanged(false, m_lastError);
         return;
     }
     // The library's own log, to stderr, which on the deck is where Mixxx's
@@ -235,6 +256,7 @@ void ProLinkNetworkService::start() {
         return;
     }
 
+    s_pListening = this;
     m_listening = true;
     m_lastError.clear();
     // Zero for now, and that is not a failure. Claiming a player number means
@@ -261,6 +283,9 @@ void ProLinkNetworkService::shutdown() {
     }
     const bool wasListening = m_listening;
     m_pImpl->stop();
+    if (s_pListening == this) {
+        s_pListening = nullptr;
+    }
     m_listening = false;
     m_announcedNumber = 0;
     m_announceDetail.clear();

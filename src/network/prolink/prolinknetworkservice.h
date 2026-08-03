@@ -212,6 +212,9 @@ class ProLinkNetworkService : public QObject {
     struct Impl;
     std::unique_ptr<Impl> m_pImpl;
 
+    /// The one instance holding the sockets, or null. See start().
+    static ProLinkNetworkService* s_pListening;
+
     QTimer* m_pTimer = nullptr;
     /// `[ProLink] pull_db`, so a controller or a skin button can ask for the
     /// database without going through the menu.

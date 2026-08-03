@@ -37,9 +37,13 @@ namespace {
 const mixxx::Logger kLogger("DeckBrowser");
 
 // Geometry, from browser-prd.md 5..8. Named rather than inline so the budget
-// stays checkable: 48 + 496 + 56 = 600.
+// stays checkable: 36 + 48 + 460 + 56 = 600.
 constexpr int kBreadcrumbHeight = 48;
 constexpr int kBezelPadHeight = 56;
+/// The lip at the *top* of the panel, which hides rather less than the bottom
+/// one but hides the breadcrumb's ascenders all the same. Three quarters of the
+/// breadcrumb's own height, measured against the deck rather than derived.
+constexpr int kTopBezelPadHeight = 36;
 constexpr int kSourceRowHeight = 80;
 constexpr int kMenuRowHeight = 72;
 constexpr int kValueRowHeight = 64;
@@ -69,6 +73,14 @@ WDeckBrowser::WDeckBrowser(QWidget* pParent, Library* pLibrary, UserSettingsPoin
     auto* pLayout = new QVBoxLayout(this);
     pLayout->setContentsMargins(0, 0, 0, 0);
     pLayout->setSpacing(0);
+
+    // The bezel strip at the top, matching the one at the bottom: the panel is
+    // recessed on both edges, so the first rows are as hard to read as the last
+    // ones are to touch.
+    auto* pTopBezelPad = new QWidget(this);
+    pTopBezelPad->setFixedHeight(kTopBezelPadHeight);
+    pTopBezelPad->setObjectName(QStringLiteral("DeckBezelPad"));
+    pLayout->addWidget(pTopBezelPad);
 
     m_pBreadcrumb = new QLabel(this);
     m_pBreadcrumb->setObjectName(QStringLiteral("DeckBreadcrumb"));
@@ -306,6 +318,14 @@ WDeckBrowser::WDeckBrowser(QWidget* pParent, Library* pLibrary, UserSettingsPoin
         }
         if (m_pSortMenu->isOpen()) {
             m_pSortMenu->moveSelection(steps);
+            return;
+        }
+        // The diagnostics page is not a list, and the encoder still has to
+        // reach it: it is one long page and the deck has no other way down it
+        // (browser-prd.md 14). Without this the detents moved the selection of
+        // the menu view underneath, which is not even on screen.
+        if (!m_stack.isEmpty() && m_stack.last().kind == Level::Kind::Diagnostics) {
+            m_pDiagnostics->scrollBy(steps);
             return;
         }
         (inTrackList() ? m_pTrackView : m_pMenuView)->moveSelection(steps);

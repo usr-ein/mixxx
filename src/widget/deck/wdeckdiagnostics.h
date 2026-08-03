@@ -29,6 +29,10 @@ class WDeckDiagnostics : public QTextBrowser {
     /// no business reading /proc once a second.
     void setActive(bool active);
 
+    /// Move the page by encoder detents. The encoder is the deck's own control
+    /// and has to reach this page as well as the lists (browser-prd.md 14).
+    void scrollBy(int steps);
+
   private slots:
     void sample();
 

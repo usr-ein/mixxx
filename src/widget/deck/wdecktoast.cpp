@@ -59,16 +59,15 @@ WDeckToast::WDeckToast(QWidget* pParent)
     m_tick.setInterval(200);
     connect(&m_tick, &QTimer::timeout, this, &WDeckToast::expire);
 
-    MediaRegistry* pRegistry = MediaRegistry::instance();
-    if (!pRegistry) {
-        // The browser builds the registry, and the skin may put us first. Not
-        // fatal, but it does mean no toasts, so it is worth saying.
-        kLogger.warning() << "no media registry yet; no toasts will be shown";
-        return;
-    }
-    connect(pRegistry, &MediaRegistry::mediumAppeared, this, &WDeckToast::onAppeared);
-    connect(pRegistry, &MediaRegistry::mediumVanished, this, &WDeckToast::onVanished);
-    connect(pRegistry, &MediaRegistry::mediumFailed, this, &WDeckToast::onFailed);
+    // Not `instance()`. The skin builds this widget before the browser that
+    // creates the registry -- it has to, to render over everything -- so asking
+    // for the instance here got a null, connected to nothing, and cost every
+    // toast the deck was ever going to show.
+    MediaRegistry::whenReady(this, [this](MediaRegistry* pRegistry) {
+        connect(pRegistry, &MediaRegistry::mediumAppeared, this, &WDeckToast::onAppeared);
+        connect(pRegistry, &MediaRegistry::mediumVanished, this, &WDeckToast::onVanished);
+        connect(pRegistry, &MediaRegistry::mediumFailed, this, &WDeckToast::onFailed);
+    });
 }
 
 void WDeckToast::setup(const QDomNode& node, const SkinContext& context) {

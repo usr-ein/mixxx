@@ -2,6 +2,7 @@
 
 #include <QDir>
 #include <algorithm>
+#include <utility>
 #include <QFile>
 #include <QFileInfo>
 #include <QSqlDatabase>
@@ -11,6 +12,7 @@
 #include <QStandardPaths>
 
 #include "library/deck/deckqueries.h"
+#include "library/deck/ramstore.h"
 #include "library/deck/volumelabel.h"
 #include "network/prolink/prolinkpdb.h"
 #include "util/db/dbconnectionpooler.h"
@@ -67,10 +69,20 @@ namespace deck {
 
 namespace {
 MediaRegistry* s_pInstance = nullptr;
+/// Subscribers that asked before there was anything to subscribe to.
+QList<QPair<QPointer<QObject>, std::function<void(MediaRegistry*)>>> s_pending;
 } // namespace
 
 MediaRegistry* MediaRegistry::instance() {
     return s_pInstance;
+}
+
+void MediaRegistry::whenReady(QObject* pContext, std::function<void(MediaRegistry*)> callback) {
+    if (s_pInstance != nullptr) {
+        callback(s_pInstance);
+        return;
+    }
+    s_pending.append({QPointer<QObject>(pContext), std::move(callback)});
 }
 
 MediaRegistry::MediaRegistry(mixxx::DbConnectionPoolPtr dbConnectionPool, QObject* pParent)
@@ -94,6 +106,23 @@ MediaRegistry::MediaRegistry(mixxx::DbConnectionPoolPtr dbConnectionPool, QObjec
     connect(&m_watcher, &QFileSystemWatcher::directoryChanged, this, [this]() {
         m_rescanDebounce.start();
     });
+
+    // And a poll behind it, because the watcher misses the case that matters.
+    //
+    // `directoryChanged` fires when /media gains or loses a child -- not when
+    // one of those children is unmounted. A stick is normally *both* unmounted
+    // and rmdir'd, so the watcher usually sees it; but the rmdir is best-effort
+    // (`|| true` in dj-usb) and fails whenever anything holds the directory. It
+    // fails silently, and what follows is a medium that stays in SOURCES for
+    // ever, listing tracks that cannot be read, with its cached copies still
+    // marked re-readable -- so they can be evicted, and the only copy of the
+    // track under the needle goes with them.
+    //
+    // Two seconds and a stat per mount point. The same interval the Rust side
+    // scans volumes on, and for the same reason.
+    m_rescanPoll.setInterval(2000);
+    connect(&m_rescanPoll, &QTimer::timeout, this, &MediaRegistry::rescanLocal);
+    m_rescanPoll.start();
 
     rescanLocal();
 
@@ -139,6 +168,17 @@ MediaRegistry::MediaRegistry(mixxx::DbConnectionPoolPtr dbConnectionPool, QObjec
             &MediaRegistry::onArtworkFetched);
     m_pNetwork->start();
 #endif
+
+    // Whoever asked for us before we existed. Drained *last*, deliberately:
+    // the rescan above emits mediumAppeared for the sticks that were already
+    // plugged in at boot, and a toast for each of those on every startup is
+    // noise rather than news.
+    const auto waiting = std::exchange(s_pending, {});
+    for (const auto& entry : waiting) {
+        if (!entry.first.isNull()) {
+            entry.second(this);
+        }
+    }
 }
 
 MediaRegistry::~MediaRegistry() {
@@ -267,19 +307,9 @@ QString MediaRegistry::remoteCacheRoot(const MediumId& id) {
     // ever cleaned it up either: every medium ever seen left its covers and
     // beat grids on the card for good.
     //
-    // Same tmpfs and same fallback as the track cache's tier 1; see its header
-    // for why /run is the right place on this deck.
-    static const QString root = []() {
-        const QString preferred = QStringLiteral("/run/trimixxx/remote");
-        if (QDir().mkpath(preferred)) {
-            return preferred;
-        }
-        const QString fallback =
-                QDir(QStandardPaths::writableLocation(QStandardPaths::TempLocation))
-                        .filePath(QStringLiteral("trimixxx-remote"));
-        QDir().mkpath(fallback);
-        return fallback;
-    }();
+    // The same measured store as the track cache's first tier; see RamStore for
+    // why the size of it cannot be assumed.
+    static const QString root = RamStore::path(QStringLiteral("remote"));
     return QDir(root).filePath(key);
 }
 

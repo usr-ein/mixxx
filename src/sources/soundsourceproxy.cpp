@@ -519,10 +519,23 @@ bool SoundSourceProxy::initSoundSourceWithProvider(
     DEBUG_ASSERT(pProvider);
     m_pSoundSource = pProvider->newSoundSource(m_url);
     if (!m_pSoundSource) {
-        kLogger.warning() << "SoundSourceProvider"
-                          << pProvider->getDisplayName()
-                          << "failed to create a SoundSource for file"
-                          << getUrl().toString(QUrl::PreferLocalFile);
+        // Debug, not a warning. The loop above tries every registered provider
+        // in turn, so a null here means "not this one" far more often than it
+        // means anything is wrong -- and the case that IS wrong, every provider
+        // declining, is already reported once by the caller.
+        //
+        // It became worth distinguishing when a provider started declining on
+        // purpose: the Pro DJ Link source claims the ordinary audio types and
+        // then takes only the files that are still arriving, so that a track on
+        // a stick falls straight through to the normal decoders. Warning about
+        // that meant a warning on every single track load, four times over,
+        // from four threads.
+        if (kLogger.debugEnabled()) {
+            kLogger.debug() << "SoundSourceProvider"
+                            << pProvider->getDisplayName()
+                            << "did not take file"
+                            << getUrl().toString(QUrl::PreferLocalFile);
+        }
         return false;
     }
     m_pProvider = pProvider;

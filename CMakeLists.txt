@@ -1010,6 +1010,7 @@ add_library(mixxx-lib STATIC EXCLUDE_FROM_ALL
   src/library/deck/mediaregistry.cpp
   src/library/deck/pdbingest.cpp
   src/library/deck/streamingfile.cpp
+  src/library/deck/ramstore.cpp
   src/library/deck/trackcache.cpp
   src/library/deck/volumelabel.cpp
   src/library/rekordbox/rekordboxfeature.cpp

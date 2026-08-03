@@ -124,6 +124,8 @@ class TrackCache : public QObject {
     QSet<QString> m_pinned;
     QString m_tier1Root;
     QString m_tier2Root;
+    /// Measured from the filesystem tier 1 actually landed on, not assumed.
+    qint64 m_tier1Cap = 0;
     qint64 m_ramBytes = 0;
     qint64 m_diskBytes = 0;
     qint64 m_diskBytesWritten = 0;

@@ -7,19 +7,23 @@
 #include <QStandardPaths>
 #include <QtConcurrentRun>
 
+#include "library/deck/ramstore.h"
 #include "util/logger.h"
 
 namespace {
 const mixxx::Logger kLogger("TrackCache");
 
-/// Tier 1. /run is tmpfs on the deck, so this is RAM and evaporates at reboot,
-/// which is exactly right for a copy of somebody else's stick.
-const QString kTier1Default = QStringLiteral("/run/trimixxx/cache");
-/// How much RAM tier 1 may hold. Measured budget: the deck has 3796 MB with
-/// about 3288 MB available and Mixxx using 421 MB, so a gigabyte leaves room to
-/// stay clear of zram -- which matters, because compressed audio does not
-/// compress and swapping it would write to the card after all.
-constexpr qint64 kTier1Cap = 1024LL * 1024 * 1024;
+/// How much of the RAM store tier 1 may take.
+///
+/// Two thirds of it, leaving the rest for the mirror of a remote medium and for
+/// the copies that keep a consuming player alive across an eject.
+///
+/// **A share rather than a number.** This was a flat gigabyte, chosen against
+/// the deck's 3796 MB of RAM -- and it was wrong, because the tmpfs it lands on
+/// is not sized from that. `/run` here is 760 MB, so the cap could never be
+/// reached: the filesystem would fill first, and a full `/run` takes systemd
+/// with it. RamStore measures what is actually there.
+constexpr double kTier1Share = 2.0 / 3.0;
 
 mixxx::deck::TrackCache* s_pInstance = nullptr;
 } // namespace
@@ -35,14 +39,8 @@ TrackCache::TrackCache(QObject* pParent)
         : QObject(pParent) {
     s_pInstance = this;
 
-    m_tier1Root = kTier1Default;
-    if (!QDir().mkpath(m_tier1Root)) {
-        // No /run/trimixxx (a dev box, say). The temp dir is still better than
-        // nothing, and on this deck /tmp is tmpfs too.
-        m_tier1Root = QDir(QStandardPaths::writableLocation(QStandardPaths::TempLocation))
-                              .filePath(QStringLiteral("trimixxx-cache"));
-        QDir().mkpath(m_tier1Root);
-    }
+    m_tier1Root = RamStore::path(QStringLiteral("cache"));
+    m_tier1Cap = RamStore::budget(kTier1Share);
     m_tier2Root = QDir(QStandardPaths::writableLocation(QStandardPaths::CacheLocation))
                           .filePath(QStringLiteral("trimixxx/tracks"));
     // Wiped at startup: tier 2 holds only what could not be re-read at the time
@@ -50,7 +48,8 @@ TrackCache::TrackCache(QObject* pParent)
     QDir(m_tier2Root).removeRecursively();
     QDir().mkpath(m_tier2Root);
 
-    kLogger.info() << "tier 1" << m_tier1Root << "tier 2" << m_tier2Root;
+    kLogger.info() << "tier 1" << m_tier1Root << "capped at"
+                   << (m_tier1Cap / (1024 * 1024)) << "MB; tier 2" << m_tier2Root;
 }
 
 TrackCache::~TrackCache() {
@@ -232,7 +231,7 @@ bool TrackCache::hasPinnedFrom(const MediumId& medium) const {
 }
 
 void TrackCache::evictIfNeeded() {
-    if (m_ramBytes <= kTier1Cap) {
+    if (m_ramBytes <= m_tier1Cap) {
         return;
     }
     // Oldest first, and pinned entries are never candidates however old.
@@ -247,7 +246,7 @@ void TrackCache::evictIfNeeded() {
     });
 
     for (const QString& name : order) {
-        if (m_ramBytes <= kTier1Cap) {
+        if (m_ramBytes <= m_tier1Cap) {
             break;
         }
         Entry entry = m_entries.value(name);

@@ -4,8 +4,11 @@
 #include <QFutureWatcher>
 #include <QList>
 #include <QObject>
+#include <QPointer>
 #include <QSet>
 #include <QTimer>
+
+#include <functional>
 
 #include "library/deck/mediumid.h"
 #include "library/deck/pdbingest.h"
@@ -82,6 +85,22 @@ class MediaRegistry : public QObject {
     /// would make widget creation order load-bearing in a file skin authors
     /// edit, which is a worse thing to owe than one accessor.
     static MediaRegistry* instance();
+
+    /// Run *callback* with the registry, now or as soon as it exists.
+    ///
+    /// **Construction order in the skin is not something to rely on**, and
+    /// relying on it cost the toasts entirely: the skin puts `<DeckToast>`
+    /// first — it has to, to render over everything — while the registry is
+    /// built by `<DeckBrowser>` four hundred lines further down. So the toast
+    /// asked for an instance that did not exist yet, connected to nothing, and
+    /// silently never fired again.
+    ///
+    /// The one line of warning it logged was true and useless: by the time
+    /// anyone read it the deck had been shipped for a week.
+    ///
+    /// *pContext* owns the subscription; a callback whose context has been
+    /// destroyed is dropped rather than called.
+    static void whenReady(QObject* pContext, std::function<void(MediaRegistry*)> callback);
 
     const QList<MediumInfo>& media() const {
         return m_media;
@@ -255,6 +274,9 @@ class MediaRegistry : public QObject {
     /// deferred rather than immediate -- otherwise the pdb is not there yet and
     /// the medium is recorded as failed.
     QTimer m_rescanDebounce;
+    /// A slow backstop for what the watcher cannot see: a mount point that is
+    /// unmounted without its directory going away. See the constructor.
+    QTimer m_rescanPoll;
 
 #ifdef __PROLINK__
     /// Owned here rather than by a library feature, because the browser is the
