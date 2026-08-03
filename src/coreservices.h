@@ -2,6 +2,7 @@
 
 #include <memory>
 
+#include "network/prolink/prolinkcontrols.h"
 #include "preferences/settingsmanager.h"
 #include "util/timer.h"
 
@@ -120,6 +121,11 @@ class CoreServices : public QObject {
     void finalize();
 
     std::shared_ptr<SettingsManager> m_pSettingsManager;
+    /// The `[ProLink]` controls, created here for one reason: they have to
+    /// exist **before a skin is parsed**. LegacySkinParser creates a control
+    /// for any binding whose key does not exist yet, and a second creator of a
+    /// key gets an object connected to nothing -- see ProLinkControls.
+    std::unique_ptr<mixxx::prolink::ProLinkControls> m_pProLinkControls;
     std::shared_ptr<mixxx::ControlIndicatorTimer> m_pControlIndicatorTimer;
     std::shared_ptr<EffectsManager> m_pEffectsManager;
     std::shared_ptr<EngineMixer> m_pEngine;

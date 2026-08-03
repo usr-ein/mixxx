@@ -7,12 +7,13 @@
 
 #include "control/controlproxy.h"
 #include "moc_wprolinkphasemeter.cpp"
+#include "network/prolink/prolinkbeatposition.h"
 #include "skin/legacy/skincontext.h"
 
 namespace {
 /// Beats per bar. Four everywhere in this protocol: rekordbox numbers beats 1-4
 /// and the beat packet's bar field is 1-4.
-constexpr int kBeatsPerBar = 4;
+constexpr int kBeatsPerBar = mixxx::prolink::kBeatsPerBar;
 
 /// How often the meter repaints. The master's phase is republished at 30 Hz, so
 /// matching that is as smooth as the data gets.
@@ -31,12 +32,7 @@ constexpr int kBeatWidth = 5;
 
 WProLinkPhaseMeter::WProLinkPhaseMeter(QWidget* pParent, const QString& group)
         : WWidget(pParent), m_group(group) {
-    m_pMasterDevice = std::make_unique<ControlProxy>(
-            QStringLiteral("[ProLink]"), QStringLiteral("master_device"), this);
-    m_pMasterBarPhase = std::make_unique<ControlProxy>(
-            QStringLiteral("[ProLink]"), QStringLiteral("master_bar_phase"), this);
-    m_pMasterBpm = std::make_unique<ControlProxy>(
-            QStringLiteral("[ProLink]"), QStringLiteral("master_bpm"), this);
+    attachToProLink();
     m_pBeatDistance =
             std::make_unique<ControlProxy>(m_group, QStringLiteral("beat_distance"), this);
     m_pPlay = std::make_unique<ControlProxy>(m_group, QStringLiteral("play"), this);
@@ -55,6 +51,22 @@ WProLinkPhaseMeter::WProLinkPhaseMeter(QWidget* pParent, const QString& group)
 }
 
 WProLinkPhaseMeter::~WProLinkPhaseMeter() = default;
+
+void WProLinkPhaseMeter::attachToProLink() {
+    m_sinceAttach = 0;
+    // NoWarnIfMissing because missing is the expected state until the browser
+    // has been built: without it this logs three warnings every retry, once a
+    // second, for as long as the deck is up with no network.
+    const auto proxy = [this](const char* item) {
+        return std::make_unique<ControlProxy>(QStringLiteral("[ProLink]"),
+                QString::fromLatin1(item),
+                this,
+                ControlFlag::NoWarnIfMissing);
+    };
+    m_pMasterDevice = proxy("master_device");
+    m_pMasterBarPhase = proxy("master_bar_phase");
+    m_pMasterBpm = proxy("master_bpm");
+}
 
 void WProLinkPhaseMeter::setup(const QDomNode& node, const SkinContext& context) {
     // hasNodeSelectString takes a QString, so the colours are read as text and
@@ -148,44 +160,32 @@ void WProLinkPhaseMeter::paintEvent(QPaintEvent* pEvent) {
     painter.setRenderHint(QPainter::Antialiasing);
     painter.fillRect(rect(), QColor(0x0c, 0x0c, 0x0c));
 
-    const int masterDevice = static_cast<int>(m_pMasterDevice->get());
-    const double masterPhase = m_pMasterBarPhase->get();
+    // Once a second until they turn up. The controls appear partway through
+    // skin construction, so "not there yet" is a normal early state rather than
+    // a permanent one, and a proxy resolved to null stays null.
+    if (!m_pMasterBarPhase->valid() && ++m_sinceAttach > 30) {
+        attachToProLink();
+    }
 
-    // Our own bar phase, from the *playhead* rather than from counting beats.
-    // The elapsed track time times the file's tempo is which beat we are on, so
-    // a loop replays the same beats instead of marching on through the bar --
-    // which is what a counter did, and why a one-beat loop used to walk the
-    // marker around the whole bar while the audio repeated two beats.
-    const double ourBeatDistance = m_pBeatDistance->get();
+    const int masterDevice = static_cast<int>(m_pMasterDevice->get());
+    // -1 while nothing is master; a proxy that has not resolved reads 0.0, and
+    // 0.0 is a real phase. So an unresolved proxy must not be drawn as one.
+    const double masterPhase =
+            m_pMasterBarPhase->valid() ? m_pMasterBarPhase->get() : -1.0;
+
+    // Our own bar phase, from the *playhead* rather than from counting beats,
+    // and through the same helper the network publisher uses -- so the row
+    // drawn here and the bar a CDJ is told we are in cannot drift apart.
     const double fileBpm = m_pFileBpm->get();
     const double duration = m_pDuration->get();
     const bool ourTrackRunning = m_pBpm->get() > 0.0 && fileBpm > 0.0 && duration > 0.0;
     double ourPhase = -1.0;
     if (ourTrackRunning) {
-        // Two sources, and they must not be allowed to disagree.
-        //
-        // `beat_distance` is the engine's own sub-beat phase and is exact. The
-        // beat *index* has to come from the playhead, because nothing counts
-        // bars. But the two are independent estimates of the same quantity:
-        // the grid does not start at zero -- a real track's first beat is 23 ms
-        // in -- so floor(beatsElapsed) flips to the next integer at a slightly
-        // different instant than beat_distance wraps to 0. For that moment the
-        // index says beat 3 while the fraction still says 0.98, the marker
-        // leaps a whole beat forward, and a frame later it leaps back. That is
-        // the jumping.
-        //
-        // Subtracting the fraction before rounding pins the index to whatever
-        // beat_distance currently believes: the difference is near-integral by
-        // construction, so the index can only change at the exact moment the
-        // fraction wraps, and the two can no longer contradict each other.
-        const double trackSeconds = m_pPlayPosition->get() * duration;
-        const double beatsElapsed = trackSeconds * fileBpm / 60.0;
-        const auto beatIndex =
-                static_cast<long long>(std::llround(beatsElapsed - ourBeatDistance));
-        const int beatInBar =
-                static_cast<int>(((beatIndex % kBeatsPerBar) + kBeatsPerBar) %
-                        kBeatsPerBar);
-        ourPhase = (beatInBar + ourBeatDistance) / kBeatsPerBar;
+        ourPhase = mixxx::prolink::barPhaseOf(
+                mixxx::prolink::beatPositionOf(m_pPlayPosition->get(),
+                        duration,
+                        fileBpm,
+                        m_pBeatDistance->get()));
     }
 
     // **Each row keeps its own colour, always.** Recolouring an aligned pair was

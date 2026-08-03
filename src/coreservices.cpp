@@ -481,6 +481,9 @@ void CoreServices::initialize(QApplication* pApp) {
         exit(-1);
     }
 
+    // Before anything that might parse a skin. See ProLinkControls.
+    m_pProLinkControls = std::make_unique<mixxx::prolink::ProLinkControls>();
+
     m_pControlIndicatorTimer = std::make_shared<mixxx::ControlIndicatorTimer>(this);
 
     auto pChannelHandleFactory = std::make_shared<ChannelHandleFactory>();
@@ -863,6 +866,7 @@ void CoreServices::finalize() {
     m_pSkinControls.reset();
 
     m_pControlIndicatorTimer.reset();
+    m_pProLinkControls.reset();
 
     t.elapsed(true);
 }

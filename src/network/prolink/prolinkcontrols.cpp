@@ -1,0 +1,63 @@
+#include "network/prolink/prolinkcontrols.h"
+
+#include "util/assert.h"
+
+namespace {
+mixxx::prolink::ProLinkControls* s_pInstance = nullptr;
+
+const QString kGroup = QStringLiteral("[ProLink]");
+
+ConfigKey key(const char* item) {
+    return ConfigKey(kGroup, QString::fromLatin1(item));
+}
+} // namespace
+
+namespace mixxx {
+namespace prolink {
+
+/*static*/ ProLinkControls* ProLinkControls::instance() {
+    return s_pInstance;
+}
+
+ProLinkControls::ProLinkControls() {
+    m_pPullDb = std::make_unique<ControlPushButton>(key("pull_db"));
+
+    m_pMasterDevice = std::make_unique<ControlObject>(key("master_device"));
+    m_pMasterBpm = std::make_unique<ControlObject>(key("master_bpm"));
+    m_pMasterBarPhase = std::make_unique<ControlObject>(key("master_bar_phase"));
+    // Read-only, because nothing in Mixxx may tell a CDJ what phase it is at
+    // and a skin binding that could write these would look like it worked.
+    m_pMasterDevice->setReadOnly();
+    m_pMasterBpm->setReadOnly();
+    m_pMasterBarPhase->setReadOnly();
+    m_pMasterBarPhase->forceSet(-1.0);
+    m_pMasterBpm->forceSet(0.0);
+    m_pMasterDevice->forceSet(0.0);
+
+    // TRIGGER, not TOGGLE: pressing MASTER is a request that may take a couple
+    // of packets to be granted, so the button must not hold a state of its own
+    // -- what it displays comes from `is_master`, which is what the network
+    // actually settled on.
+    m_pTakeMaster = std::make_unique<ControlPushButton>(key("take_master"));
+    m_pTakeMaster->setButtonMode(ControlPushButton::TRIGGER);
+    m_pIsMaster = std::make_unique<ControlObject>(key("is_master"));
+    m_pIsMaster->setReadOnly();
+    m_pIsMaster->forceSet(0.0);
+
+    m_pSyncEnabled = std::make_unique<ControlPushButton>(key("sync_enabled"));
+    m_pSyncEnabled->setButtonMode(ControlPushButton::TOGGLE);
+
+    VERIFY_OR_DEBUG_ASSERT(s_pInstance == nullptr) {
+        return;
+    }
+    s_pInstance = this;
+}
+
+ProLinkControls::~ProLinkControls() {
+    if (s_pInstance == this) {
+        s_pInstance = nullptr;
+    }
+}
+
+} // namespace prolink
+} // namespace mixxx

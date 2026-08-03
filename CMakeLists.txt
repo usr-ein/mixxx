@@ -1080,6 +1080,7 @@ add_library(mixxx-lib STATIC EXCLUDE_FROM_ALL
   src/network/jsonwebtask.cpp
   src/network/networktask.cpp
   src/util/posixsignalhandler.cpp
+  src/network/prolink/prolinkcontrols.cpp
   src/network/prolink/prolinknetworkservice.cpp
   src/network/prolink/prolinkpdb.cpp
   src/network/webtask.cpp

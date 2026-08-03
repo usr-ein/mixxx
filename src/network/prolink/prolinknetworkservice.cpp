@@ -6,10 +6,16 @@
 #include <QTimer>
 #include <exception>
 
+#include <cmath>
+
 #include "control/controlobject.h"
+#include "control/controlproxy.h"
 #include "control/controlpushbutton.h"
 #include "moc_prolinknetworkservice.cpp"
+#include "network/prolink/prolinkbeatposition.h"
+#include "network/prolink/prolinkcontrols.h"
 #include "prolink-cxx/src/lib.rs.h"
+#include "util/assert.h"
 #include "util/logger.h"
 
 namespace {
@@ -140,15 +146,15 @@ struct ProLinkNetworkService::Impl {
 ProLinkNetworkService::ProLinkNetworkService(QObject* parent)
         : QObject(parent),
           m_pImpl(std::make_unique<Impl>()),
-          m_pPullDbControl(std::make_unique<ControlPushButton>(
-                  ConfigKey(QStringLiteral("[ProLink]"), QStringLiteral("pull_db")))),
-          m_pMasterDeviceControl(std::make_unique<ControlObject>(
-                  ConfigKey(QStringLiteral("[ProLink]"), QStringLiteral("master_device")))),
-          m_pMasterBpmControl(std::make_unique<ControlObject>(
-                  ConfigKey(QStringLiteral("[ProLink]"), QStringLiteral("master_bpm")))),
-          m_pMasterBarPhaseControl(std::make_unique<ControlObject>(ConfigKey(
-                  QStringLiteral("[ProLink]"), QStringLiteral("master_bar_phase")))) {
-    connect(m_pPullDbControl.get(),
+          m_pControls(ProLinkControls::instance()) {
+    VERIFY_OR_DEBUG_ASSERT(m_pControls) {
+        // Nothing to hang the buttons off, and nowhere to publish the master.
+        // The network half still runs; the UI half simply does not exist.
+        kLogger.warning() << "the [ProLink] controls were never created;"
+                          << "the phase meter and the SYNC and MASTER buttons will do nothing";
+        return;
+    }
+    connect(m_pControls->pullDatabase(),
             &ControlPushButton::valueChanged,
             this,
             [this](double value) {
@@ -157,45 +163,222 @@ ProLinkNetworkService::ProLinkNetworkService(QObject* parent)
                 }
             });
 
-    // Read-only: nothing in Mixxx may tell a CDJ what phase it is at, and a
-    // skin binding that could write these would look like it worked.
+    // MASTER **takes and never gives back**, which is how the button behaves on
+    // a CDJ: pressing it when you are not master makes you master, pressing it
+    // when you are does nothing at all. Mastership only ever leaves a deck
+    // because another deck asked for it — there is no "nobody is master" state
+    // to toggle back into, and offering one would be a button that silently
+    // unsynced every follower on the network.
     //
-    // Created in the constructor rather than when the network comes up,
-    // because the phase-meter widget resolves them once when the skin loads —
-    // and a widget that resolved nothing logs
-    // "getControl returning NULL" and then never looks again.
-    m_pMasterDeviceControl->setReadOnly();
-    m_pMasterBpmControl->setReadOnly();
-    m_pMasterBarPhaseControl->setReadOnly();
-    m_pMasterBarPhaseControl->forceSet(-1.0);
-    m_pMasterBpmControl->forceSet(0.0);
-    m_pMasterDeviceControl->forceSet(0.0);
+    // Taking it is a request rather than a decision, because whoever holds it
+    // has to hand over first. So `is_master` is published separately and
+    // read-only, and it is the one the button lights from.
+    connect(m_pControls->takeMaster(),
+            &ControlPushButton::valueChanged,
+            this,
+            [this](double value) {
+                if (value <= 0) {
+                    return;
+                }
+                // Consumed immediately, because this is a request and not a
+                // state. A skin PushButton computes what to emit from the
+                // control's *current* value -- (value + 1) % 2 -- so a request
+                // left latched at 1 makes the next press emit 0, and MASTER
+                // works on every other tap.
+                m_pControls->takeMaster()->set(0.0);
+                if (!m_pImpl->pSession) {
+                    return;
+                }
+                if (!(*m_pImpl->pSession)->is_tempo_master()) {
+                    (*m_pImpl->pSession)->take_tempo_master();
+                }
+            });
+
+    connect(m_pControls->syncEnabled(),
+            &ControlPushButton::valueChanged,
+            this,
+            [this](double value) {
+                if (value > 0) {
+                    // Once, on engage. See alignPhaseToMaster().
+                    alignPhaseToMaster();
+                }
+            });
+
+    // The deck's own state. Proxies rather than reads, because this runs
+    // thirty times a second and a lookup by name each time is a lookup by name
+    // thirty times a second.
+    const auto deck = [this](const char* item) {
+        return std::make_unique<ControlProxy>(QString::fromLatin1(kDeckGroup),
+                QString::fromLatin1(item),
+                this,
+                ControlFlag::NoWarnIfMissing);
+    };
+    m_pDeckBpm = deck("bpm");
+    m_pDeckFileBpm = deck("file_bpm");
+    m_pDeckPlay = deck("play");
+    m_pDeckDuration = deck("duration");
+    m_pDeckPlayPosition = deck("playposition");
+    m_pDeckBeatDistance = deck("beat_distance");
+}
+
+/*static*/ const char* ProLinkNetworkService::kDeckGroup = "[Channel1]";
+
+void ProLinkNetworkService::publishPlayback() {
+    if (!m_pControls) {
+        return;
+    }
+
+    const double fileBpm = m_pDeckFileBpm->get();
+    const double duration = m_pDeckDuration->get();
+    if (fileBpm <= 0.0 || duration <= 0.0) {
+        // No track, or one with no grid. Saying nothing is right: a tempo we
+        // cannot state is not a tempo of zero, and a stale one would leave
+        // followers locked to a ghost.
+        (*m_pImpl->pSession)->clear_playback();
+        return;
+    }
+    // The fader as a percentage, derived from the two tempos rather than read
+    // off `rate`: rate has to be combined with the range and the direction, and
+    // getting any of the three wrong is a pitch that is silently inverted.
+    const double effectiveBpm = m_pDeckBpm->get();
+    const double pitchPercent = effectiveBpm > 0.0 ? (effectiveBpm / fileBpm - 1.0) * 100.0 : 0.0;
+
+    const mixxx::prolink::BeatPosition position =
+            mixxx::prolink::beatPositionOf(m_pDeckPlayPosition->get(),
+                    duration,
+                    fileBpm,
+                    m_pDeckBeatDistance->get());
+    (*m_pImpl->pSession)
+            ->set_playback(fileBpm,
+                    pitchPercent,
+                    m_pDeckPlay->get() > 0.0,
+                    position.number,
+                    position.fraction);
+}
+
+void ProLinkNetworkService::followMaster() {
+    if (!m_pControls) {
+        return;
+    }
+
+    if (m_pControls->syncEnabled()->get() <= 0.0) {
+        return;
+    }
+    // A master follows nobody. Without this the deck would chase the tempo of
+    // whichever other player the meter happens to be drawing -- which is a deck
+    // that is, at that moment, supposed to be following *us*.
+    if (m_pControls->isMaster()->get() > 0.0) {
+        return;
+    }
+    const double masterBpm = m_pControls->masterBpm()->get();
+    const double ours = m_pDeckBpm->get();
+    if (masterBpm <= 0.0 || ours <= 0.0) {
+        return;
+    }
+    // A hundredth of a BPM is the resolution the wire carries, so anything
+    // finer is noise -- and writing `bpm` every poll would fight the DJ's hand
+    // on the fader rather than follow the master.
+    if (std::abs(masterBpm - ours) < 0.01) {
+        return;
+    }
+    ControlObject::set(ConfigKey(QString::fromLatin1(kDeckGroup),
+                               QStringLiteral("bpm")),
+            masterBpm);
+}
+
+void ProLinkNetworkService::alignPhaseToMaster() {
+    if (!m_pControls) {
+        return;
+    }
+
+    const double masterPhase = m_pControls->masterBarPhase()->get();
+    const double duration = m_pDeckDuration->get();
+    const double fileBpm = m_pDeckFileBpm->get();
+    const double effectiveBpm = m_pDeckBpm->get();
+    if (masterPhase < 0.0 || duration <= 0.0 || fileBpm <= 0.0 || effectiveBpm <= 0.0) {
+        return;
+    }
+    const double ourPhase = mixxx::prolink::barPhaseOf(
+            mixxx::prolink::beatPositionOf(m_pDeckPlayPosition->get(),
+                    duration,
+                    fileBpm,
+                    m_pDeckBeatDistance->get()));
+    if (ourPhase < 0.0) {
+        return;
+    }
+    // **Beats, not bars.** Bar alignment across devices is not knowable --
+    // nothing in a Mixxx grid names a downbeat -- so aligning to the master's
+    // bar would be a coin flip that moves the track by up to two beats. The
+    // beat within the bar is real, so the correction is wrapped into half a
+    // beat either way and never moves the playhead further than that.
+    const double beatsApart = (masterPhase - ourPhase) * mixxx::prolink::kBeatsPerBar;
+    double withinBeat = beatsApart - std::floor(beatsApart);
+    if (withinBeat > 0.5) {
+        withinBeat -= 1.0;
+    }
+    const double seconds = withinBeat * 60.0 / effectiveBpm;
+    const double position = m_pDeckPlayPosition->get() + seconds / duration;
+    if (position < 0.0 || position > 1.0) {
+        return;
+    }
+    kLogger.debug() << "phase align: moving" << seconds * 1000.0 << "ms onto the master's beat";
+    ControlObject::set(ConfigKey(QString::fromLatin1(kDeckGroup),
+                               QStringLiteral("playposition")),
+            position);
 }
 
 void ProLinkNetworkService::publishMaster() {
-    if (!m_pImpl->pSession) {
-        m_pMasterDeviceControl->forceSet(0.0);
-        m_pMasterBpmControl->forceSet(0.0);
-        m_pMasterBarPhaseControl->forceSet(-1.0);
+    if (!m_pControls) {
         return;
     }
-    for (const ::prolink::Player& player : (*m_pImpl->pSession)->players()) {
-        if (!player.is_master) {
-            continue;
+
+    // Published here rather than beside the playback, because that returns
+    // early when no track is loaded -- and holding tempo master with the deck
+    // stopped is an ordinary state whose button must not go dark.
+    m_pControls->isMaster()->forceSet(
+            m_pImpl->pSession && (*m_pImpl->pSession)->is_tempo_master() ? 1.0 : 0.0);
+
+    if (!m_pImpl->pSession) {
+        m_pControls->masterDevice()->forceSet(0.0);
+        m_pControls->masterBpm()->forceSet(0.0);
+        m_pControls->masterBarPhase()->forceSet(-1.0);
+        return;
+    }
+    // **Who to draw is "the deck I am mixing against", not literally "the
+    // master".** The two are the same until this deck takes mastership, and
+    // then they stop being: the master becomes us, the top row would be our own
+    // phase drawn above our own phase, and the meter goes blank or useless at
+    // exactly the moment a DJ has just declared they are the one being
+    // followed. So the master is preferred, and any other playing deck is the
+    // fallback -- which is the deck whose beats are worth lining up with either
+    // way.
+    const ::rust::Vec<::prolink::Player> players = (*m_pImpl->pSession)->players();
+    const ::prolink::Player* pShow = nullptr;
+    for (const ::prolink::Player& player : players) {
+        if (player.is_master) {
+            pShow = &player;
+            break;
         }
-        m_pMasterDeviceControl->forceSet(player.number);
+        // Only a deck that is actually keeping time: `bar_phase` is negative
+        // for a player that has sent no beat, or whose beat has gone stale.
+        if (pShow == nullptr && player.is_beating && player.bar_phase >= 0.0) {
+            pShow = &player;
+        }
+    }
+    if (pShow != nullptr) {
+        m_pControls->masterDevice()->forceSet(pShow->number);
         // The tempo actually playing, with the pitch fader applied. The
         // library reports a negative for "not known", which the widget must
         // not draw as a tempo.
-        m_pMasterBpmControl->forceSet(player.effective_bpm);
-        m_pMasterBarPhaseControl->forceSet(player.bar_phase);
+        m_pControls->masterBpm()->forceSet(pShow->effective_bpm);
+        m_pControls->masterBarPhase()->forceSet(pShow->bar_phase);
         return;
     }
     // Nobody holds master. Not the same as a master at phase zero, which is
     // why the phase goes to -1 rather than to 0.
-    m_pMasterDeviceControl->forceSet(0.0);
-    m_pMasterBpmControl->forceSet(0.0);
-    m_pMasterBarPhaseControl->forceSet(-1.0);
+    m_pControls->masterDevice()->forceSet(0.0);
+    m_pControls->masterBpm()->forceSet(0.0);
+    m_pControls->masterBarPhase()->forceSet(-1.0);
 }
 
 /*static*/ ProLinkNetworkService* ProLinkNetworkService::s_pListening = nullptr;
@@ -599,6 +782,8 @@ void ProLinkNetworkService::poll() {
 
     syncDevices();
     publishMaster();
+    publishPlayback();
+    followMaster();
     syncAnnouncement();
     syncServeStatus();
 }

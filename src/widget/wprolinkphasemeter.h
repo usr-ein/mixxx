@@ -53,6 +53,17 @@ class WProLinkPhaseMeter : public WWidget {
             const QString& label);
     /// The player number, over the ticks rather than beside them.
     void drawOverlayLabel(QPainter* pPainter, const QRectF& rect, const QString& label);
+    /// Attach to the `[ProLink]` controls, if they exist yet.
+    ///
+    /// **They may well not.** A ControlProxy resolves its control once, in its
+    /// constructor, and a control created afterwards is never picked up — the
+    /// proxy just reads 0.0 for the rest of the session. The three this widget
+    /// wants are created by ProLinkNetworkService, which is created by the
+    /// MediaRegistry, which is created by WDeckBrowser — another widget in this
+    /// same skin, built *after* the header this meter sits in. So on a cold
+    /// start all three resolved to null, the log said so three times, and the
+    /// master row has been frozen at phase zero ever since.
+    void attachToProLink();
 
     const QString m_group;
 
@@ -71,4 +82,8 @@ class WProLinkPhaseMeter : public WWidget {
     /// decks changing relationship, and the rows lining up already says it.
     QColor m_masterColour{0xff, 0x66, 0x00};
     QColor m_ourColour{0x44, 0xcc, 0xff};
+
+    /// Repaints since the last attempt to attach. Retrying on every frame would
+    /// be three failed lookups a frame, forever, on a deck that has no network.
+    int m_sinceAttach = 0;
 };

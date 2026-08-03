@@ -12,7 +12,14 @@
 #include "network/prolink/server/prolinkservestatus.h"
 
 class ControlObject;
+class ControlProxy;
 class ControlPushButton;
+
+namespace mixxx {
+namespace prolink {
+class ProLinkControls;
+}
+} // namespace mixxx
 class QTimer;
 
 namespace mixxx {
@@ -173,6 +180,27 @@ class ProLinkNetworkService : public QObject {
     /// may tell a CDJ what phase it is at.
     void publishMaster();
 
+    /// Tell the network what this deck is playing.
+    ///
+    /// **The only thing that makes us a tempo other players can see.**
+    /// Everything else here reads the network; without this a CDJ lists us as a
+    /// device with no tempo, has nothing to beat-match to, and draws no phase
+    /// for us however well the rest works.
+    void publishPlayback();
+
+    /// Hold this deck's tempo to the network master's, while SYNC is on.
+    void followMaster();
+
+    /// Nudge the playhead so our beat lands on the master's.
+    ///
+    /// Once, when SYNC is engaged. Continuous phase correction would be a
+    /// control loop fighting the pitch fader; a DJ pressing SYNC wants one
+    /// jump, and then a matched tempo keeps it there.
+    void alignPhaseToMaster();
+
+    /// The deck the browser and the network both mean by "this deck".
+    static const char* kDeckGroup;
+
     /// Re-read the device table, emitting found, changed and lost as it moves.
     void syncDevices();
 
@@ -216,12 +244,20 @@ class ProLinkNetworkService : public QObject {
     static ProLinkNetworkService* s_pListening;
 
     QTimer* m_pTimer = nullptr;
-    /// `[ProLink] pull_db`, so a controller or a skin button can ask for the
-    /// database without going through the menu.
-    std::unique_ptr<ControlPushButton> m_pPullDbControl;
-    std::unique_ptr<ControlObject> m_pMasterDeviceControl;
-    std::unique_ptr<ControlObject> m_pMasterBpmControl;
-    std::unique_ptr<ControlObject> m_pMasterBarPhaseControl;
+    /// The `[ProLink]` controls, which this class **uses and does not own**.
+    ///
+    /// They belong to ProLinkControls, created by CoreServices long before any
+    /// skin exists — see that class for why owning them here does not work.
+    /// Null only in a test or a build with no core services, and every use
+    /// below is guarded accordingly.
+    ProLinkControls* m_pControls = nullptr;
+    /// The deck's own controls, read every poll to publish what we are doing.
+    std::unique_ptr<ControlProxy> m_pDeckBpm;
+    std::unique_ptr<ControlProxy> m_pDeckFileBpm;
+    std::unique_ptr<ControlProxy> m_pDeckPlay;
+    std::unique_ptr<ControlProxy> m_pDeckDuration;
+    std::unique_ptr<ControlProxy> m_pDeckPlayPosition;
+    std::unique_ptr<ControlProxy> m_pDeckBeatDistance;
     QList<ProLinkDevice> m_devices;
     QHash<quint32, Pending> m_pending;
     bool m_listening = false;
