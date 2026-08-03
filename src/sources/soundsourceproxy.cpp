@@ -22,6 +22,7 @@
 #endif
 #ifdef __FFMPEG__
 #include "sources/soundsourceffmpeg.h"
+#include "sources/soundsourceprolink.h"
 #endif
 #ifdef __MODPLUG__
 #include "sources/soundsourcemodplug.h"
@@ -132,6 +133,10 @@ bool registerPlatformAndFallbackSoundSourceProviders(
     registerSoundSourceProvider(
             pProviderRegistry,
             std::make_shared<mixxx::SoundSourceProviderFFmpeg>());
+    // Ahead of it, and inert for everything that is not currently arriving over
+    // the network: it declines an ordinary file and the next provider takes it.
+    registerSoundSourceProvider(pProviderRegistry,
+            std::make_shared<mixxx::SoundSourceProviderProLink>());
 #endif // __FFMPEG__
     return true;
 }

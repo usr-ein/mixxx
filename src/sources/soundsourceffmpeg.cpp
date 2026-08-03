@@ -283,14 +283,31 @@ QString SoundSourceFFmpeg::formatErrorString(int errnum) {
 
 // Static
 AVFormatContext* SoundSourceFFmpeg::openInputFile(
-        const QString& fileName) {
+        const QString& fileName,
+        AVIOContext* pAvioContext) {
     // Will be allocated implicitly when opening the input file
     AVFormatContext* pavInputFormatContext = nullptr;
 
+    if (pAvioContext != nullptr) {
+        // Custom I/O: the context has to be allocated up front so `pb` can be
+        // set before the open, and the open is then told there is no filename
+        // to go and look at. AVFMT_FLAG_CUSTOM_IO is what stops FFmpeg closing
+        // an AVIOContext it did not create.
+        pavInputFormatContext = avformat_alloc_context();
+        if (pavInputFormatContext == nullptr) {
+            kLogger.warning() << "avformat_alloc_context() failed";
+            return nullptr;
+        }
+        pavInputFormatContext->pb = pAvioContext;
+        pavInputFormatContext->flags |= AVFMT_FLAG_CUSTOM_IO;
+    }
+
     // Open input file and allocate/initialize AVFormatContext
     const int avformat_open_input_result =
-            avformat_open_input(
-                    &pavInputFormatContext, fileName.toUtf8().constData(), nullptr, nullptr);
+            avformat_open_input(&pavInputFormatContext,
+                    pAvioContext != nullptr ? nullptr : fileName.toUtf8().constData(),
+                    nullptr,
+                    nullptr);
     if (avformat_open_input_result != 0) {
         DEBUG_ASSERT(avformat_open_input_result < 0);
         kLogger.warning().noquote()
@@ -512,7 +529,7 @@ SoundSource::OpenResult SoundSourceFFmpeg::tryOpen(
     // Open input
     {
         AVFormatContext* pavInputFormatContext =
-                openInputFile(getLocalFileName());
+                openInputFile(getLocalFileName(), createAvioContext());
         if (pavInputFormatContext == nullptr) {
             kLogger.warning()
                     << "Failed to open input file"

@@ -30,6 +30,17 @@ class SoundSourceFFmpeg : public SoundSource {
             OpenMode mode,
             const OpenParams& params) override;
 
+    /// Where the decoded bytes come from, if not from the filesystem.
+    ///
+    /// Returning null -- as this does -- means "open the path normally", which
+    /// is every ordinary file. A subclass returns an AVIOContext to feed FFmpeg
+    /// from somewhere else instead; that is the whole hook needed to decode a
+    /// file that is still arriving over the network, because everything after
+    /// the open is identical either way.
+    virtual AVIOContext* createAvioContext() {
+        return nullptr;
+    }
+
   private:
     const CSAMPLE* resampleDecodedAVFrame();
 
@@ -136,7 +147,8 @@ class SoundSourceFFmpeg : public SoundSource {
   public:
     // The following static functions are used by children and closely related
     // classes, this is why these static methods aren't defined as protected.
-    static AVFormatContext* openInputFile(const QString& fileName);
+    static AVFormatContext* openInputFile(
+            const QString& fileName, AVIOContext* pAvioContext = nullptr);
     static bool openDecodingContext(AVCodecContext* pavCodecContext);
 #if LIBAVUTIL_VERSION_INT >= AV_VERSION_INT(57, 28, 100) // FFmpeg 5.1
     static void initChannelLayoutFromStream(

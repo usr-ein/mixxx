@@ -1,6 +1,8 @@
 #pragma once
 
 #include <QFile>
+#include <QHash>
+#include <memory>
 #include <QList>
 #include <QMutex>
 #include <QString>
@@ -75,6 +77,12 @@ class StreamingFile {
     bool isComplete() const;
     QString error() const;
 
+    /// How many reads had to wait, and how long in total. The number that says
+    /// whether streaming is keeping ahead of the playhead: a healthy track
+    /// waits a handful of times at the start and then never again.
+    int waitCount() const;
+    qint64 waitedMs() const;
+
     /// How long a read waits before giving up. A deck that hangs forever on a
     /// vanished player is worse than one that reports a failure and moves on.
     static constexpr int kReadTimeoutMs = 15000;
@@ -88,6 +96,24 @@ class StreamingFile {
     bool m_complete = false;
     bool m_abandoned = false;
     QString m_error;
+    int m_waitCount = 0;
+    qint64 m_waitedMs = 0;
+};
+
+/// Which local paths are being streamed right now.
+///
+/// The SoundSource provider consults this to decide whether a file is one of
+/// ours: if it is not here, the provider declines and SoundSourceProxy falls
+/// through to the ordinary decoders. That is what keeps local sticks on the
+/// normal path and stops this machinery touching files it has no business
+/// touching.
+class StreamingFileRegistry {
+  public:
+    static void add(const QString& localPath, std::shared_ptr<StreamingFile> pFile);
+    static void remove(const QString& localPath);
+    /// Null when the path is an ordinary file.
+    static std::shared_ptr<StreamingFile> lookup(const QString& localPath);
+    static int count();
 };
 
 } // namespace deck

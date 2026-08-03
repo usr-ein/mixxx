@@ -1,6 +1,7 @@
 #include "library/deck/streamingfile.h"
 
 #include <QDeadlineTimer>
+#include <QElapsedTimer>
 
 #include "util/logger.h"
 
@@ -134,7 +135,19 @@ qint64 StreamingFile::read(qint64 offset, char* pBuffer, qint64 length) {
 
     QMutexLocker locked(&m_mutex);
     QDeadlineTimer deadline(kReadTimeoutMs);
+    QElapsedTimer waited;
+    bool didWait = false;
     while (!m_present.contains(offset, wanted)) {
+        if (!didWait) {
+            didWait = true;
+            waited.start();
+            ++m_waitCount;
+            // Worth a line each time: a read that waits is the download losing
+            // the race with the playhead, and a burst of these is the warning
+            // that a track is about to stutter.
+            kLogger.debug() << "waiting for" << wanted << "bytes at" << offset
+                            << "(wait" << m_waitCount << ")";
+        }
         if (m_abandoned) {
             return -1;
         }
@@ -152,6 +165,14 @@ qint64 StreamingFile::read(qint64 offset, char* pBuffer, qint64 length) {
         }
     }
 
+    if (didWait) {
+        const qint64 elapsed = waited.elapsed();
+        m_waitedMs += elapsed;
+        kLogger.info() << "waited" << elapsed << "ms for" << wanted << "bytes at"
+                       << offset << "-- total waits" << m_waitCount << "/"
+                       << m_waitedMs << "ms";
+    }
+
     if (!m_file.isOpen()) {
         return -1;
     }
@@ -161,6 +182,44 @@ qint64 StreamingFile::read(qint64 offset, char* pBuffer, qint64 length) {
         return -1;
     }
     return m_file.read(pBuffer, wanted);
+}
+
+int StreamingFile::waitCount() const {
+    QMutexLocker locked(&m_mutex);
+    return m_waitCount;
+}
+
+qint64 StreamingFile::waitedMs() const {
+    QMutexLocker locked(&m_mutex);
+    return m_waitedMs;
+}
+
+namespace {
+QMutex s_registryMutex;
+QHash<QString, std::shared_ptr<StreamingFile>> s_registry;
+} // namespace
+
+void StreamingFileRegistry::add(const QString& localPath, std::shared_ptr<StreamingFile> pFile) {
+    QMutexLocker locked(&s_registryMutex);
+    s_registry.insert(localPath, std::move(pFile));
+    kLogger.info() << "streaming" << localPath << "--" << s_registry.size() << "in flight";
+}
+
+void StreamingFileRegistry::remove(const QString& localPath) {
+    QMutexLocker locked(&s_registryMutex);
+    if (s_registry.remove(localPath) > 0) {
+        kLogger.info() << "no longer streaming" << localPath;
+    }
+}
+
+std::shared_ptr<StreamingFile> StreamingFileRegistry::lookup(const QString& localPath) {
+    QMutexLocker locked(&s_registryMutex);
+    return s_registry.value(localPath);
+}
+
+int StreamingFileRegistry::count() {
+    QMutexLocker locked(&s_registryMutex);
+    return static_cast<int>(s_registry.size());
 }
 
 } // namespace deck
