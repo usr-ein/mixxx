@@ -1350,6 +1350,7 @@ add_library(mixxx-lib STATIC EXCLUDE_FROM_ALL
   src/widget/deck/decklistview.cpp
   src/widget/deck/deckmenumodel.cpp
   src/widget/deck/wdeckbrowser.cpp
+  src/widget/deck/wdeckdiagnostics.cpp
   src/widget/deck/wdeckinfopanel.cpp
   src/widget/deck/wdecktoast.cpp
   src/widget/deck/wdecksearch.cpp

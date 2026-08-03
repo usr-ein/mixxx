@@ -26,6 +26,7 @@
 #include "widget/deck/deckdelegates.h"
 #include "widget/deck/decklistview.h"
 #include "widget/deck/deckmenumodel.h"
+#include "widget/deck/wdeckdiagnostics.h"
 #include "widget/deck/wdeckinfopanel.h"
 #include "widget/deck/wdecksearch.h"
 #include "widget/deck/wdecksortmenu.h"
@@ -199,6 +200,9 @@ WDeckBrowser::WDeckBrowser(QWidget* pParent, Library* pLibrary, UserSettingsPoin
     m_pKeyboard->setFixedHeight(300);
     pSearchLayout->addWidget(m_pKeyboard);
     m_pStack->addWidget(m_pSearchPage);
+
+    m_pDiagnostics = new WDeckDiagnostics(m_pStack);
+    m_pStack->addWidget(m_pDiagnostics);
 
     connect(m_pKeyboard, &WDeckKeyboard::keyPressed, this, [this](const QString& c) {
         m_searchText += c;
@@ -445,7 +449,14 @@ void WDeckBrowser::rebuildCurrentLevel() {
     case Level::Kind::Search:
         showSearch(level);
         break;
+    case Level::Kind::Diagnostics:
+        m_pStack->setCurrentWidget(m_pDiagnostics);
+        m_pDiagnostics->setFocus();
+        break;
     }
+    // Sampling follows visibility: a page nobody is looking at has no business
+    // reading /proc once a second.
+    m_pDiagnostics->setActive(level.kind == Level::Kind::Diagnostics);
     m_pLevelControl->forceSet(m_stack.size() - 1);
     m_pInTrackList->forceSet(inTrackList() ? 1.0 : 0.0);
     updateBreadcrumb();
@@ -1123,7 +1134,11 @@ void WDeckBrowser::onActivated(int row) {
             return;
         }
         if (payload == QStringLiteral("#diagnostics")) {
-            return; // Not built yet.
+            Level level;
+            level.kind = Level::Kind::Diagnostics;
+            level.title = menuRow.title;
+            pushLevel(level);
+            return;
         }
         Level level;
         level.kind = Level::Kind::MediumMenu;

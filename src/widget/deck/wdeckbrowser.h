@@ -32,6 +32,7 @@ class MenuRowDelegate;
 class WDeckSortMenu;
 class WDeckKeyboard;
 class WDeckInfoPanel;
+class WDeckDiagnostics;
 class TrackRowDelegate;
 
 /// The deck's library, as a menu stack.
@@ -87,6 +88,7 @@ class WDeckBrowser : public QWidget, public WBaseWidget {
             ArtistAlbums,
             Tracks,
             Search,
+            Diagnostics,
         };
         Kind kind = Kind::Sources;
         MediumId medium;
@@ -148,6 +150,7 @@ class WDeckBrowser : public QWidget, public WBaseWidget {
     /// rather than sitting in the stack directly.
     QWidget* m_pTracksPage;
     WDeckInfoPanel* m_pInfoPanel;
+    WDeckDiagnostics* m_pDiagnostics;
     bool m_infoLayout = false;
     QString m_searchText;
     /// The sort is a BROWSER preference, not a property of a list: leaving one
