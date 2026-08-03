@@ -408,7 +408,15 @@ void TrackRowDelegate::paint(QPainter* pPainter,
         // right-aligned beside it (browser-prd.md 8.2). The panel to the right
         // says everything else.
         QString secondary;
-        if (m_secondaryColumn >= 0) {
+        // Never a column this row already draws down its right-hand side.
+        // Sorting by BPM otherwise printed the BPM twice, side by side, which
+        // reads as a rendering fault rather than as a sort.
+        //
+        // Checked here rather than where the column is chosen, because the
+        // delegate's own column indices are re-resolved on every model change
+        // and a comparison made earlier would be against stale ones.
+        if (m_secondaryColumn >= 0 && m_secondaryColumn != m_columns.bpm &&
+                m_secondaryColumn != m_columns.key) {
             secondary = index.sibling(index.row(), m_secondaryColumn)
                                 .data(Qt::DisplayRole)
                                 .toString();

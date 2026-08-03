@@ -340,6 +340,13 @@ WDeckBrowser::WDeckBrowser(QWidget* pParent, Library* pLibrary, UserSettingsPoin
             m_pSortMenu->activateSelection();
             return;
         }
+        // Nothing to activate on the diagnostics page, and it is not harmless
+        // to try: the menu view underneath still holds the level we came from,
+        // with a row selected, so a press activated *that* -- entering a medium
+        // or raising the shutdown overlay from a page showing neither.
+        if (!m_stack.isEmpty() && m_stack.last().kind == Level::Kind::Diagnostics) {
+            return;
+        }
         DeckListView* pView = inTrackList() ? m_pTrackView : m_pMenuView;
         if (pView->selectedRow() >= 0) {
             onActivated(pView->selectedRow());
@@ -378,7 +385,8 @@ WDeckBrowser::WDeckBrowser(QWidget* pParent, Library* pLibrary, UserSettingsPoin
                 if (!inTrackList()) {
                     return;
                 }
-                m_pSortMenu->move((width() - m_pSortMenu->width()) / 2, 80);
+                m_pSortMenu->move((width() - m_pSortMenu->width()) / 2,
+                        kTopBezelPadHeight + kBreadcrumbHeight);
                 m_pSortMenu->open(m_sortColumn);
             });
     m_pInfoToggle = std::make_unique<ControlPushButton>(ConfigKey("[Browser]", "info_toggle"));
@@ -873,6 +881,17 @@ MediumId WDeckBrowser::currentMedium() const {
 }
 
 void WDeckBrowser::applySort() {
+    // Which track the DJ is looking at, so the sort can put the selection back
+    // on it. Re-selecting the model drops the current index entirely, which
+    // left the list with nothing highlighted and the info panel blank -- and a
+    // DJ who sorts a list is usually looking at a track and wants to keep
+    // looking at it, not to be dumped back at the top.
+    const int wasSelected = m_pTrackView->selectedRow();
+    const int idColumn = m_pTrackModel->fieldIndex(QStringLiteral("track_id"));
+    const int keepTrackId = (wasSelected >= 0 && idColumn >= 0)
+            ? m_pTrackModel->index(wasSelected, idColumn).data(Qt::DisplayRole).toInt()
+            : -1;
+
     // Publish it for the mapping first, so the LED is right even on the paths
     // below that return early.
     int fieldIndex = 0;
@@ -891,6 +910,7 @@ void WDeckBrowser::applySort() {
         // unsorted, and only the model can put itself back.
         m_pTrackModel->clearSorting();
         m_pTrackDelegate->setSecondaryColumn(-1);
+        restoreSelection(keepTrackId);
         return;
     }
     const int column = m_pTrackModel->fieldIndex(m_sortColumn);
@@ -900,6 +920,7 @@ void WDeckBrowser::applySort() {
         // medium that does have it still sorts.
         m_pTrackModel->clearSorting();
         m_pTrackDelegate->setSecondaryColumn(-1);
+        restoreSelection(keepTrackId);
         return;
     }
     m_pTrackModel->setSort(column, m_sortDescending ? Qt::DescendingOrder : Qt::AscendingOrder);
@@ -916,6 +937,25 @@ void WDeckBrowser::applySort() {
     }
     const int displayIndex = m_pTrackModel->fieldIndex(displayColumn);
     m_pTrackDelegate->setSecondaryColumn(displayIndex >= 0 ? displayIndex : column);
+    restoreSelection(keepTrackId);
+}
+
+void WDeckBrowser::restoreSelection(int trackId) {
+    if (m_pTrackModel->rowCount() == 0) {
+        return;
+    }
+    const int idColumn = m_pTrackModel->fieldIndex(QStringLiteral("track_id"));
+    if (trackId > 0 && idColumn >= 0) {
+        // Linear, over a few hundred rows, once per sort. A DJ notices the list
+        // jumping to the top; nobody notices this.
+        for (int row = 0; row < m_pTrackModel->rowCount(); ++row) {
+            if (m_pTrackModel->index(row, idColumn).data(Qt::DisplayRole).toInt() == trackId) {
+                m_pTrackView->selectRow(row);
+                return;
+            }
+        }
+    }
+    m_pTrackView->selectRow(0);
 }
 
 void WDeckBrowser::onBreadcrumbClicked(const QString& levelIndex) {

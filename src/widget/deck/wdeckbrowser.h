@@ -117,6 +117,9 @@ class WDeckBrowser : public QWidget, public WBaseWidget {
     void refreshTrackColumns();
     void updateBreadcrumb();
     void loadSelectedTrack();
+    /// Put the selection back after the model has been re-selected, on the same
+    /// track if it is still in the list.
+    void restoreSelection(int trackId);
     /// True while a track list is on screen, which is what SORT and the info
     /// layout are conditional on.
     bool inTrackList() const;
