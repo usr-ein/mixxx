@@ -20,6 +20,8 @@
 #include "widget/deck/deckdelegates.h"
 #include "widget/deck/decklistview.h"
 #include "widget/deck/deckmenumodel.h"
+#include "widget/deck/wdecksearch.h"
+#include "widget/deck/wdecksortmenu.h"
 
 namespace {
 const mixxx::Logger kLogger("DeckBrowser");
@@ -51,6 +53,7 @@ WDeckBrowser::WDeckBrowser(QWidget* pParent, Library* pLibrary, UserSettingsPoin
           WBaseWidget(this),
           m_pLibrary(pLibrary),
           m_pConfig(std::move(pConfig)) {
+    setAttribute(Qt::WA_StyledBackground, true);
     auto* pLayout = new QVBoxLayout(this);
     pLayout->setContentsMargins(0, 0, 0, 0);
     pLayout->setSpacing(0);
@@ -150,6 +153,52 @@ WDeckBrowser::WDeckBrowser(QWidget* pParent, Library* pLibrary, UserSettingsPoin
         }
     }
 
+    // The search page. The results reuse the track view rather than a second
+    // list, so a hit behaves exactly like any other track row -- long press to
+    // load, tap to see more.
+    m_pSearchPage = new QWidget(m_pStack);
+    m_pSearchPage->setObjectName(QStringLiteral("DeckSearchPage"));
+    m_pSearchPage->setAttribute(Qt::WA_StyledBackground, true);
+    auto* pSearchLayout = new QVBoxLayout(m_pSearchPage);
+    pSearchLayout->setContentsMargins(0, 0, 0, 0);
+    pSearchLayout->setSpacing(0);
+    m_pSearchQuery = new QLabel(m_pSearchPage);
+    m_pSearchQuery->setObjectName(QStringLiteral("DeckSearchQuery"));
+    m_pSearchQuery->setFixedHeight(56);
+    pSearchLayout->addWidget(m_pSearchQuery);
+    m_pSearchResults = new QWidget(m_pSearchPage);
+    auto* pResultsLayout = new QVBoxLayout(m_pSearchResults);
+    pResultsLayout->setContentsMargins(0, 0, 0, 0);
+    pSearchLayout->addWidget(m_pSearchResults, 1);
+    m_pKeyboard = new WDeckKeyboard(m_pSearchPage);
+    m_pKeyboard->setFixedHeight(300);
+    pSearchLayout->addWidget(m_pKeyboard);
+    m_pStack->addWidget(m_pSearchPage);
+
+    connect(m_pKeyboard, &WDeckKeyboard::keyPressed, this, [this](const QString& c) {
+        m_searchText += c;
+        runSearch();
+    });
+    connect(m_pKeyboard, &WDeckKeyboard::backspacePressed, this, [this]() {
+        m_searchText.chop(1);
+        runSearch();
+    });
+    connect(m_pKeyboard, &WDeckKeyboard::clearPressed, this, [this]() {
+        m_searchText.clear();
+        runSearch();
+    });
+    connect(m_pKeyboard, &WDeckKeyboard::donePressed, this, [this]() {
+        // Fold the keyboard away and give the whole screen to the results.
+        m_pKeyboard->setVisible(false);
+    });
+
+    // The sort menu floats over the lists rather than sitting in the layout:
+    // it is an overlay, and reflowing the list under it would move the rows
+    // out from under the finger that opened it.
+    m_pSortMenu = new WDeckSortMenu(this);
+    connect(m_pSortMenu, &WDeckSortMenu::sortChosen, this, &WDeckBrowser::onSortChosen);
+    connect(m_pSortMenu, &WDeckSortMenu::defaultChosen, this, &WDeckBrowser::onSortDefault);
+
     m_pRegistry = std::make_unique<MediaRegistry>(m_pLibrary->dbConnectionPool(), this);
     connect(m_pRegistry.get(),
             &MediaRegistry::mediaChanged,
@@ -163,12 +212,20 @@ WDeckBrowser::WDeckBrowser(QWidget* pParent, Library* pLibrary, UserSettingsPoin
         if (steps == 0) {
             return;
         }
+        if (m_pSortMenu->isOpen()) {
+            m_pSortMenu->moveSelection(steps);
+            return;
+        }
         (inTrackList() ? m_pTrackView : m_pMenuView)->moveSelection(steps);
     });
 
     m_pSelect = std::make_unique<ControlPushButton>(ConfigKey("[Browser]", "select"));
     connect(m_pSelect.get(), &ControlPushButton::valueChanged, this, [this](double v) {
         if (v <= 0.0) {
+            return;
+        }
+        if (m_pSortMenu->isOpen()) {
+            m_pSortMenu->activateSelection();
             return;
         }
         DeckListView* pView = inTrackList() ? m_pTrackView : m_pMenuView;
@@ -179,12 +236,39 @@ WDeckBrowser::WDeckBrowser(QWidget* pParent, Library* pLibrary, UserSettingsPoin
 
     m_pBack = std::make_unique<ControlPushButton>(ConfigKey("[Browser]", "back"));
     connect(m_pBack.get(), &ControlPushButton::valueChanged, this, [this](double v) {
-        if (v > 0.0) {
-            onBack();
+        if (v <= 0.0) {
+            return;
         }
+        if (m_pSortMenu->isOpen()) {
+            // BACK closes the menu without changing anything, rather than
+            // popping a level out from under it.
+            m_pSortMenu->dismiss();
+            return;
+        }
+        onBack();
     });
 
-    m_pSortMenu = std::make_unique<ControlPushButton>(ConfigKey("[Browser]", "sort_menu"));
+    m_pSortMenuControl = std::make_unique<ControlPushButton>(
+            ConfigKey("[Browser]", "sort_menu"));
+    connect(m_pSortMenuControl.get(),
+            &ControlPushButton::valueChanged,
+            this,
+            [this](double v) {
+                if (v <= 0.0) {
+                    return;
+                }
+                if (m_pSortMenu->isOpen()) {
+                    m_pSortMenu->dismiss();
+                    return;
+                }
+                // Only over a track list. Anywhere else the button does
+                // nothing at all, which is what the dark LED already says.
+                if (!inTrackList()) {
+                    return;
+                }
+                m_pSortMenu->move((width() - m_pSortMenu->width()) / 2, 80);
+                m_pSortMenu->open(m_sortColumn);
+            });
     m_pInfoToggle = std::make_unique<ControlPushButton>(ConfigKey("[Browser]", "info_toggle"));
     connect(m_pInfoToggle.get(), &ControlPushButton::valueChanged, this, [this](double v) {
         if (v <= 0.0 || !inTrackList()) {
@@ -222,7 +306,13 @@ QSqlDatabase WDeckBrowser::database() const {
 }
 
 bool WDeckBrowser::inTrackList() const {
-    return !m_stack.isEmpty() && m_stack.last().kind == Level::Kind::Tracks;
+    if (m_stack.isEmpty()) {
+        return false;
+    }
+    // Search results are a track list in every way that matters: the same
+    // view, model and delegate, so sorting and the info layout apply there too.
+    const Level::Kind kind = m_stack.last().kind;
+    return kind == Level::Kind::Tracks || kind == Level::Kind::Search;
 }
 
 void WDeckBrowser::pushLevel(Level level) {
@@ -274,6 +364,9 @@ void WDeckBrowser::rebuildCurrentLevel() {
     case Level::Kind::Tracks:
         showTracks(level, level.parameter);
         break;
+    case Level::Kind::Search:
+        showSearch(level);
+        break;
     }
     m_pLevelControl->forceSet(m_stack.size() - 1);
     m_pInTrackList->forceSet(inTrackList() ? 1.0 : 0.0);
@@ -287,7 +380,21 @@ void WDeckBrowser::updateBreadcrumb() {
             parts.append(level.title);
         }
     }
-    m_pBreadcrumb->setText(parts.join(QStringLiteral("  ›  ")));
+    QString text = parts.join(QStringLiteral("  ›  "));
+    if (inTrackList() && !m_sortColumn.isEmpty()) {
+        // The arrow says the direction and the name says the field, so the
+        // breadcrumb answers "what am I looking at, and in what order".
+        for (const WDeckSortMenu::Field& field : WDeckSortMenu::fields()) {
+            if (field.column == m_sortColumn) {
+                text += QStringLiteral("        %1 %2")
+                                .arg(m_sortDescending ? QStringLiteral("▼")
+                                                      : QStringLiteral("▲"),
+                                        field.title);
+                break;
+            }
+        }
+    }
+    m_pBreadcrumb->setText(text);
 }
 
 void WDeckBrowser::onMediaChanged() {
@@ -504,23 +611,15 @@ void WDeckBrowser::showArtistAlbums(const Level& level) {
 }
 
 void WDeckBrowser::showTracks(const Level& level, const QString& selectSql) {
-    Q_UNUSED(level);
+    // Reclaim the track view if search had it.
+    if (m_pTrackView->parentWidget() != m_pStack) {
+        m_pStack->addWidget(m_pTrackView);
+    }
     m_pTrackModel->setQuery(selectSql);
 
-    // Column indices, resolved once here rather than per painted row.
-    TrackRowDelegate::Columns columns;
-    columns.cover = m_pTrackModel->fieldIndex(LIBRARYTABLE_COVERART_LOCATION);
-    columns.title = m_pTrackModel->fieldIndex(LIBRARYTABLE_TITLE);
-    columns.artist = m_pTrackModel->fieldIndex(LIBRARYTABLE_ARTIST);
-    columns.bpm = m_pTrackModel->fieldIndex(LIBRARYTABLE_BPM);
-    columns.key = m_pTrackModel->fieldIndex(LIBRARYTABLE_KEY);
-    columns.keyId = m_pTrackModel->fieldIndex(LIBRARYTABLE_KEY_ID);
-    m_pTrackDelegate->setColumns(columns);
-    m_pTrackDelegate->setRowHeight(kTrackRowHeight);
-    // What is loaded right now, so a compatible key can be green.
-    m_pTrackDelegate->setPlayingKeyId(
-            static_cast<int>(ControlObject::get(ConfigKey(kDeckGroup, "key"))));
+    refreshTrackColumns();
 
+    applySort();
     m_pTrackView->setRowHeight(kTrackRowHeight);
     m_pStack->setCurrentWidget(m_pTrackView);
     // qBound asserts when its bounds cross, which they do for an empty list
@@ -533,8 +632,101 @@ void WDeckBrowser::showTracks(const Level& level, const QString& selectSql) {
     m_pTrackView->setFocus();
 }
 
+void WDeckBrowser::showSearch(const Level& level) {
+    Q_UNUSED(level);
+    m_pKeyboard->setVisible(true);
+    // The track view is re-parented into the search page and back, so the
+    // results are literally the same widget, model and delegate as a track
+    // list -- there is no second code path to keep in step.
+    m_pSearchResults->layout()->addWidget(m_pTrackView);
+    m_pTrackView->show();
+    m_pStack->setCurrentWidget(m_pSearchPage);
+    runSearch();
+}
+
+void WDeckBrowser::refreshTrackColumns() {
+    // Resolved once per model change rather than per painted row: the delegate
+    // runs for every visible row on every detent, and a name lookup in there
+    // turns a scroll into hundreds of string compares a frame.
+    //
+    // **Every path that changes the model must call this**, search included --
+    // a stale index set draws a list of blank rows, which looks like a query
+    // that returned nothing.
+    TrackRowDelegate::Columns columns;
+    columns.cover = m_pTrackModel->fieldIndex(LIBRARYTABLE_COVERART_LOCATION);
+    columns.title = m_pTrackModel->fieldIndex(LIBRARYTABLE_TITLE);
+    columns.artist = m_pTrackModel->fieldIndex(LIBRARYTABLE_ARTIST);
+    columns.bpm = m_pTrackModel->fieldIndex(LIBRARYTABLE_BPM);
+    columns.key = m_pTrackModel->fieldIndex(LIBRARYTABLE_KEY);
+    columns.keyId = m_pTrackModel->fieldIndex(LIBRARYTABLE_KEY_ID);
+    m_pTrackDelegate->setColumns(columns);
+    m_pTrackDelegate->setRowHeight(kTrackRowHeight);
+    // What is loaded right now, so a compatible key can be green.
+    m_pTrackDelegate->setPlayingKeyId(
+            static_cast<int>(ControlObject::get(ConfigKey(kDeckGroup, "key"))));
+}
+
+void WDeckBrowser::runSearch() {
+    if (m_stack.isEmpty()) {
+        return;
+    }
+    const Level& level = m_stack.last();
+    QSqlDatabase db = database();
+    m_pTrackModel->setQuery(query::search(db, level.medium, m_searchText));
+    refreshTrackColumns();
+    applySort();
+    m_pSearchQuery->setText(m_searchText.isEmpty()
+                    ? tr("SEARCH")
+                    : QStringLiteral("%1_        %2 hits")
+                              .arg(m_searchText)
+                              .arg(m_pTrackModel->rowCount()));
+    if (m_pTrackModel->rowCount() > 0) {
+        m_pTrackView->selectRow(0);
+    }
+}
+
 void WDeckBrowser::onSelectionMoved(int row) {
     Q_UNUSED(row);
+}
+
+void WDeckBrowser::applySort() {
+    if (m_sortColumn.isEmpty()) {
+        // Not "sort by some natural column": there is no column id meaning
+        // unsorted, and only the model can put itself back.
+        m_pTrackModel->clearSorting();
+        m_pTrackDelegate->setSecondaryColumn(-1);
+        return;
+    }
+    const int column = m_pTrackModel->fieldIndex(m_sortColumn);
+    if (column < 0) {
+        // The medium has no such field -- no labels, no dates. Fall back to
+        // Default for THIS list without forgetting the preference, so the next
+        // medium that does have it still sorts.
+        m_pTrackModel->clearSorting();
+        m_pTrackDelegate->setSecondaryColumn(-1);
+        return;
+    }
+    m_pTrackModel->setSort(column, m_sortDescending ? Qt::DescendingOrder : Qt::AscendingOrder);
+    m_pTrackModel->select();
+    // The info layout shows the sorted-by value beside each title, so the
+    // delegate has to know which column that is.
+    m_pTrackDelegate->setSecondaryColumn(column);
+}
+
+void WDeckBrowser::onSortChosen(const QString& column, bool descending) {
+    m_sortColumn = column;
+    m_sortDescending = descending;
+    applySort();
+    updateBreadcrumb();
+    m_pTrackView->setFocus();
+}
+
+void WDeckBrowser::onSortDefault() {
+    m_sortColumn.clear();
+    m_sortDescending = false;
+    applySort();
+    updateBreadcrumb();
+    m_pTrackView->setFocus();
 }
 
 void WDeckBrowser::onReselected(int row) {
@@ -619,6 +811,9 @@ void WDeckBrowser::onActivated(int row) {
         } else if (payload == QStringLiteral("lastplayed")) {
             level.kind = Level::Kind::Tracks;
             level.parameter = query::lastPlayed(db, current.medium);
+        } else if (payload == QStringLiteral("search")) {
+            level.kind = Level::Kind::Search;
+            m_searchText.clear();
         } else if (payload == QStringLiteral("artist")) {
             level.kind = Level::Kind::Artists;
             level.parameter = QStringLiteral("artist");

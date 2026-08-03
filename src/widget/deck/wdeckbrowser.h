@@ -26,6 +26,8 @@ class DeckListView;
 class DeckMenuModel;
 class DeckTrackModel;
 class MenuRowDelegate;
+class WDeckSortMenu;
+class WDeckKeyboard;
 class TrackRowDelegate;
 
 /// The deck's library, as a menu stack.
@@ -56,6 +58,8 @@ class WDeckBrowser : public QWidget, public WBaseWidget {
     void onReselected(int row);
     void onBack();
     void onSelectionMoved(int row);
+    void onSortChosen(const QString& column, bool descending);
+    void onSortDefault();
 
   private:
     /// What a level is showing. The payload is what rebuilding it needs.
@@ -68,6 +72,7 @@ class WDeckBrowser : public QWidget, public WBaseWidget {
             Artists,
             ArtistAlbums,
             Tracks,
+            Search,
         };
         Kind kind = Kind::Sources;
         MediumId medium;
@@ -88,6 +93,10 @@ class WDeckBrowser : public QWidget, public WBaseWidget {
     void showCategory(const Level& level);
     void showArtistAlbums(const Level& level);
     void showTracks(const Level& level, const QString& selectSql);
+    void showSearch(const Level& level);
+    void runSearch();
+    /// Resolve the track delegate's column indices for the current model.
+    void refreshTrackColumns();
     void updateBreadcrumb();
     void loadSelectedTrack();
     /// True while a track list is on screen, which is what SORT and the info
@@ -111,11 +120,28 @@ class WDeckBrowser : public QWidget, public WBaseWidget {
 
     QList<Level> m_stack;
 
+    WDeckSortMenu* m_pSortMenu;
+    /// The search screen: a query line, the results in the track view, and the
+    /// keyboard under them.
+    QWidget* m_pSearchPage;
+    QLabel* m_pSearchQuery;
+    WDeckKeyboard* m_pKeyboard;
+    QWidget* m_pSearchResults;
+    QString m_searchText;
+    /// The sort is a BROWSER preference, not a property of a list: leaving one
+    /// list and opening another applies the same sort to the new one, until
+    /// Default is chosen (browser-prd.md 9.3). Empty means Default.
+    QString m_sortColumn;
+    bool m_sortDescending = false;
+    /// Applied to whatever list is on screen, and re-applied whenever another
+    /// one opens.
+    void applySort();
+
     // The deck's controls. Rotate, push, back, and the two SORT meanings.
     std::unique_ptr<ControlEncoder> m_pMove;
     std::unique_ptr<ControlPushButton> m_pSelect;
     std::unique_ptr<ControlPushButton> m_pBack;
-    std::unique_ptr<ControlPushButton> m_pSortMenu;
+    std::unique_ptr<ControlPushButton> m_pSortMenuControl;
     std::unique_ptr<ControlPushButton> m_pInfoToggle;
     /// Read-only, so the mapping can light the SORT pad only where it does
     /// something.
