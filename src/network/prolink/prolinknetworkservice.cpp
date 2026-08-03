@@ -29,6 +29,9 @@ const mixxx::Logger kLogger("ProLinkNetworkService");
 /// less demanding than the marker is.
 constexpr int kPollIntervalMs = 33;
 
+/// How close two tempos have to be to count as matched. See followMaster().
+constexpr double kTempoMatchedBpm = 0.05;
+
 mixxx::prolink::MediaSlot toMixxxSlot(::prolink::Slot slot) {
     switch (slot) {
     case ::prolink::Slot::Cd:
@@ -204,10 +207,10 @@ ProLinkNetworkService::ProLinkNetworkService(QObject* parent)
                 if (m_pImpl->pSession) {
                     (*m_pImpl->pSession)->set_synced(value > 0);
                 }
-                if (value > 0) {
-                    // Once, on engage. See alignPhaseToMaster().
-                    alignPhaseToMaster();
-                }
+                // Once, and only after the tempo has caught up: see
+                // followMaster(). Pressing SYNC is "match them and land on
+                // their beat", and the two halves cannot happen at once.
+                m_alignWhenTempoMatches = value > 0;
             });
 
     // The deck's own state. Proxies rather than reads, because this runs
@@ -225,6 +228,18 @@ ProLinkNetworkService::ProLinkNetworkService(QObject* parent)
     m_pDeckDuration = deck("duration");
     m_pDeckPlayPosition = deck("playposition");
     m_pDeckBeatDistance = deck("beat_distance");
+
+    // **Dropping in on the beat.** Pressing SYNC aligns the phase once, but a
+    // track loaded afterwards starts wherever its cue happens to sit -- tempo
+    // matched, beat not, which is the one combination that sounds worse than
+    // no sync at all. A CDJ aligns when the deck starts playing, so this does
+    // too: the rising edge of `play` asks for an alignment, and followMaster()
+    // performs it as soon as the tempos agree.
+    m_pDeckPlay->connectValueChanged(this, [this](double value) {
+        if (value > 0.0 && m_pControls && m_pControls->syncEnabled()->get() > 0.0) {
+            m_alignWhenTempoMatches = true;
+        }
+    });
 }
 
 /*static*/ const char* ProLinkNetworkService::kDeckGroup = "[Channel1]";
@@ -293,15 +308,68 @@ void ProLinkNetworkService::followMaster() {
     if (masterBpm <= 0.0 || ours <= 0.0) {
         return;
     }
-    // A hundredth of a BPM is the resolution the wire carries, so anything
-    // finer is noise -- and writing `bpm` every poll would fight the DJ's hand
-    // on the fader rather than follow the master.
-    if (std::abs(masterBpm - ours) < 0.01) {
+    // **A deadband, not an equality.** The master's effective tempo is its
+    // centi-BPM times a fixed-point pitch, and this deck's is whatever the rate
+    // slider quantises to -- so the two agree to about a hundredth and then
+    // stop converging. Chasing the last thousandth means writing `bpm` on every
+    // one of the thirty polls a second, for ever, which fights the engine and
+    // never reports the match; five hundredths at 116 BPM is one beat of drift
+    // in forty minutes, which is well past where a phase alignment holds.
+    if (std::abs(masterBpm - ours) < kTempoMatchedBpm) {
+        // **Now**, and not when the button was pressed.
+        //
+        // Matching the tempo takes a poll or two, and a phase nudge applied
+        // before it lands is a nudge measured at the wrong tempo that the
+        // tempo change then walks away from. So the alignment waits here, for
+        // the first moment the two tempos agree, which is also the first
+        // moment an alignment can hold.
+        if (m_alignWhenTempoMatches) {
+            m_alignWhenTempoMatches = false;
+            kLogger.debug() << "tempo matched at" << ours << "against" << masterBpm
+                            << "-- aligning phase";
+            alignPhaseToMaster();
+        }
+        reportPhaseDrift();
         return;
     }
     ControlObject::set(ConfigKey(QString::fromLatin1(kDeckGroup),
                                QStringLiteral("bpm")),
             masterBpm);
+}
+
+void ProLinkNetworkService::reportPhaseDrift() {
+    // **Whether the sync is actually holding**, once a second, in the only
+    // units that mean anything here: milliseconds between our beat and the
+    // master's. A tempo that matches and a phase that does not is the failure
+    // this whole path exists to prevent, and it is invisible from the numbers
+    // on screen -- both decks show the same BPM while sounding like a flam.
+    if (m_driftReport.isValid() && m_driftReport.elapsed() < 1000) {
+        return;
+    }
+    m_driftReport.start();
+
+    const double masterPhase = m_pControls->masterBarPhase()->get();
+    const double duration = m_pDeckDuration->get();
+    const double fileBpm = m_pDeckFileBpm->get();
+    const double effectiveBpm = m_pDeckBpm->get();
+    if (masterPhase < 0.0 || duration <= 0.0 || fileBpm <= 0.0 || effectiveBpm <= 0.0) {
+        return;
+    }
+    const double ourPhase = mixxx::prolink::barPhaseOf(
+            mixxx::prolink::beatPositionOf(m_pDeckPlayPosition->get(),
+                    duration,
+                    fileBpm,
+                    m_pDeckBeatDistance->get()));
+    if (ourPhase < 0.0) {
+        return;
+    }
+    double beats = (masterPhase - ourPhase) * mixxx::prolink::kBeatsPerBar;
+    beats -= std::floor(beats);
+    if (beats > 0.5) {
+        beats -= 1.0;
+    }
+    kLogger.debug() << "phase drift" << beats * 60000.0 / effectiveBpm << "ms ("
+                    << beats << "beats )";
 }
 
 void ProLinkNetworkService::alignPhaseToMaster() {
@@ -314,6 +382,11 @@ void ProLinkNetworkService::alignPhaseToMaster() {
     const double fileBpm = m_pDeckFileBpm->get();
     const double effectiveBpm = m_pDeckBpm->get();
     if (masterPhase < 0.0 || duration <= 0.0 || fileBpm <= 0.0 || effectiveBpm <= 0.0) {
+        // Said out loud: a silent decline here is a SYNC button that matches
+        // the tempo, leaves the deck half a beat out, and reports nothing.
+        kLogger.debug() << "no phase to align to -- master phase" << masterPhase
+                        << "duration" << duration << "file bpm" << fileBpm
+                        << "effective bpm" << effectiveBpm;
         return;
     }
     const double ourPhase = mixxx::prolink::barPhaseOf(

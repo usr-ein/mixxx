@@ -1,6 +1,7 @@
 #pragma once
 
 #include <QByteArray>
+#include <QElapsedTimer>
 #include <QHash>
 #include <QList>
 #include <QObject>
@@ -198,6 +199,9 @@ class ProLinkNetworkService : public QObject {
     /// Hold this deck's tempo to the network master's, while SYNC is on.
     void followMaster();
 
+    /// Say how far our beat is from the master's, once a second, while synced.
+    void reportPhaseDrift();
+
     /// Nudge the playhead so our beat lands on the master's.
     ///
     /// Once, when SYNC is engaged. Continuous phase correction would be a
@@ -207,6 +211,15 @@ class ProLinkNetworkService : public QObject {
 
     /// The deck the browser and the network both mean by "this deck".
     static const char* kDeckGroup;
+
+    /// Set when SYNC is engaged, cleared once the phase has been nudged.
+    ///
+    /// The two halves of a sync cannot happen at the same moment: matching the
+    /// tempo takes a poll or two, and a phase alignment applied before that has
+    /// landed is measured at the old tempo and walked away from by the new one.
+    bool m_alignWhenTempoMatches = false;
+    /// Rate-limits reportPhaseDrift() to once a second.
+    QElapsedTimer m_driftReport;
 
     /// Re-read the device table, emitting found, changed and lost as it moves.
     void syncDevices();
