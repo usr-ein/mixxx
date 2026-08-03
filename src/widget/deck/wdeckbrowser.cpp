@@ -262,6 +262,26 @@ WDeckBrowser::WDeckBrowser(QWidget* pParent, Library* pLibrary, UserSettingsPoin
     });
 
     m_pRegistry = std::make_unique<MediaRegistry>(m_pLibrary->dbConnectionPool(), this);
+    // A cover asked for while a row was being drawn has landed. Both delegates
+    // cached the grey placeholder they drew in its place, so the caches have to
+    // go before the redraw -- otherwise the square stays grey and the fetch
+    // looks like it failed.
+    //
+    // Coalesced, because covers arrive in a burst as a list scrolls and a
+    // repaint per image would be a repaint per row.
+    m_coverRedraw.setSingleShot(true);
+    m_coverRedraw.setInterval(120);
+    connect(&m_coverRedraw, &QTimer::timeout, this, [this]() {
+        m_pMenuDelegate->clearCoverCache();
+        m_pTrackDelegate->clearCoverCache();
+        m_pMenuView->viewport()->update();
+        m_pTrackView->viewport()->update();
+        m_pInfoPanel->reloadCover();
+    });
+    connect(m_pRegistry.get(),
+            &MediaRegistry::artworkArrived,
+            this,
+            [this](const QString&) { m_coverRedraw.start(); });
     // A medium that has gone cannot be re-read, so what is cached from it is
     // now the only copy and must not be dropped to reclaim space.
     connect(m_pRegistry.get(),

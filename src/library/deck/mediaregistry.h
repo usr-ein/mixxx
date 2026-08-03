@@ -126,11 +126,27 @@ class MediaRegistry : public QObject {
     /// a complete file in tier 1 is what makes loading it again instant.
     void stopStreaming(const QString& localPath);
 
+    /// Ask for a cover that is not on disk yet, if it belongs to a remote
+    /// medium. Cheap, idempotent, and safe to call from a paint.
+    ///
+    /// **On the fly, and only what is looked at.** A medium holds hundreds of
+    /// covers and a DJ sees a dozen at a time; asking for all of them on
+    /// detection would put hundreds of requests in front of whatever the DJ
+    /// does next. So the request comes from the row being drawn, each path is
+    /// asked for at most once, and `artworkArrived` says when to draw again.
+    ///
+    /// Does nothing for a path that is already there, for a local medium — its
+    /// images are on the mount — or for one already asked for.
+    void requestArtwork(const QString& coverPath);
+
   signals:
     /// A streamed file has become readable: its size is known and it is in the
     /// StreamingFileRegistry. Internal, and the only thing startStreaming()'s
     /// nested loop waits on.
     void streamingReady(const QString& localPath);
+    /// A cover asked for by requestArtwork() is now on disk. Whoever drew the
+    /// grey square in its place should draw again.
+    void artworkArrived(const QString& coverPath);
     /// The list changed shape: a medium appeared, vanished, or finished reading.
     /// The browser rebuilds level 0 on this.
     void mediaChanged();
@@ -167,6 +183,7 @@ class MediaRegistry : public QObject {
             quint64 offset,
             quint64 length);
     void onFetchFinished(const QString& localPath, const QString& error);
+    void onArtworkFetched(const QString& localPath, const QString& error);
 #endif
 
   private:
@@ -252,6 +269,10 @@ class MediaRegistry : public QObject {
     QSet<QString> m_removeWhenDone;
     /// One start at a time. Two nested loops would unwind in the wrong order.
     bool m_startingStream = false;
+    /// Covers already asked for, whether or not they arrived. A paint asks on
+    /// every redraw, so without this a cover the player does not have would be
+    /// requested for as long as its row is on screen.
+    QSet<QString> m_artworkAsked;
 #endif
 };
 

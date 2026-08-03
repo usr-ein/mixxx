@@ -27,6 +27,9 @@ class WDeckInfoPanel : public QWidget {
 
     /// Fields are drawn in the order given; the caller decides what to omit.
     void setTrack(const QString& coverPath, const QList<QPair<QString, QString>>& fields);
+    /// Try the cover file again, for one that arrived after the panel was
+    /// filled in. Nothing if it is already loaded, or if there is no path.
+    void reloadCover();
     void clear();
 
   protected:

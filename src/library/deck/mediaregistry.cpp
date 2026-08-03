@@ -5,6 +5,7 @@
 #include <QFile>
 #include <QFileInfo>
 #include <QSqlDatabase>
+#include <QSqlQuery>
 #include <QtConcurrentRun>
 
 #include <QStandardPaths>
@@ -132,6 +133,10 @@ MediaRegistry::MediaRegistry(mixxx::DbConnectionPoolPtr dbConnectionPool, QObjec
             &mixxx::prolink::ProLinkNetworkService::fileFetched,
             this,
             &MediaRegistry::onFetchFinished);
+    connect(m_pNetwork.get(),
+            &mixxx::prolink::ProLinkNetworkService::artworkFetched,
+            this,
+            &MediaRegistry::onArtworkFetched);
     m_pNetwork->start();
 #endif
 }
@@ -705,6 +710,64 @@ void MediaRegistry::stopStreaming(const QString& localPath) {
                    << "waits /" << pStream->waitedMs() << "ms:" << localPath;
 }
 
+void MediaRegistry::requestArtwork(const QString& coverPath) {
+    if (coverPath.isEmpty() || m_artworkAsked.contains(coverPath)) {
+        return;
+    }
+    // Asked at most once whatever happens, including when it fails. A cover the
+    // player does not have would otherwise be requested on every single repaint
+    // of the row it belongs to.
+    m_artworkAsked.insert(coverPath);
+    if (QFileInfo::exists(coverPath)) {
+        return;
+    }
+
+    // Which medium and which image, looked up by the path itself. The caller is
+    // a delegate mid-paint and has nothing but the path -- it does not know
+    // which medium the row came from, and should not have to.
+    const mixxx::DbConnectionPooler pooler(m_dbConnectionPool);
+    QSqlDatabase database = mixxx::DbConnectionPooled(m_dbConnectionPool);
+    if (!database.isOpen()) {
+        return;
+    }
+    QSqlQuery query(database);
+    query.prepare(QStringLiteral(
+            "SELECT medium, artwork_id FROM %1 WHERE coverart_location = :path LIMIT 1")
+                          .arg(kLibraryTable));
+    query.bindValue(QStringLiteral(":path"), coverPath);
+    if (!query.exec() || !query.next()) {
+        return;
+    }
+    const MediumId medium = MediumId::fromKey(query.value(0).toString());
+    const quint32 artworkId = query.value(1).toUInt();
+    if (medium.isLocal() || artworkId == 0) {
+        // A local stick carries its own images, so a missing one there is
+        // missing on the medium and no amount of asking will produce it.
+        return;
+    }
+
+    QByteArray mac;
+    mixxx::prolink::MediaSlot slot = mixxx::prolink::MediaSlot::Usb;
+    if (!addressOf(medium, &mac, &slot)) {
+        return;
+    }
+    // Over dbserver rather than NFS, and fire and forget. Asking NFS for an
+    // image churns the player's filehandle table until it answers NFSERR_STALE
+    // to everything -- including the track a DJ is loading (F49). It also means
+    // covers do not queue behind a streaming transfer, which holds the one NFS
+    // turn for the length of a whole download.
+    m_pNetwork->fetchArtwork(mac, slot, artworkId, coverPath);
+}
+
+void MediaRegistry::onArtworkFetched(const QString& localPath, const QString& error) {
+    if (!error.isEmpty() || !QFileInfo::exists(localPath)) {
+        // Normal and not worth a warning: a rekordbox medium always has a few
+        // tracks with no art, and the row draws its grey square either way.
+        return;
+    }
+    emit artworkArrived(localPath);
+}
+
 void MediaRegistry::onFetchProgress(const QString& localPath,
         quint64 done,
         quint64 total,
@@ -826,6 +889,12 @@ QString MediaRegistry::startStreaming(const MediumId& medium,
 
 void MediaRegistry::stopStreaming(const QString& localPath) {
     Q_UNUSED(localPath);
+}
+
+void MediaRegistry::requestArtwork(const QString& coverPath) {
+    // A local medium carries its own images, so there is never anything to ask
+    // for without Pro DJ Link.
+    Q_UNUSED(coverPath);
 }
 
 #endif // __PROLINK__

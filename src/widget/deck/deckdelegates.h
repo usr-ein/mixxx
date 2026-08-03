@@ -29,6 +29,15 @@ class MenuRowDelegate : public QStyledItemDelegate {
     QSize sizeHint(const QStyleOptionViewItem& option,
             const QModelIndex& index) const override;
 
+    /// Forget every decoded cover.
+    ///
+    /// Needed when a cover *arrives*: a row drawn before it landed cached the
+    /// grey placeholder, and without this the square would stay grey for as
+    /// long as the delegate lived.
+    void clearCoverCache() {
+        m_coverCache.clear();
+    }
+
   private:
     /// Covers are loaded off disk on demand and kept, because a list redraws on
     /// every encoder detent and decoding a JPEG per row per detent is visible.
@@ -96,6 +105,15 @@ class TrackRowDelegate : public QStyledItemDelegate {
             const QModelIndex& index) const override;
     QSize sizeHint(const QStyleOptionViewItem& option,
             const QModelIndex& index) const override;
+
+    /// Forget every decoded cover.
+    ///
+    /// Needed when a cover *arrives*: a row drawn before it landed cached the
+    /// grey placeholder, and without this the square would stay grey for as
+    /// long as the delegate lived.
+    void clearCoverCache() {
+        m_coverCache.clear();
+    }
 
   private:
     QPixmap coverFor(const QString& path, int size) const;

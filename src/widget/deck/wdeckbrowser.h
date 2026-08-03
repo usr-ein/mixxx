@@ -181,6 +181,9 @@ class WDeckBrowser : public QWidget, public WBaseWidget {
     std::unique_ptr<TrackCache> m_pCache;
     /// Fires after the selection has sat still long enough to mean something.
     QTimer m_prefetchDwell;
+    /// Covers arrive in a burst as a list scrolls; this coalesces the redraws
+    /// into one rather than repainting per image.
+    QTimer m_coverRedraw;
     /// The cached file the deck is playing, so it can be unpinned when another
     /// takes its place.
     QString m_pinnedPath;

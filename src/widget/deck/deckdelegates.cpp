@@ -6,6 +6,7 @@
 
 #include "library/dao/trackschema.h"
 #include "library/deck/deckqueries.h"
+#include "library/deck/mediaregistry.h"
 #include "widget/deck/deckmenumodel.h"
 
 namespace {
@@ -28,6 +29,26 @@ constexpr int kStripeWidth = 5;
 
 constexpr int kPadding = 16;
 constexpr int kCoverMargin = 8;
+
+/// Load a cover, and ask for it if it is not there.
+///
+/// The request is what makes a remote medium's art appear at all: those images
+/// live on the player, and only the rows a DJ is actually looking at are worth
+/// the round trip -- a medium holds hundreds, and fetching the lot on detection
+/// would put all of them in front of whatever the DJ does next.
+///
+/// Idempotent and cheap: MediaRegistry asks the network at most once per path,
+/// ever. So calling this from a paint is safe, and a paint is the only place
+/// that knows which covers are being looked at.
+QPixmap loadCover(const QString& path) {
+    QPixmap cover(path);
+    if (cover.isNull() && !path.isEmpty()) {
+        if (mixxx::deck::MediaRegistry* pRegistry = mixxx::deck::MediaRegistry::instance()) {
+            pRegistry->requestArtwork(path);
+        }
+    }
+    return cover;
+}
 
 /// The mark on the left of a menu row. Drawn rather than loaded: these are
 /// four glyph-sized shapes, and an SVG each would be four files to keep in step
@@ -141,7 +162,7 @@ QPixmap MenuRowDelegate::coverFor(const QStringList& paths, int size) const {
     if (paths.size() == 1) {
         // One cover fills the square; a 2x2 with three empty cells would look
         // like three missing covers rather than one present one.
-        QPixmap cover(paths.first());
+        QPixmap cover = loadCover(paths.first());
         if (!cover.isNull()) {
             painter.drawPixmap(stitched.rect(),
                     cover.scaled(size, size, Qt::KeepAspectRatioByExpanding,
@@ -150,7 +171,7 @@ QPixmap MenuRowDelegate::coverFor(const QStringList& paths, int size) const {
     } else {
         const int half = size / 2;
         for (int i = 0; i < paths.size() && i < 4; ++i) {
-            QPixmap cover(paths.at(i));
+            QPixmap cover = loadCover(paths.at(i));
             if (cover.isNull()) {
                 continue;
             }
@@ -278,7 +299,7 @@ QPixmap TrackRowDelegate::coverFor(const QString& path, int size) const {
     if (QPixmap* pCached = m_coverCache.object(cacheKey)) {
         return *pCached;
     }
-    QPixmap cover(path);
+    QPixmap cover = loadCover(path);
     if (cover.isNull()) {
         // Cached as null too: a missing cover is a disk hit per redraw
         // otherwise, and on a remote medium it is missing on purpose until the

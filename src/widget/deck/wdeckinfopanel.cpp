@@ -37,6 +37,19 @@ void WDeckInfoPanel::setTrack(const QString& coverPath,
     update();
 }
 
+void WDeckInfoPanel::reloadCover() {
+    // The cover is decoded once, in setTrack, and setTrack short-circuits when
+    // the path has not changed -- so a cover that arrives *after* the panel was
+    // filled in would never be picked up without this.
+    if (m_coverPath.isEmpty() || !m_cover.isNull()) {
+        return;
+    }
+    m_cover = QPixmap(m_coverPath);
+    if (!m_cover.isNull()) {
+        update();
+    }
+}
+
 void WDeckInfoPanel::clear() {
     m_coverPath.clear();
     m_cover = QPixmap();
