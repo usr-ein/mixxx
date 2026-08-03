@@ -2,6 +2,7 @@
 
 #include <QString>
 
+#include "audio/types.h"
 #include "track/track_decl.h"
 
 class AnalysisDao;
@@ -29,9 +30,12 @@ namespace rekordbox {
 /// runs as before. *pAnalysisDao* may be null, in which case the waveforms are
 /// set on the track but not saved, which is still enough to skip the decode for
 /// this session.
+/// *sampleRate* overrides the track's own, for a caller that knows it before
+/// anything has decoded the audio -- see applyAnalysis().
 bool importWaveforms(TrackPointer track,
         const QString& anlzPathExt,
-        AnalysisDao* pAnalysisDao);
+        AnalysisDao* pAnalysisDao,
+        mixxx::audio::SampleRate sampleRate = mixxx::audio::SampleRate());
 
 } // namespace rekordbox
 } // namespace mixxx

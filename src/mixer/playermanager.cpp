@@ -732,6 +732,21 @@ void PlayerManager::slotAnalyzeTrack(TrackPointer track) {
     VERIFY_OR_DEBUG_ASSERT(track) {
         return;
     }
+    // A track that arrived with a grid **and** a waveform has been analysed
+    // already -- by rekordbox, and imported from the ANLZ files beside it.
+    //
+    // Every analyser then declines except AnalyzerSilence, which has no
+    // rekordbox equivalent and so decodes the entire file to place intro and
+    // outro cues. On a deck driven by rekordbox cues nothing reads them, and
+    // the cost is not small: minutes of Pi CPU per track, competing with the
+    // download of a track that is still arriving, under a "Ready to play,
+    // analyzing" that says the deck is busy when it has nothing left to do.
+    //
+    // For an ordinary Mixxx library this changes nothing: a track with both is
+    // one whose analysis is already complete, and scheduling it was a no-op.
+    if (track->getBeats() && track->getWaveform() && track->getWaveformSummary()) {
+        return;
+    }
     if (m_pTrackAnalysisScheduler) {
         if (m_pTrackAnalysisScheduler->scheduleTrack(track->getId())) {
             m_pTrackAnalysisScheduler->resume();

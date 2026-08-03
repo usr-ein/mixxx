@@ -77,6 +77,14 @@ bool createTables(QSqlDatabase& database) {
             "    comment TEXT,"
             "    duration INTEGER,"
             "    bitrate TEXT,"
+            // Straight off the pdb, and needed **before a byte is decoded**.
+            // rekordbox writes its beat grid and its cues in milliseconds, so
+            // turning them into frame positions needs a sample rate -- and for
+            // a track streaming off another player nothing has opened the audio
+            // yet. Asking the decoder would mean blocking the GUI thread on a
+            // range only the GUI thread announces, which is a deadlock rather
+            // than a delay.
+            "    samplerate INTEGER,"
             "    bpm FLOAT,"
             "    key TEXT,"
             // Camelot notation *and* Camelot sorting both key off this rather
@@ -318,12 +326,12 @@ IngestResult writeMedium(QSqlDatabase& database,
     insertTrack.prepare(QStringLiteral(
             "INSERT OR REPLACE INTO %1 "
             "(medium, rb_id, artist, title, album, year, genre, label, tracknumber, "
-            " location, comment, duration, bitrate, bpm, key, key_id, camelot_order, rating, "
+            " location, comment, duration, bitrate, samplerate, bpm, key, key_id, camelot_order, rating, "
             " datetime_added, timesplayed, analyze_path, color, artwork_path, "
             " artwork_id, coverart_source, coverart_type, coverart_location, "
             " coverart_digest) "
             "VALUES (:medium, :rb_id, :artist, :title, :album, :year, :genre, :label, "
-            " :tracknumber, :location, :comment, :duration, :bitrate, :bpm, :key, "
+            " :tracknumber, :location, :comment, :duration, :bitrate, :samplerate, :bpm, :key, "
             " :key_id, :camelot_order, :rating, :datetime_added, :timesplayed, "
             " :analyze_path, :color, "
             " :artwork_path, :artwork_id, :coverart_source, :coverart_type, "
@@ -361,6 +369,7 @@ IngestResult writeMedium(QSqlDatabase& database,
         insertTrack.bindValue(QStringLiteral(":comment"), track.comment);
         insertTrack.bindValue(QStringLiteral(":duration"), track.durationSeconds);
         insertTrack.bindValue(QStringLiteral(":bitrate"), track.bitrate);
+        insertTrack.bindValue(QStringLiteral(":samplerate"), track.sampleRate);
         // Centi-BPM only becomes a double here, at the last moment, so 12800
         // cannot pick up rounding error on the way through.
         insertTrack.bindValue(QStringLiteral(":bpm"), track.tempoCentiBpm / 100.0);

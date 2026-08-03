@@ -54,9 +54,17 @@ int timingOffsetForFile(const QString& location);
 /// so the "grids only from the legacy file" rule lives in one place.
 /// *pAnalysisDao* is optional and used only to persist an imported waveform; see
 /// rekordboxwaveform.h. Without it the waveform still applies for this session.
+/// *sampleRate* overrides the track's own, for a caller that knows it before
+/// anything has decoded the audio. **A streamed track needs this.** Everything
+/// rekordbox stores is in milliseconds and has to be converted to frames, and
+/// asking the decoder for the rate means blocking on bytes that have not
+/// arrived -- on the GUI thread, which is the only thread that announces their
+/// arrival, so it does not block, it deadlocks. A rekordbox `export.pdb`
+/// carries the sample rate for every track, which settles it for free.
 void applyAnalysis(TrackPointer track,
         const QString& anlzPath,
-        AnalysisDao* pAnalysisDao = nullptr);
+        AnalysisDao* pAnalysisDao = nullptr,
+        audio::SampleRate sampleRate = audio::SampleRate());
 
 } // namespace rekordbox
 } // namespace mixxx

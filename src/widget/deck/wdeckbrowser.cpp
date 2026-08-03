@@ -7,6 +7,7 @@
 #include <QStackedWidget>
 #include <QVBoxLayout>
 
+#include "audio/types.h"
 #include "control/controlencoder.h"
 #include "control/controlobject.h"
 #include "control/controlpushbutton.h"
@@ -157,6 +158,10 @@ WDeckBrowser::WDeckBrowser(QWidget* pParent, Library* pLibrary, UserSettingsPoin
             LIBRARYTABLE_RATING,
             LIBRARYTABLE_DURATION,
             LIBRARYTABLE_BITRATE,
+            // Read at load time to convert rekordbox's milliseconds into
+            // frames, before anything has decoded the audio. Same trap as
+            // camelot_order: leave it out and fieldIndex() quietly returns -1.
+            LIBRARYTABLE_SAMPLERATE,
             LIBRARYTABLE_BPM,
             LIBRARYTABLE_KEY,
             LIBRARYTABLE_KEY_ID,
@@ -1164,6 +1169,7 @@ void WDeckBrowser::loadSelectedTrack() {
     };
     const QString source = field(TRACKLOCATIONSTABLE_LOCATION);
     const QString analyzePath = field(QStringLiteral("analyze_path"));
+    const int sampleRate = field(LIBRARYTABLE_SAMPLERATE).toInt();
     const QString artist = field(LIBRARYTABLE_ARTIST);
     const QString title = field(LIBRARYTABLE_TITLE);
     const QString album = field(LIBRARYTABLE_ALBUM);
@@ -1247,11 +1253,26 @@ void WDeckBrowser::loadSelectedTrack() {
     // startStreaming() fetched them above, before the audio, and that ordering
     // is deliberate.
     if (!analyzePath.isEmpty()) {
+        // The pdb's sample rate, not the decoder's, and that is load-bearing.
+        //
+        // Everything rekordbox stores is in milliseconds and has to become
+        // frames, so a rate is needed before the grid, the cues or the waveform
+        // can be applied -- and for a streamed track nothing has decoded a byte
+        // yet. Asking the decoder would mean waiting on the first 64 KB **here,
+        // on the GUI thread**, which is the one thread that runs the poll that
+        // announces bytes as they land. That is not a delay, it is a deadlock,
+        // and it fails fifteen seconds later as a read timeout.
+        //
+        // Until recently this was free: the tag scan set the sample rate on its
+        // way past. Taking that scan out to make loads fast quietly took the
+        // beat grid, the hot cues and the waveform with it, and the only
+        // visible symptom was Mixxx analysing every track from scratch.
         mixxx::rekordbox::applyAnalysis(pTrack,
                 analyzePath,
                 &m_pLibrary->trackCollectionManager()
                          ->internalCollection()
-                         ->getAnalysisDAO());
+                         ->getAnalysisDAO(),
+                mixxx::audio::SampleRate(sampleRate));
     }
 
     m_loadedTrackRowId = trackRowId > 0 ? trackRowId : -1;

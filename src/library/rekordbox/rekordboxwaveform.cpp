@@ -300,7 +300,8 @@ namespace rekordbox {
 
 bool importWaveforms(TrackPointer track,
         const QString& anlzPathExt,
-        AnalysisDao* pAnalysisDao) {
+        AnalysisDao* pAnalysisDao,
+        mixxx::audio::SampleRate sampleRateOverride) {
     if (!track) {
         return false;
     }
@@ -314,9 +315,13 @@ bool importWaveforms(TrackPointer track,
         return false;
     }
 
-    const audio::SampleRate sampleRate = track->getSampleRate();
-    const auto duration = track->getDuration();
-    if (!sampleRate.isValid() || duration <= 0) {
+    const audio::SampleRate sampleRate =
+            sampleRateOverride.isValid() ? sampleRateOverride : track->getSampleRate();
+    // The duration is deliberately not consulted. It is unknown until something
+    // has decoded the file, which for a track streaming off another player is
+    // after this runs -- and it was never needed anyway, because the length
+    // below comes from rekordbox's own point count.
+    if (!sampleRate.isValid()) {
         return false;
     }
     // Length in frames from rekordbox's own point count rather than from the

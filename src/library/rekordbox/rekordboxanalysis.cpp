@@ -15,8 +15,11 @@
 #include "track/beats.h"
 #include "track/cue.h"
 #include "track/track.h"
+#include "util/logger.h"
 
 namespace {
+
+const mixxx::Logger kLogger("RekordboxAnalysis");
 
 /// Kaitai uses std::string as the single container for every string encoding,
 /// so the decode has to happen here rather than in the schema. UTF-16 **big**
@@ -466,13 +469,30 @@ int timingOffsetForFile(const QString& location) {
 
 void applyAnalysis(TrackPointer track,
         const QString& anlzPath,
-        AnalysisDao* pAnalysisDao) {
+        AnalysisDao* pAnalysisDao,
+        audio::SampleRate sampleRateOverride) {
     if (!track || anlzPath.isEmpty()) {
         return;
     }
     const QString location = track->getLocation();
     const int timingOffset = timingOffsetForFile(location);
-    const audio::SampleRate sampleRate = track->getSampleRate();
+    const audio::SampleRate sampleRate =
+            sampleRateOverride.isValid() ? sampleRateOverride : track->getSampleRate();
+    // **Everything below converts rekordbox's milliseconds into frames**, so
+    // without a sample rate there is nothing to convert them to: the grid, the
+    // cues and the waveform all come out empty and Mixxx analyses the track
+    // from scratch as though no analysis had been found.
+    //
+    // Which is exactly what happened, invisibly, the moment the tag scan was
+    // removed from the streaming path -- TagLib had been supplying the sample
+    // rate as a side effect nobody had noticed depending on it. A silent
+    // return would let that happen again.
+    if (!sampleRate.isValid()) {
+        kLogger.warning() << "no sample rate yet, so rekordbox's analysis of"
+                          << location << "cannot be applied; open the audio "
+                                         "source before calling this";
+        return;
+    }
     const QString anlzPathExt = anlzPath.left(anlzPath.length() - 3) + QStringLiteral("EXT");
 
     if (QFile(anlzPathExt).exists()) {
@@ -482,7 +502,7 @@ void applyAnalysis(TrackPointer track,
         readAnalyzeFile(track, sampleRate, timingOffset, false, anlzPathExt);
         // The waveform too, which is what otherwise makes Mixxx decode the whole
         // file after everything else has already been imported.
-        importWaveforms(track, anlzPathExt, pAnalysisDao);
+        importWaveforms(track, anlzPathExt, pAnalysisDao, sampleRate);
     } else {
         readAnalyzeFile(track, sampleRate, timingOffset, false, anlzPath);
     }
