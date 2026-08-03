@@ -44,6 +44,10 @@ constexpr int kBezelPadHeight = 56;
 /// one but hides the breadcrumb's ascenders all the same. Three quarters of the
 /// breadcrumb's own height, measured against the deck rather than derived.
 constexpr int kTopBezelPadHeight = 36;
+/// And down the *left* edge. Narrow, but the colour stripe and the playing mark
+/// live in the first five pixels of a row -- so a lip of any width at all hides
+/// the one thing on screen that says which track is under the needle.
+constexpr int kLeftBezelPadWidth = 16;
 constexpr int kSourceRowHeight = 80;
 constexpr int kMenuRowHeight = 72;
 constexpr int kValueRowHeight = 64;
@@ -70,8 +74,12 @@ WDeckBrowser::WDeckBrowser(QWidget* pParent, Library* pLibrary, UserSettingsPoin
           m_pLibrary(pLibrary),
           m_pConfig(std::move(pConfig)) {
     setAttribute(Qt::WA_StyledBackground, true);
+    // The left lip, as a margin rather than a spacer widget: it has to inset
+    // every level -- the breadcrumb, the lists, the info panel and the search
+    // page alike -- and a margin on the one layout they all sit in does that
+    // without any of them knowing.
     auto* pLayout = new QVBoxLayout(this);
-    pLayout->setContentsMargins(0, 0, 0, 0);
+    pLayout->setContentsMargins(kLeftBezelPadWidth, 0, 0, 0);
     pLayout->setSpacing(0);
 
     // The bezel strip at the top, matching the one at the bottom: the panel is

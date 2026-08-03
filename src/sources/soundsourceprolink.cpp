@@ -73,8 +73,15 @@ int64_t SoundSourceProLink::seek(void* pOpaque, int64_t offset, int whence) {
         return size;
     }
 
+    // AVSEEK_FORCE is a *flag*, not a whence, and FFmpeg ORs it in freely --
+    // "seek even if you think it is expensive". Treating the combination as an
+    // unknown whence and refusing it is what made every remote track fail at
+    // `av_seek_frame() failed: Operation not permitted` after the stream had
+    // been parsed perfectly.
+    const int mode = whence & ~AVSEEK_FORCE;
+
     int64_t target = offset;
-    switch (whence) {
+    switch (mode) {
     case SEEK_SET:
         break;
     case SEEK_CUR:
@@ -84,6 +91,7 @@ int64_t SoundSourceProLink::seek(void* pOpaque, int64_t offset, int whence) {
         target = size + offset;
         break;
     default:
+        kLogger.warning() << "unknown seek whence" << whence;
         return AVERROR(EINVAL);
     }
     if (target < 0 || target > size) {
