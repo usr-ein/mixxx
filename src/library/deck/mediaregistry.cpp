@@ -1,6 +1,7 @@
 #include "library/deck/mediaregistry.h"
 
 #include <QDir>
+#include <algorithm>
 #include <QFile>
 #include <QFileInfo>
 #include <QSqlDatabase>
@@ -10,6 +11,11 @@
 #include "library/deck/volumelabel.h"
 #include "network/prolink/prolinkpdb.h"
 #include "util/db/dbconnectionpooler.h"
+#ifdef __PROLINK__
+#include <QStandardPaths>
+
+#include "network/prolink/prolinknetworkservice.h"
+#endif
 #include "util/db/dbconnectionpooled.h"
 #include "util/logger.h"
 
@@ -56,6 +62,33 @@ MediaRegistry::MediaRegistry(mixxx::DbConnectionPoolPtr dbConnectionPool, QObjec
     });
 
     rescanLocal();
+
+#ifdef __PROLINK__
+    // The players on the network, watched from here. Passive: it binds and
+    // listens, and the counts on a source row come out of the status packets a
+    // player already sends, so a remote medium is fully described before
+    // anything is fetched.
+    m_pNetwork = std::make_unique<mixxx::prolink::ProLinkNetworkService>();
+    connect(m_pNetwork.get(),
+            &mixxx::prolink::ProLinkNetworkService::mediaInfoFound,
+            this,
+            &MediaRegistry::onMediaInfo);
+    connect(m_pNetwork.get(),
+            &mixxx::prolink::ProLinkNetworkService::databaseFetched,
+            this,
+            &MediaRegistry::onDatabaseFetched);
+    connect(m_pNetwork.get(),
+            &mixxx::prolink::ProLinkNetworkService::deviceLost,
+            this,
+            &MediaRegistry::onDeviceLost);
+    connect(m_pNetwork.get(),
+            &mixxx::prolink::ProLinkNetworkService::deviceFound,
+            this,
+            [this](const mixxx::prolink::ProLinkDevice& device) {
+                m_devices.append(device);
+            });
+    m_pNetwork->start();
+#endif
 }
 
 MediaRegistry::~MediaRegistry() {
@@ -140,7 +173,11 @@ void MediaRegistry::rescanLocal() {
         }
         medium.state = MediumInfo::State::Reading;
         m_media.append(medium);
-        m_readQueue.append({id, mountPoint});
+        PendingRead pending;
+        pending.id = id;
+        pending.mountPoint = mountPoint;
+        pending.localRoot = mountPoint;
+        m_readQueue.append(pending);
         changed = true;
         kLogger.info() << "medium found:" << medium.name << "at" << mountPoint;
         emit mediumAppeared(medium);
@@ -152,20 +189,37 @@ void MediaRegistry::rescanLocal() {
     startNextRead();
 }
 
+void MediaRegistry::enqueue(PendingRead pending) {
+    m_readQueue.append(std::move(pending));
+    startNextRead();
+}
+
 void MediaRegistry::startNextRead() {
     if (m_reading || m_readQueue.isEmpty()) {
         return;
     }
-    const auto next = m_readQueue.takeFirst();
+    // One at a time, local and remote alike: two parses would fight over one
+    // USB bus or one network for no gain, and the ingest holds a write
+    // transaction while it runs.
+    const PendingRead next = m_readQueue.takeFirst();
     m_reading = true;
-    m_readWatcher.setFuture(QtConcurrent::run(
-            &MediaRegistry::readMedium, m_dbConnectionPool, next.first, next.second));
+    m_readWatcher.setFuture(
+            QtConcurrent::run(&MediaRegistry::readMedium, m_dbConnectionPool, next));
+}
+
+QString MediaRegistry::remoteCacheRoot(const MediumId& id) {
+    // Boot-scoped scratch: what is on somebody else's stick is worthless the
+    // moment they unplug it.
+    QString key = id.key();
+    key.replace(QChar(':'), QChar('_')).replace(QChar('|'), QChar('-'));
+    return QDir(QStandardPaths::writableLocation(QStandardPaths::CacheLocation))
+            .filePath(QStringLiteral("deck/") + key);
 }
 
 MediaRegistry::ReadResult MediaRegistry::readMedium(
-        mixxx::DbConnectionPoolPtr pool, MediumId id, QString mountPoint) {
+        mixxx::DbConnectionPoolPtr pool, PendingRead pending) {
     ReadResult result;
-    result.id = id;
+    result.id = pending.id;
 
     // A connection of this thread's own. A QSqlDatabase cannot be shared across
     // threads, which is what the pooler exists to arrange.
@@ -176,26 +230,31 @@ MediaRegistry::ReadResult MediaRegistry::readMedium(
         return result;
     }
 
-    const QString pdbPath = QDir(mountPoint).filePath(kPdbPath);
-    QFile pdbFile(pdbPath);
-    if (!pdbFile.open(QIODevice::ReadOnly)) {
-        result.error = QStringLiteral("cannot read %1").arg(pdbPath);
-        return result;
+    // A local medium is read off its mount; a remote one arrives with the bytes
+    // already fetched. Past this line the two are the same thing, which is the
+    // whole point of there being one ingest.
+    QByteArray raw = pending.data;
+    if (raw.isEmpty()) {
+        const QString pdbPath = QDir(pending.mountPoint).filePath(kPdbPath);
+        QFile pdbFile(pdbPath);
+        if (!pdbFile.open(QIODevice::ReadOnly)) {
+            result.error = QStringLiteral("cannot read %1").arg(pdbPath);
+            return result;
+        }
+        raw = pdbFile.readAll();
     }
 
-    // Through the same shim, and so the same Rust parser, the remote side uses.
-    // Reading the file in whole rather than calling read_pdb(path) keeps both
-    // sources on one code path; a rekordbox export is a megabyte or two, so
-    // there is nothing to gain by streaming it.
-    mixxx::prolink::PdbContents contents = mixxx::prolink::parsePdb(pdbFile.readAll());
+    mixxx::prolink::PdbContents contents = mixxx::prolink::parsePdb(raw);
     if (!contents.ok) {
         result.error = contents.error;
         return result;
     }
 
-    // Track locations are the mount point plus the medium-relative path the pdb
-    // stores, concatenated rather than translated (see PdbIngest).
-    result.ingest = writeMedium(database, contents, id, mountPoint);
+    // Track locations are the root plus the medium-relative path the pdb
+    // stores, concatenated rather than translated (see PdbIngest). For a stick
+    // that root is the mount; for a remote medium it is where its files will be
+    // mirrored once fetched.
+    result.ingest = writeMedium(database, contents, pending.id, pending.localRoot);
     result.ok = true;
     return result;
 }
@@ -224,6 +283,142 @@ void MediaRegistry::onReadFinished() {
 
     startNextRead();
 }
+
+#ifdef __PROLINK__
+
+int MediaRegistry::playerNumberFor(const QByteArray& mac) const {
+    for (const mixxx::prolink::ProLinkDevice& device : m_devices) {
+        if (device.mac == mac) {
+            return device.deviceNumber;
+        }
+    }
+    return 0;
+}
+
+void MediaRegistry::onMediaInfo(const QByteArray& mac,
+        mixxx::prolink::MediaSlot slot,
+        const mixxx::prolink::MediaInfo& info) {
+    const MediumId id = MediumId::proLink(QString::fromLatin1(mac.toHex()),
+            static_cast<int>(slot));
+    const int index = indexOf(id);
+
+    if (!info.isOccupied()) {
+        // An empty slot answers too, with everything zeroed -- which is how a
+        // medium being taken out of a player reaches us.
+        if (index >= 0) {
+            const MediumInfo gone = m_media.takeAt(index);
+            const mixxx::DbConnectionPooler pooler(m_dbConnectionPool);
+            QSqlDatabase database = mixxx::DbConnectionPooled(m_dbConnectionPool);
+            if (database.isOpen()) {
+                clearMedium(database, gone.id);
+            }
+            kLogger.info() << "remote medium gone:" << gone.name;
+            emit mediumVanished(gone);
+            emit mediaChanged();
+        }
+        return;
+    }
+
+    if (index >= 0) {
+        // Already known. Refresh what the player says and leave the rest --
+        // re-fetching a database we already hold would cost seconds of network
+        // for nothing.
+        MediumInfo& medium = m_media[index];
+        if (!info.name.isEmpty()) {
+            medium.name = info.name;
+        }
+        medium.playerNumber = playerNumberFor(mac);
+        emit mediaChanged();
+        return;
+    }
+
+    MediumInfo medium;
+    medium.id = id;
+    // An unlabelled medium is normal and is not an error: the slot kind is the
+    // name in that case, exactly as a CDJ shows it.
+    medium.name = info.name.isEmpty()
+            ? (slot == mixxx::prolink::MediaSlot::Sd ? QStringLiteral("SD")
+                                                     : QStringLiteral("USB"))
+            : info.name;
+    medium.kind = slot == mixxx::prolink::MediaSlot::Sd ? MediumInfo::Kind::Sd
+                                                        : MediumInfo::Kind::Usb;
+    medium.playerNumber = playerNumberFor(mac);
+    // The counts come free, from the status packet. So the row is complete
+    // before the database has been touched -- which is the whole reason a
+    // remote source can be listed instantly.
+    medium.trackCount = static_cast<int>(info.trackCount);
+    medium.playlistCount = static_cast<int>(info.playlistCount);
+    medium.state = MediumInfo::State::Reading;
+    m_media.append(medium);
+    kLogger.info() << "remote medium found:" << medium.name << "on player"
+                   << medium.playerNumber;
+    emit mediumAppeared(medium);
+    emit mediaChanged();
+
+    // Read on detection, like a stick: the fetch takes seconds, and doing it
+    // now is what makes entering it instant later.
+    m_pNetwork->fetchDatabase(mac, slot);
+}
+
+void MediaRegistry::onDatabaseFetched(const QByteArray& mac,
+        mixxx::prolink::MediaSlot slot,
+        const QByteArray& data,
+        const QString& error) {
+    const MediumId id = MediumId::proLink(QString::fromLatin1(mac.toHex()),
+            static_cast<int>(slot));
+    const int index = indexOf(id);
+    if (index < 0) {
+        return; // The medium went away while we were fetching it.
+    }
+    if (!error.isEmpty() || data.isEmpty()) {
+        m_media[index].state = MediumInfo::State::Failed;
+        m_media[index].error = error.isEmpty() ? tr("empty database") : error;
+        kLogger.warning() << "remote medium failed:" << m_media[index].name << error;
+        emit mediumFailed(m_media[index]);
+        emit mediaChanged();
+        return;
+    }
+
+    PendingRead pending;
+    pending.id = id;
+    pending.data = data;
+    pending.localRoot = remoteCacheRoot(id);
+    enqueue(std::move(pending));
+}
+
+void MediaRegistry::onDeviceLost(const QByteArray& mac) {
+    m_devices.erase(std::remove_if(m_devices.begin(),
+                            m_devices.end(),
+                            [&mac](const mixxx::prolink::ProLinkDevice& d) {
+                                return d.mac == mac;
+                            }),
+            m_devices.end());
+
+    const QString prefix = QStringLiteral("prolink:") +
+            QString::fromLatin1(mac.toHex()) + QChar('|');
+    bool changed = false;
+    for (int i = m_media.size() - 1; i >= 0; --i) {
+        if (!m_media.at(i).id.key().startsWith(prefix)) {
+            continue;
+        }
+        const MediumInfo gone = m_media.takeAt(i);
+        {
+            const mixxx::DbConnectionPooler pooler(m_dbConnectionPool);
+            QSqlDatabase database = mixxx::DbConnectionPooled(m_dbConnectionPool);
+            if (database.isOpen()) {
+                clearMedium(database, gone.id);
+            }
+        }
+        kLogger.info() << "player gone, medium with it:" << gone.name;
+        emit mediumVanished(gone);
+        changed = true;
+    }
+    if (changed) {
+        emit mediaChanged();
+    }
+}
+
+#endif // __PROLINK__
 
 } // namespace deck
 } // namespace mixxx

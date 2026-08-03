@@ -8,9 +8,15 @@
 
 #include "library/deck/mediumid.h"
 #include "library/deck/pdbingest.h"
+#include "network/prolink/prolinkdefs.h"
+#include "network/prolink/prolinkdevice.h"
+#include "network/prolink/prolinkmediaquery.h"
 #include "util/db/dbconnectionpool.h"
 
 namespace mixxx {
+namespace prolink {
+class ProLinkNetworkService;
+}
 namespace deck {
 
 /// One source row: a rekordbox-prepared volume the deck can play from.
@@ -84,6 +90,11 @@ class MediaRegistry : public QObject {
     /// Look again for local sticks. Cheap, and safe to call from a signal.
     void rescanLocal();
 
+    /// Where a remote medium's files are mirrored locally. Track locations are
+    /// this plus the medium-relative path the pdb stores, concatenated rather
+    /// than translated, so the two never have to be reconciled.
+    static QString remoteCacheRoot(const MediumId& id);
+
   signals:
     /// The list changed shape: a medium appeared, vanished, or finished reading.
     /// The browser rebuilds level 0 on this.
@@ -96,11 +107,29 @@ class MediaRegistry : public QObject {
 
   private slots:
     void onReadFinished();
+#ifdef __PROLINK__
+    /// A player answered about one of its slots. This is where a remote medium
+    /// is born -- and it already carries the counts, straight from the status
+    /// packet, so the source row is complete before a byte is fetched.
+    void onMediaInfo(const QByteArray& mac,
+            mixxx::prolink::MediaSlot slot,
+            const mixxx::prolink::MediaInfo& info);
+    void onDatabaseFetched(const QByteArray& mac,
+            mixxx::prolink::MediaSlot slot,
+            const QByteArray& data,
+            const QString& error);
+    void onDeviceLost(const QByteArray& mac);
+#endif
 
   private:
     /// Directories under /media whose child holds PIONEER/rekordbox/export.pdb.
     static QStringList findLocalMountPoints();
     void startNextRead();
+
+#ifdef __PROLINK__
+    /// Player number for a MAC, or 0. Linear over a handful of devices.
+    int playerNumberFor(const QByteArray& mac) const;
+#endif
 
     /// What a worker produced. Copyable, because QFuture demands it.
     struct ReadResult {
@@ -109,15 +138,23 @@ class MediaRegistry : public QObject {
         bool ok = false;
         QString error;
     };
-    static ReadResult readMedium(mixxx::DbConnectionPoolPtr pool,
-            MediumId id,
-            QString mountPoint);
+    /// One pending read. A local medium names a mount to read from; a remote
+    /// one arrives with the bytes already in hand, because the network layer
+    /// fetched them.
+    struct PendingRead {
+        MediumId id;
+        QString mountPoint; ///< Local media only.
+        QByteArray data;    ///< Remote media only.
+        QString localRoot;
+    };
+    static ReadResult readMedium(mixxx::DbConnectionPoolPtr pool, PendingRead pending);
+    void enqueue(PendingRead pending);
 
     mixxx::DbConnectionPoolPtr m_dbConnectionPool;
     QList<MediumInfo> m_media;
     /// Media detected but not yet read, in detection order. One read at a time:
     /// two sticks parsed in parallel would fight over one USB bus for no gain.
-    QList<QPair<MediumId, QString>> m_readQueue;
+    QList<PendingRead> m_readQueue;
     QFutureWatcher<ReadResult> m_readWatcher;
     bool m_reading = false;
 
@@ -129,6 +166,14 @@ class MediaRegistry : public QObject {
     /// deferred rather than immediate -- otherwise the pdb is not there yet and
     /// the medium is recorded as failed.
     QTimer m_rescanDebounce;
+
+#ifdef __PROLINK__
+    /// Owned here rather than by a library feature, because the browser is the
+    /// only thing that shows media now and the old ProLinkFeature no longer has
+    /// a UI to hang off.
+    std::unique_ptr<mixxx::prolink::ProLinkNetworkService> m_pNetwork;
+    QList<mixxx::prolink::ProLinkDevice> m_devices;
+#endif
 };
 
 } // namespace deck
