@@ -180,6 +180,11 @@ class WDeckBrowser : public QWidget, public WBaseWidget {
     /// something.
     std::unique_ptr<ControlObject> m_pLevelControl;
     std::unique_ptr<ControlObject> m_pInTrackList;
+    /// The sort in force, as numbers, so the mapping can light the SORT pad
+    /// without knowing anything about column names: an index into
+    /// WDeckSortMenu::fields() (0 = Default) and 0/1 for the direction.
+    std::unique_ptr<ControlObject> m_pSortColumnControl;
+    std::unique_ptr<ControlObject> m_pSortOrderControl;
 };
 
 } // namespace deck

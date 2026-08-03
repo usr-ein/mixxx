@@ -21,6 +21,10 @@ const QColor kDetail(0xaa, 0xaa, 0xaa);
 const QColor kSeparator(0x22, 0x22, 0x22);
 /// Harmonically compatible keys (browser-prd.md 8.3).
 const QColor kKeyCompatible(0x44, 0xff, 0x66);
+/// The bar down the left of the row that is on the deck right now.
+const QColor kPlayingMark(0xff, 0x66, 0x00);
+
+constexpr int kStripeWidth = 5;
 
 constexpr int kPadding = 16;
 constexpr int kCoverMargin = 8;
@@ -316,6 +320,25 @@ void TrackRowDelegate::paint(QPainter* pPainter,
     const QColor detailColour = selected ? kSelectedText : kDetail;
 
     QRect content = option.rect.adjusted(kPadding, 0, -kPadding, 0);
+
+    // Two marks down the left edge, in the same few pixels because they are
+    // never both interesting at once: the rekordbox colour tag, and -- taking
+    // precedence -- "this is the one playing".
+    const bool isLoaded = m_columns.trackId >= 0 && m_loadedTrackId >= 0 &&
+            columnValue(m_columns.trackId).toInt() == m_loadedTrackId;
+    if (isLoaded) {
+        pPainter->fillRect(QRect(option.rect.left(), option.rect.top(),
+                                  kStripeWidth, option.rect.height()),
+                kPlayingMark);
+    } else if (m_columns.color >= 0) {
+        bool ok = false;
+        const int packed = columnValue(m_columns.color).toInt(&ok);
+        if (ok && packed > 0) {
+            pPainter->fillRect(QRect(option.rect.left(), option.rect.top(),
+                                      kStripeWidth, option.rect.height()),
+                    QColor((packed >> 16) & 0xFF, (packed >> 8) & 0xFF, packed & 0xFF));
+        }
+    }
 
     const int coverSize = option.rect.height() - 2 * kCoverMargin;
     const QPixmap cover = coverFor(columnValue(m_columns.cover), coverSize);

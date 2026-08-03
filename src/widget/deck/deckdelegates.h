@@ -56,6 +56,11 @@ class TrackRowDelegate : public QStyledItemDelegate {
     void setPlayingKeyId(int keyId) {
         m_playingKeyId = keyId;
     }
+    /// deck_library id of the track on the deck, so the row it came from can be
+    /// marked. -1 when nothing is loaded.
+    void setLoadedTrackId(int trackId) {
+        m_loadedTrackId = trackId;
+    }
     /// In the info layout the row is one line: title left, and the value of
     /// whatever the list is sorted by right (browser-prd.md 8.2).
     void setInfoLayout(bool infoLayout) {
@@ -78,6 +83,9 @@ class TrackRowDelegate : public QStyledItemDelegate {
         int bpm = -1;
         int key = -1;
         int keyId = -1;
+        int color = -1;
+        /// The view's id column, for spotting the loaded track.
+        int trackId = -1;
     };
     void setColumns(const Columns& columns) {
         m_columns = columns;
@@ -94,6 +102,7 @@ class TrackRowDelegate : public QStyledItemDelegate {
 
     int m_rowHeight = 72;
     int m_playingKeyId = 0;
+    int m_loadedTrackId = -1;
     bool m_infoLayout = false;
     int m_secondaryColumn = -1;
     Columns m_columns;

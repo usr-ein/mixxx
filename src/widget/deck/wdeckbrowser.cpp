@@ -323,6 +323,12 @@ WDeckBrowser::WDeckBrowser(QWidget* pParent, Library* pLibrary, UserSettingsPoin
     m_pLevelControl->setReadOnly();
     m_pInTrackList = std::make_unique<ControlObject>(ConfigKey("[Browser]", "in_track_list"));
     m_pInTrackList->setReadOnly();
+    m_pSortColumnControl = std::make_unique<ControlObject>(
+            ConfigKey("[Browser]", "sort_column"));
+    m_pSortColumnControl->setReadOnly();
+    m_pSortOrderControl = std::make_unique<ControlObject>(
+            ConfigKey("[Browser]", "sort_order"));
+    m_pSortOrderControl->setReadOnly();
 
     showSources();
     // showSources() builds level 0 but does not draw the chrome around it; the
@@ -506,6 +512,15 @@ void WDeckBrowser::showSources() {
         }
         row.payload = QVariant::fromValue(medium.id.key());
         rows.append(row);
+    }
+
+    if (rows.isEmpty()) {
+        // Nothing plugged in and no players. Saying so beats a menu with two
+        // rows in it and no explanation for why.
+        MenuRow empty;
+        empty.title = tr("Insert a USB stick, or link a player");
+        empty.dimmed = true;
+        rows.append(empty);
     }
 
     MenuRow diagnostics;
@@ -720,7 +735,10 @@ void WDeckBrowser::refreshTrackColumns() {
     columns.bpm = m_pTrackModel->fieldIndex(LIBRARYTABLE_BPM);
     columns.key = m_pTrackModel->fieldIndex(LIBRARYTABLE_KEY);
     columns.keyId = m_pTrackModel->fieldIndex(LIBRARYTABLE_KEY_ID);
+    columns.color = m_pTrackModel->fieldIndex(LIBRARYTABLE_COLOR);
+    columns.trackId = m_pTrackModel->fieldIndex(QStringLiteral("track_id"));
     m_pTrackDelegate->setColumns(columns);
+    m_pTrackDelegate->setLoadedTrackId(m_loadedTrackRowId);
     m_pTrackDelegate->setRowHeight(kTrackRowHeight);
     // What is loaded right now, so a compatible key can be green.
     m_pTrackDelegate->setPlayingKeyId(
@@ -752,6 +770,19 @@ void WDeckBrowser::onSelectionMoved(int row) {
 }
 
 void WDeckBrowser::applySort() {
+    // Publish it for the mapping first, so the LED is right even on the paths
+    // below that return early.
+    int fieldIndex = 0;
+    const QList<WDeckSortMenu::Field>& fields = WDeckSortMenu::fields();
+    for (int i = 0; i < fields.size(); ++i) {
+        if (fields.at(i).column == m_sortColumn && !m_sortColumn.isEmpty()) {
+            fieldIndex = i;
+            break;
+        }
+    }
+    m_pSortColumnControl->forceSet(fieldIndex);
+    m_pSortOrderControl->forceSet(m_sortDescending ? 1.0 : 0.0);
+
     if (m_sortColumn.isEmpty()) {
         // Not "sort by some natural column": there is no column id meaning
         // unsorted, and only the model can put itself back.
@@ -866,6 +897,8 @@ void WDeckBrowser::updateInfoPanel() {
 }
 
 void WDeckBrowser::onPlayingKeyChanged() {
+    // The marker moves with the loaded track, so it rides the same signal.
+    m_pTrackDelegate->setLoadedTrackId(m_loadedTrackRowId);
     // Repaint, do not rebuild. The list has not changed -- only what the keys
     // in it should be compared against -- and rebuilding would lose the
     // selection and the scroll position mid-browse.

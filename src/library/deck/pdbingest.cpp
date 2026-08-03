@@ -20,6 +20,28 @@ const mixxx::Logger kLogger("DeckIngest");
 /// medium while the old library view is still reading these tables through
 /// BaseExternalPlaylistModel, which looks playlists up by name.
 const QString kPathDelimiter = QStringLiteral("-->");
+
+/// rekordbox's eight track colours, by the id the pdb stores.
+///
+/// Stored as RGB rather than as the id, because `color` is one of Mixxx's own
+/// columns and Mixxx reads it as packed RGB -- putting a 1..8 in there would
+/// mean "almost black" to everything else that looks at it.
+///
+/// The values are the palette rekordbox paints its own pads with, near enough:
+/// the format records only an index, and the exact swatches are not published.
+QVariant colourForId(quint32 colorId) {
+    switch (colorId) {
+    case 1: return 0xFF007F; // pink
+    case 2: return 0xFF0000; // red
+    case 3: return 0xFFA500; // orange
+    case 4: return 0xFFFF00; // yellow
+    case 5: return 0x00FF00; // green
+    case 6: return 0x00FFFF; // aqua
+    case 7: return 0x0080FF; // blue
+    case 8: return 0x8000FF; // purple
+    default: return QVariant();
+    }
+}
 } // namespace
 
 namespace mixxx {
@@ -358,7 +380,7 @@ IngestResult writeMedium(QSqlDatabase& database,
         insertTrack.bindValue(QStringLiteral(":timesplayed"), track.playCount);
         insertTrack.bindValue(QStringLiteral(":analyze_path"),
                 QString(localRoot + track.analyzePath));
-        insertTrack.bindValue(QStringLiteral(":color"), QVariant());
+        insertTrack.bindValue(QStringLiteral(":color"), colourForId(track.colorId));
         // Kept as the *medium-relative* path: it is what has to be asked for
         // over the network, and the local location is derivable from it.
         // Storing the local one instead would mean reconstructing the remote
