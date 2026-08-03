@@ -339,6 +339,20 @@ void WOverview::slotTrackLoaded(TrackPointer pTrack) {
     m_trackLoaded = true;
     if (m_pCurrentTrack) {
         updateCues(m_pCurrentTrack->getCuePoints());
+        // **Now**, because the first attempt was too early to succeed.
+        //
+        // drawNextPixmapPart() needs the track's length, which it reads from
+        // the engine's `track_samples` -- and slotLoadingTrack() runs before
+        // the engine has the track, so it reads zero and gives up. Nothing then
+        // retried except the analyzer's progress signal, so a waveform that was
+        // already complete when the track arrived never got drawn at all.
+        //
+        // That was invisible while every track was analysed: the analyzer
+        // replaced the waveform a moment later and its progress signals drew
+        // it. It shows up the instant a track arrives with a waveform already
+        // attached -- one imported from rekordbox -- which is the case this
+        // deck is built around.
+        slotWaveformSummaryUpdated();
     }
     update();
 }

@@ -361,8 +361,21 @@ bool importWaveforms(TrackPointer track,
     if (pAnalysisDao && track->getId().isValid()) {
         pAnalysisDao->saveTrackAnalyses(track->getId(), pWaveform, pSummary);
     }
+    // What was actually written, not merely how much. A waveform of the right
+    // size full of zeros draws nothing at all and is indistinguishable from a
+    // missing one on screen, so the peak is the only part of this line that
+    // says whether the import worked.
+    unsigned char peak = 0;
+    const WaveformData* pCheck = pWaveform->data();
+    for (int i = 0; i < pWaveform->getDataSize(); ++i) {
+        peak = std::max({peak,
+                pCheck[i].filtered.low,
+                pCheck[i].filtered.mid,
+                pCheck[i].filtered.high});
+    }
     qDebug() << "imported rekordbox waveform:" << points.size() << "points ->"
-             << pWaveform->getDataSize() << "visual samples for" << track->getLocation();
+             << pWaveform->getDataSize() << "visual samples, peak band" << peak
+             << "for" << track->getLocation();
     return true;
 }
 

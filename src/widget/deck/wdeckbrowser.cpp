@@ -1150,6 +1150,36 @@ void WDeckBrowser::onBack() {
     popLevel();
 }
 
+/// Put the selected track on the deck.
+///
+/// Five steps, in this order, and the order is the whole design:
+///
+///  1. **Read the row.** Every field is taken now, before anything below can
+///     run a nested event loop, because during one the model can be re-sorted
+///     or reset underneath us.
+///  2. **Get a local file.** A stick is copied; a remote track is *started*
+///     downloading and comes back as a sparse file of the right size whose
+///     unwritten parts block a reader instead of handing it zeros. Either way
+///     the deck plays a copy, never the medium -- that is what lets a stick be
+///     pulled mid-track.
+///  3. **Make the Track.**
+///  4. **Fill it in from the pdb**, never from the file: the metadata, and the
+///     rekordbox grid, cues and waveform from the ANLZ files beside it.
+///  5. **Hand it to the deck.**
+///
+/// Three rules keep this honest, and each of them has been broken at least
+/// once, silently:
+///
+///  * **Nothing here may wait for bytes.** This is the GUI thread, and the GUI
+///     thread is what announces bytes as they arrive -- so a wait here is a
+///     deadlock, not a delay. StreamingFile refuses rather than trusting this
+///     comment.
+///  * **Nothing here may read the audio file.** Not for tags, not for a sample
+///     rate, not for a duration. It may not have arrived, and every one of
+///     those is in the pdb.
+///  * **A file that is still arriving is only ever read through
+///     StreamingFile.** An ordinary read of a sparse hole returns zeros and
+///     succeeds, so the failure mode is not an error, it is silence.
 void WDeckBrowser::loadSelectedTrack() {
     const int row = m_pTrackView->selectedRow();
     if (row < 0) {
@@ -1277,6 +1307,12 @@ void WDeckBrowser::loadSelectedTrack() {
 
     m_loadedTrackRowId = trackRowId > 0 ? trackRowId : -1;
     m_loadedTrackLogged = false;
+    // What the deck is being handed, in the terms the deck draws from. A track
+    // with beats but no waveform renders as a bare grid, which looks like a
+    // rendering fault rather than a missing import.
+    kLogger.debug() << "loading" << title << "-- beats" << (pTrack->getBeats() != nullptr)
+                    << "waveform" << !pTrack->getWaveform().isNull()
+                    << "summary" << !pTrack->getWaveformSummary().isNull();
     emit loadTrackToPlayer(pTrack, kDeckGroup, false);
 }
 

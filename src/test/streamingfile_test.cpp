@@ -301,6 +301,29 @@ TEST_F(StreamingFileTest, AnUnannouncedRangeIsAHoleEvenThoughTheFileIsFullSize) 
     EXPECT_EQ(-1, stream.read(0, buffer.data(), 256));
 }
 
+TEST_F(StreamingFileTest, TheGuiThreadIsRefusedRatherThanDeadlocked) {
+    // The GUI thread is the one that announces arrivals -- the Pro DJ Link
+    // service drains transfer progress on a timer there and calls
+    // markPresent(). So a read that blocks on that thread is waiting for a
+    // message only it can deliver, and it presents as the deck freezing for
+    // the whole read timeout and then reporting a network error.
+    //
+    // A test runs on the GUI thread, which is exactly the condition, so this
+    // returns immediately rather than after fifteen seconds.
+    StreamingFile stream(m_path, kSize);
+    QByteArray buffer(256, '\xff');
+    QElapsedTimer elapsed;
+    elapsed.start();
+    EXPECT_EQ(-1, stream.read(0, buffer.data(), 256));
+    EXPECT_LT(elapsed.elapsed(), StreamingFile::kReadTimeoutMs / 2)
+            << "refused, not waited out";
+
+    // ...and bytes that are already here are still served on that thread,
+    // because the refusal is at the moment of waiting and not of asking.
+    stream.markPresent(0, 256);
+    EXPECT_EQ(256, stream.read(0, buffer.data(), 256));
+}
+
 TEST_F(StreamingFileTest, SeveralReadersAreAllWokenByOneArrival) {
     StreamingFile stream(m_path, kSize);
     QList<QThread*> readers;

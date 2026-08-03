@@ -1,7 +1,9 @@
 #include "library/deck/streamingfile.h"
 
+#include <QCoreApplication>
 #include <QDeadlineTimer>
 #include <QElapsedTimer>
+#include <QThread>
 
 #include "util/logger.h"
 
@@ -138,6 +140,16 @@ qint64 StreamingFile::read(qint64 offset, char* pBuffer, qint64 length) {
     QElapsedTimer waited;
     bool didWait = false;
     while (!m_present.contains(offset, wanted)) {
+        // The one rule this class enforces rather than documents; see the
+        // header. Refused at the moment of waiting, not the moment of asking,
+        // so a GUI-thread read of bytes that are already here still works.
+        if (QThread::currentThread() == QCoreApplication::instance()->thread()) {
+            kLogger.warning()
+                    << "refusing to wait for" << wanted << "bytes at" << offset
+                    << "on the GUI thread, which is the thread that announces "
+                       "their arrival -- this read would never have completed";
+            return -1;
+        }
         if (!didWait) {
             didWait = true;
             waited.start();

@@ -49,6 +49,22 @@ class PresentRanges {
 ///
 /// The fetcher calls markPresent() as ranges land, complete() when the file is
 /// whole, and fail() if it cannot be. Any of those wakes a blocked reader.
+///
+/// # One rule, and it is enforced here rather than remembered
+///
+/// **The GUI thread must never wait for bytes**, because the GUI thread is the
+/// one that announces their arrival: `ProLinkNetworkService::poll()` runs on a
+/// timer there, drains the transfer's progress events and calls markPresent().
+/// A read that blocks on it therefore waits for a message only it can deliver.
+/// That is not a slow load, it is a deadlock, and it presents as the deck
+/// freezing for fifteen seconds and then reporting a read timeout -- which
+/// reads like a network problem and is not one.
+///
+/// It has been written by accident once already. So read() refuses outright
+/// when it is about to wait on the GUI thread, and says why. A caller that
+/// needs a byte on that thread has to arrange for it some other way; a caller
+/// that only *might* wait keeps working, because the refusal happens at the
+/// moment of waiting and not at the moment of asking.
 class StreamingFile {
   public:
     StreamingFile(const QString& localPath, qint64 size);
@@ -57,9 +73,10 @@ class StreamingFile {
     /// Read into *pBuffer*, blocking until the bytes are there.
     ///
     /// Returns the number of bytes read, 0 at end of file, or -1 if the
-    /// transfer failed or was abandoned while waiting. Never returns fewer
-    /// bytes than asked for unless the file ends -- a short read looks like end
-    /// of stream to a decoder, which would truncate the track.
+    /// transfer failed, was abandoned while waiting, or would have had to wait
+    /// on the GUI thread. Never returns fewer bytes than asked for unless the
+    /// file ends -- a short read looks like end of stream to a decoder, which
+    /// would truncate the track.
     qint64 read(qint64 offset, char* pBuffer, qint64 length);
 
     /// Bytes `[offset, offset + length)` are now on disk.
