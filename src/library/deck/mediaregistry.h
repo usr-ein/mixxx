@@ -146,6 +146,21 @@ class MediaRegistry : public QObject {
     /// a complete file in tier 1 is what makes loading it again instant.
     void stopStreaming(const QString& localPath);
 
+    /// Tell the network which track this deck has loaded, and whose medium it
+    /// came from.
+    ///
+    /// **Not decoration: a tempo without this is ignored.** A CDJ publishes
+    /// what it is playing alongside what tempo it is playing at, and one asked
+    /// to follow a master that claims a tempo and no track does not follow it.
+    ///
+    /// *rekordboxId* is the row id in that medium's own `export.pdb`, which is
+    /// the only identifier the network understands — the deck's own row id
+    /// means nothing to anyone else.
+    void announceLoadedTrack(const MediumId& medium, quint32 rekordboxId);
+
+    /// Nothing is loaded here any more.
+    void announceNothingLoaded();
+
     /// What we are offering to the players on the network, and who is reading
     /// it. Empty without Pro DJ Link.
     ///

@@ -128,6 +128,13 @@ class ProLinkNetworkService : public QObject {
             const QString& localPath,
             quint32 headBytes);
 
+    /// Say which track this deck has loaded, and whose medium it came from.
+    ///
+    /// A player number of zero means nothing is loaded. See
+    /// `MediaRegistry::announceLoadedTrack` for why a tempo without this is
+    /// ignored by every other player.
+    void setLoadedTrack(int sourcePlayer, MediaSlot slot, quint32 rekordboxId);
+
     /// Fetch a track's artwork into `localPath`.
     void fetchArtwork(const QByteArray& mac,
             MediaSlot slot,

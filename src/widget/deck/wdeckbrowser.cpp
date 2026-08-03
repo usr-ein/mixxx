@@ -162,6 +162,11 @@ WDeckBrowser::WDeckBrowser(QWidget* pParent, Library* pLibrary, UserSettingsPoin
             // frames, before anything has decoded the audio. Same trap as
             // camelot_order: leave it out and fieldIndex() quietly returns -1.
             LIBRARYTABLE_SAMPLERATE,
+            // The track's id in its own medium's export.pdb, which is the only
+            // identifier the network understands -- our own row id means
+            // nothing to another player. Published while playing, because a
+            // deck that states a tempo always states what it is playing.
+            QStringLiteral("rb_id"),
             LIBRARYTABLE_BPM,
             LIBRARYTABLE_KEY,
             LIBRARYTABLE_KEY_ID,
@@ -1200,6 +1205,7 @@ void WDeckBrowser::loadSelectedTrack() {
     const QString source = field(TRACKLOCATIONSTABLE_LOCATION);
     const QString analyzePath = field(QStringLiteral("analyze_path"));
     const int sampleRate = field(LIBRARYTABLE_SAMPLERATE).toInt();
+    const auto rekordboxId = static_cast<quint32>(field(QStringLiteral("rb_id")).toUInt());
     const QString artist = field(LIBRARYTABLE_ARTIST);
     const QString title = field(LIBRARYTABLE_TITLE);
     const QString album = field(LIBRARYTABLE_ALBUM);
@@ -1310,6 +1316,11 @@ void WDeckBrowser::loadSelectedTrack() {
     // What the deck is being handed, in the terms the deck draws from. A track
     // with beats but no waveform renders as a bare grid, which looks like a
     // rendering fault rather than a missing import.
+    // What the network is told we are playing. A tempo with no track beside
+    // it is a state no deck publishes, and one that no CDJ will follow.
+    if (m_pRegistry) {
+        m_pRegistry->announceLoadedTrack(medium, rekordboxId);
+    }
     kLogger.debug() << "loading" << title << "-- beats" << (pTrack->getBeats() != nullptr)
                     << "waveform" << !pTrack->getWaveform().isNull()
                     << "summary" << !pTrack->getWaveformSummary().isNull();

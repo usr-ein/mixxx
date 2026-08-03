@@ -198,6 +198,12 @@ ProLinkNetworkService::ProLinkNetworkService(QObject* parent)
             &ControlPushButton::valueChanged,
             this,
             [this](double value) {
+                // Published either way, so the rest of the network can see
+                // that this deck is following rather than flying its own
+                // tempo -- that is what a CDJ lights its SYNC button from.
+                if (m_pImpl->pSession) {
+                    (*m_pImpl->pSession)->set_synced(value > 0);
+                }
                 if (value > 0) {
                     // Once, on engage. See alignPhaseToMaster().
                     alignPhaseToMaster();
@@ -222,6 +228,18 @@ ProLinkNetworkService::ProLinkNetworkService(QObject* parent)
 }
 
 /*static*/ const char* ProLinkNetworkService::kDeckGroup = "[Channel1]";
+
+void ProLinkNetworkService::setLoadedTrack(int sourcePlayer,
+        MediaSlot slot,
+        quint32 rekordboxId) {
+    if (!m_pImpl->pSession) {
+        return;
+    }
+    (*m_pImpl->pSession)
+            ->set_loaded_track(static_cast<quint8>(qBound(0, sourcePlayer, 255)),
+                    toRustSlot(slot),
+                    rekordboxId);
+}
 
 void ProLinkNetworkService::publishPlayback() {
     if (!m_pControls) {

@@ -708,6 +708,56 @@ QString MediaRegistry::startStreaming(const MediumId& medium,
     return localPath;
 }
 
+void MediaRegistry::announceLoadedTrack(const MediumId& medium, quint32 rekordboxId) {
+    if (!m_pNetwork || rekordboxId == 0) {
+        kLogger.debug() << "nothing to announce as loaded -- rekordbox id" << rekordboxId
+                        << "for" << medium.key();
+        announceNothingLoaded();
+        return;
+    }
+    // Whose medium, in the network's terms. A remote medium belongs to the
+    // player it came from; a local stick belongs to us, and a CDJ browsing it
+    // over LINK sees exactly that -- so this is the same answer a real deck
+    // gives when it plays off its own USB.
+    int player = 0;
+    mixxx::prolink::MediaSlot slot = mixxx::prolink::MediaSlot::Usb;
+    if (medium.isLocal()) {
+        player = m_pNetwork->announcedNumber();
+        // Which slot we are serving it in, rather than an assumption: two
+        // sticks are served as USB and SD, and naming the wrong one sends a
+        // peer looking in an empty slot.
+        for (const mixxx::prolink::server::ServedSlot& served :
+                m_pNetwork->serveStatus().media) {
+            if (!served.localPath.isEmpty() && medium.key().contains(served.localPath)) {
+                slot = served.slot;
+                break;
+            }
+        }
+    } else {
+        QByteArray mac;
+        if (!addressOf(medium, &mac, &slot)) {
+            announceNothingLoaded();
+            return;
+        }
+        player = playerNumberFor(mac);
+    }
+    if (player <= 0) {
+        // Nothing to attribute the track to. Saying nothing is right: a track
+        // id without a player is meaningless to every other device.
+        announceNothingLoaded();
+        return;
+    }
+    kLogger.debug() << "announcing what is loaded: player" << player << "slot"
+                    << static_cast<int>(slot) << "rekordbox id" << rekordboxId;
+    m_pNetwork->setLoadedTrack(player, slot, rekordboxId);
+}
+
+void MediaRegistry::announceNothingLoaded() {
+    if (m_pNetwork) {
+        m_pNetwork->setLoadedTrack(0, mixxx::prolink::MediaSlot::Empty, 0);
+    }
+}
+
 void MediaRegistry::stopStreaming(const QString& localPath) {
     if (localPath.isEmpty()) {
         return;
@@ -919,6 +969,14 @@ QString MediaRegistry::startStreaming(const MediumId& medium,
     Q_UNUSED(sourcePath);
     Q_UNUSED(analyzePath);
     return QString();
+}
+
+void MediaRegistry::announceLoadedTrack(const MediumId& medium, quint32 rekordboxId) {
+    Q_UNUSED(medium);
+    Q_UNUSED(rekordboxId);
+}
+
+void MediaRegistry::announceNothingLoaded() {
 }
 
 void MediaRegistry::stopStreaming(const QString& localPath) {
