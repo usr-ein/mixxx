@@ -187,10 +187,12 @@ bool createTables(QSqlDatabase& database) {
     // stick. We mount read-only and never add to it.
     //
     // deck_play_log is ours, and only ever this boot's -- it lives in the same
-    // temporary tables as everything else here and goes with them. There is no
-    // timestamp in the stick's history to compare against, only a session and a
-    // position, which is why the merge ranks ours above it wholesale rather
-    // than interleaving the two.
+    // temporary tables as everything else here and goes with them.
+    //
+    // The stick's history has no date we can read (see PdbHistoryPlaylist), so
+    // the merge ranks ours above it wholesale rather than interleaving. That is
+    // not a compromise in practice: everything in our log happened since this
+    // boot, so it IS more recent than anything a previous player wrote.
     query.prepare(QStringLiteral(
             "CREATE TABLE IF NOT EXISTS deck_history ("
             "    id INTEGER PRIMARY KEY AUTOINCREMENT,"
@@ -504,9 +506,12 @@ IngestResult writeMedium(QSqlDatabase& database,
     // our own here -- this is somebody else's record, and it is the only one
     // that survives on the medium.
     //
-    // `session` is the history playlist's row id rather than a timestamp,
-    // because the format has no timestamp. It ascends with the session, which
-    // is all the ordering "Last played" needs.
+    // `session` is the history playlist's row id rather than a date, because
+    // the history playlist row carries no date -- only an id and a name. It
+    // ascends with the session, which is all the ordering "Last played" needs.
+    //
+    // The export does hold dates for sessions, in an undecoded table; see
+    // PdbHistoryPlaylist in prolinkpdb.h for what is known and what is not.
     QSqlQuery insertHistory(database);
     insertHistory.prepare(QStringLiteral(
             "INSERT INTO deck_history (medium, track_id, session, position) "

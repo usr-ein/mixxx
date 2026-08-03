@@ -133,10 +133,12 @@ QString search(QSqlDatabase& db, const MediumId& medium, const QString& needle) 
 
 QString lastPlayed(QSqlDatabase& db, const MediumId& medium) {
     const QString mediumLiteral = mediumLit(db, medium);
-    // Two histories, merged. `tier` is what makes ours win: a track played on
-    // this deck tonight is more recent than anything a CDJ wrote to the stick,
-    // whatever the numbers say, because the stick's history carries no
-    // timestamp we can compare against -- only a session and a position.
+    // Two histories, merged. `tier` is what makes ours win, and it is sound
+    // rather than a fudge: everything in deck_play_log happened since this
+    // boot, so it really is more recent than any session a previous player
+    // wrote to the stick. Within each tier the ordering is exact -- real
+    // timestamps for ours, session-then-position for the stick's, which ascends
+    // chronologically because rekordbox numbers sessions as it writes them.
     return QStringLiteral(
             "SELECT track_id, ROW_NUMBER() OVER (ORDER BY tier DESC, ord DESC) "
             "  AS position FROM ("

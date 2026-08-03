@@ -69,11 +69,25 @@ struct PdbPlaylist {
 
 /// One history playlist: what a player played off this medium, in order.
 ///
-/// rekordbox writes one every time a player mounts the medium. **There is no
-/// timestamp anywhere in the format** — order is all there is: a later id means
-/// a later session, and a later position within one means later in that
-/// session. That is why "Last played" can rank these among themselves but
-/// cannot interleave them with plays this deck made.
+/// rekordbox writes one every time a player mounts the medium.
+///
+/// **No time of its own.** The row is an id and a name (`HISTORY 001`) and
+/// nothing else, and the entries under it are track/playlist/index — verified
+/// against a real 651-track export. So ordering is all these carry: a later id
+/// is a later session, and a later position within one is later in that
+/// session. That is enough to rank them among themselves, and not enough to
+/// interleave them with plays this deck made — hence the tiering in
+/// `query::lastPlayed()`.
+///
+/// **A date does exist elsewhere, undecoded.** The export also has a `history`
+/// table (page type 19) that nothing here reads: 96 fixed 40-byte rows on the
+/// sample, each carrying an ascending id and an ASCII `YYYY-MM-DD`, all
+/// `2026-01-04` on that stick. Decoding it would give these sessions a real
+/// date. It is not decoded because one export with a single distinct date is
+/// not enough to tell which field means what — the row also holds two small
+/// integers and a four-character string (`1000`) that could plausibly be a
+/// time, a player number or neither. It wants a second export from a different
+/// day before anyone guesses.
 struct PdbHistoryPlaylist {
     quint32 id = 0;
     QString name; ///< `HISTORY 001` and so on.

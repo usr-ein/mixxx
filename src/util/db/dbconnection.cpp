@@ -1,5 +1,6 @@
 #include <QSqlDriver>
 #include <QSqlError>
+#include <QSqlQuery>
 
 #ifdef __SQLITE3__
 #include <sqlite3.h>
@@ -350,6 +351,59 @@ bool DbConnection::open() {
         m_sqlDatabase.close();
         return false; // abort
     }
+
+    // Write-ahead logging, so readers and writers stop blocking each other.
+    //
+    // This deck reads a rekordbox stick on a worker thread while the GUI thread
+    // is querying the same database to draw the browser -- and in the default
+    // rollback-journal mode a writer takes an EXCLUSIVE lock, so the reads
+    // block for as long as it holds it. WAL lets them carry on regardless.
+    //
+    // **It is not a card-wear win, and it is not a loss either.** Both modes
+    // write the data twice: rollback copies the original pages to a journal and
+    // then writes the new ones, WAL appends to the log and then copies it into
+    // the database at the next checkpoint. Reading a 651-track stick moves
+    // roughly half a megabyte of rows, so either way it is about a megabyte of
+    // card writes per stick -- a rounding error next to the journald traffic
+    // log2ram already exists to absorb. Wear is not the axis this decision
+    // turns on.
+    //
+    // What it does buy is the last of the interface hitch. One transaction per
+    // medium took the block from fifteen seconds to a fraction of one; this
+    // takes it to nothing, which matters because the moment a DJ plugs a stick
+    // in is precisely the moment they are also scrolling the browser.
+    //
+    // The better answer for a deck whose browse tables are rebuilt on every
+    // boot is not to put them on the card at all -- a second database on tmpfs,
+    // ATTACHed, would cost zero card writes and share no locks with Mixxx's own
+    // library. That is a larger change and it fits the whole-filesystem-on-tmpfs
+    // plan, so it is noted rather than done here.
+    //
+    // Three things worth knowing before changing this:
+    //
+    //   - It is PERSISTENT. The mode lives in the database file header, so it
+    //     survives this line being deleted; going back needs an explicit
+    //     `PRAGMA journal_mode = DELETE`.
+    //   - It is executed per connection but applies to the FILE, so running it
+    //     on each of the pool's connections is redundant rather than wrong. The
+    //     pragma returns the resulting mode, which is why the result is read
+    //     back rather than assumed.
+    //   - It needs a real filesystem: WAL uses shared memory beside the
+    //     database, so a database on a network mount cannot use it and SQLite
+    //     will refuse, leaving the mode as it was. That is a safe failure and
+    //     is why this only warns.
+    QSqlQuery walQuery(m_sqlDatabase);
+    if (walQuery.exec(QStringLiteral("PRAGMA journal_mode = WAL")) && walQuery.next()) {
+        const QString mode = walQuery.value(0).toString();
+        if (mode.compare(QStringLiteral("wal"), Qt::CaseInsensitive) != 0) {
+            kLogger.warning() << "Could not enable WAL; journal mode is" << mode;
+        } else if (kLogger.debugEnabled()) {
+            kLogger.debug() << "Journal mode:" << mode;
+        }
+    } else {
+        kLogger.warning() << "PRAGMA journal_mode failed" << walQuery.lastError();
+    }
+
     return true;
 }
 
