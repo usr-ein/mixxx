@@ -39,6 +39,9 @@ struct IngestResult {
     int trackCount = 0;
     int playlistCount = 0; ///< Playlists only; folders are not offered as one.
     int folderCount = 0;
+    /// Rows written to `deck_history`: every track of every past session the
+    /// medium carries, so a busy stick contributes far more than it has tracks.
+    int historyCount = 0;
 };
 
 /// Write a parsed medium into the tables, replacing whatever was there for it.

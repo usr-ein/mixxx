@@ -107,6 +107,18 @@ PdbContents parsePdb(const QByteArray& data) {
         out.playlists.insert(playlist.id, playlist);
     }
 
+    out.history.reserve(static_cast<int>(parsed.history.size()));
+    for (const ::prolink::PdbHistoryPlaylist& from : parsed.history) {
+        PdbHistoryPlaylist playlist;
+        playlist.id = from.id;
+        playlist.name = toQString(from.name);
+        playlist.trackIds.reserve(static_cast<int>(from.track_ids.size()));
+        for (const ::std::uint32_t id : from.track_ids) {
+            playlist.trackIds.append(id);
+        }
+        out.history.append(playlist);
+    }
+
     out.artists = toHash(parsed.artists);
     out.albums = toHash(parsed.albums);
     out.genres = toHash(parsed.genres);

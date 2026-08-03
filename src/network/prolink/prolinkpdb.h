@@ -67,6 +67,20 @@ struct PdbPlaylist {
     QList<quint32> trackIds;
 };
 
+/// One history playlist: what a player played off this medium, in order.
+///
+/// rekordbox writes one every time a player mounts the medium. **There is no
+/// timestamp anywhere in the format** — order is all there is: a later id means
+/// a later session, and a later position within one means later in that
+/// session. That is why "Last played" can rank these among themselves but
+/// cannot interleave them with plays this deck made.
+struct PdbHistoryPlaylist {
+    quint32 id = 0;
+    QString name; ///< `HISTORY 001` and so on.
+    /// In play order.
+    QList<quint32> trackIds;
+};
+
 /// Everything read out of one `export.pdb`.
 struct PdbContents {
     /// Whether it parsed. On false the rest is empty and `error` says why.
@@ -75,6 +89,8 @@ struct PdbContents {
     QList<PdbTrack> tracks;
     /// Keyed by id, because the tree is built by following `parentId`.
     QMap<quint32, PdbPlaylist> playlists;
+    /// One per player mount, oldest first.
+    QList<PdbHistoryPlaylist> history;
     QHash<quint32, QString> artists;
     QHash<quint32, QString> albums;
     QHash<quint32, QString> genres;

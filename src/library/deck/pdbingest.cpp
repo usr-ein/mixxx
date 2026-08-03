@@ -255,7 +255,8 @@ void clearMedium(QSqlDatabase& database, const MediumId& medium) {
         LOG_FAILED_QUERY(query);
     }
 
-    for (const QString& table : {kPlaylistsTable, kLibraryTable}) {
+    for (const QString& table :
+            {kPlaylistsTable, kLibraryTable, QStringLiteral("deck_history")}) {
         query.prepare(QStringLiteral("DELETE FROM %1 WHERE medium = :medium").arg(table));
         query.bindValue(QStringLiteral(":medium"), medium.key());
         if (!query.exec()) {
@@ -498,6 +499,47 @@ IngestResult writeMedium(QSqlDatabase& database,
         addEntries(playlistId, playlist.trackIds);
     }
 
+    // The medium's own history: what other players played off this stick, in
+    // the order they played it. We mount read-only and never write a session of
+    // our own here -- this is somebody else's record, and it is the only one
+    // that survives on the medium.
+    //
+    // `session` is the history playlist's row id rather than a timestamp,
+    // because the format has no timestamp. It ascends with the session, which
+    // is all the ordering "Last played" needs.
+    QSqlQuery insertHistory(database);
+    insertHistory.prepare(QStringLiteral(
+            "INSERT INTO deck_history (medium, track_id, session, position) "
+            "VALUES (:medium, :track_id, :session, :position)"));
+    VERIFY_OR_DEBUG_ASSERT(insertHistory.lastError().type() == QSqlError::NoError) {
+        LOG_FAILED_QUERY(insertHistory) << "could not prepare the history insert";
+    }
+    else {
+        int historyRows = 0;
+        for (const mixxx::prolink::PdbHistoryPlaylist& session : contents.history) {
+            int position = 1;
+            for (const quint32 rbId : session.trackIds) {
+                const auto rowId = rowIds.constFind(rbId);
+                if (rowId == rowIds.constEnd()) {
+                    // A history entry naming a track that has since been
+                    // removed from the medium. Real, and skipping it is right.
+                    ++position;
+                    continue;
+                }
+                insertHistory.bindValue(QStringLiteral(":medium"), medium.key());
+                insertHistory.bindValue(QStringLiteral(":track_id"), *rowId);
+                insertHistory.bindValue(QStringLiteral(":session"), session.id);
+                insertHistory.bindValue(QStringLiteral(":position"), position++);
+                if (!insertHistory.exec()) {
+                    LOG_FAILED_QUERY(insertHistory);
+                    continue;
+                }
+                ++historyRows;
+            }
+        }
+        result.historyCount = historyRows;
+    }
+
     // "All tracks", in pdb order, as a real playlist row. Transitional in the
     // same way `name` is: the browser builds its own All tracks straight off
     // deck_library, but the old view can only show a playlist.
@@ -530,8 +572,9 @@ IngestResult writeMedium(QSqlDatabase& database,
     } else {
         transaction.commit();
         kLogger.info() << "wrote" << result.trackCount << "tracks,"
-                       << result.playlistCount << "playlists and"
-                       << result.folderCount << "folders for" << medium.key();
+                       << result.playlistCount << "playlists,"
+                       << result.folderCount << "folders and"
+                       << result.historyCount << "history entries for" << medium.key();
     }
     return result;
 }

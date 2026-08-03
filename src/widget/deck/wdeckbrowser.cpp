@@ -1,7 +1,9 @@
 #include "widget/deck/wdeckbrowser.h"
 
 #include <QSqlDatabase>
+#include <QDateTime>
 #include <QHBoxLayout>
+#include <QSqlQuery>
 #include <QStackedWidget>
 #include <QVBoxLayout>
 
@@ -13,6 +15,7 @@
 #include "library/deck/deckqueries.h"
 #include "library/deck/decktrackmodel.h"
 #include "library/deck/pdbingest.h"
+#include "library/queryutil.h"
 #include "library/library.h"
 #include "library/trackcollection.h"
 #include "library/trackcollectionmanager.h"
@@ -309,6 +312,12 @@ WDeckBrowser::WDeckBrowser(QWidget* pParent, Library* pLibrary, UserSettingsPoin
     m_pRateRange = std::make_unique<ControlProxy>(
             kDeckGroup, QStringLiteral("rateRange"), this);
     m_pRateRange->connectValueChanged(this, &WDeckBrowser::onRateRangeChanged);
+    // Our half of "Last played": what THIS deck played, which is the half that
+    // matters during a set, since the stick's own history is somebody else's
+    // and stops at the last time a real CDJ mounted it.
+    m_pPlayPosition = std::make_unique<ControlProxy>(
+            kDeckGroup, QStringLiteral("playposition"), this);
+    m_pPlayPosition->connectValueChanged(this, &WDeckBrowser::onPlayPositionChanged);
 
     m_pLevelControl = std::make_unique<ControlObject>(ConfigKey("[Browser]", "level"));
     m_pLevelControl->setReadOnly();
@@ -847,10 +856,9 @@ void WDeckBrowser::updateInfoPanel() {
     add(tr("Key"), LIBRARYTABLE_KEY);
     add(tr("Rating"), LIBRARYTABLE_RATING);
     add(tr("Added"), LIBRARYTABLE_DATETIMEADDED);
-    // Not "Last played": the deck has no last-played timestamp for an external
-    // medium yet -- deck_play_log is not written and the stick's own rekordbox
-    // history needs a bridge change. The play COUNT is what the pdb gives us,
-    // and it is worth something on its own.
+    // The play count rekordbox recorded, which is a different thing from
+    // "Last played" -- that is a whole list of its own now, built from the
+    // medium's history playlists merged with this deck's own log.
     add(tr("Plays"), LIBRARYTABLE_TIMESPLAYED);
     add(tr("Comment"), LIBRARYTABLE_COMMENT);
 
@@ -864,6 +872,41 @@ void WDeckBrowser::onPlayingKeyChanged() {
     m_pTrackDelegate->setPlayingKeyId(
             static_cast<int>(ControlObject::get(ConfigKey(kDeckGroup, "key"))));
     m_pTrackView->viewport()->update();
+}
+
+void WDeckBrowser::logPlay() {
+    if (m_loadedTrackRowId < 0 || m_loadedTrackLogged) {
+        return;
+    }
+    m_loadedTrackLogged = true;
+
+    QSqlDatabase db = database();
+    if (!db.isOpen()) {
+        return;
+    }
+    QSqlQuery query(db);
+    query.prepare(QStringLiteral(
+            "INSERT INTO deck_play_log (track_id, played_at) "
+            "VALUES (:track_id, :played_at)"));
+    query.bindValue(QStringLiteral(":track_id"), m_loadedTrackRowId);
+    // Seconds since the epoch. Only ever compared against other rows in this
+    // same table, and the table does not survive a boot, so the absolute value
+    // never has to mean anything.
+    query.bindValue(QStringLiteral(":played_at"),
+            static_cast<qint64>(QDateTime::currentSecsSinceEpoch()));
+    if (!query.exec()) {
+        LOG_FAILED_QUERY(query);
+    }
+}
+
+void WDeckBrowser::onPlayPositionChanged(double position) {
+    // Half way through is "played". Mixxx's own threshold for its play counter
+    // is configurable and this is not it: what Last played answers is "did I
+    // already drop this tonight", and a track a DJ pulled out after eight bars
+    // is one they did not.
+    if (position >= 0.5) {
+        logPlay();
+    }
 }
 
 void WDeckBrowser::onRateRangeChanged() {
@@ -920,6 +963,15 @@ void WDeckBrowser::loadSelectedTrack() {
         kLogger.warning() << "no track at row" << row;
         return;
     }
+    // Which deck_library row this is, kept for the play log. Taken here because
+    // this is the only moment it is unambiguous: two sticks can hold clones of
+    // the same file, so afterwards the path alone does not say which medium it
+    // came from.
+    const int idColumn = m_pTrackModel->fieldIndex(QStringLiteral("track_id"));
+    m_loadedTrackRowId = idColumn >= 0
+            ? m_pTrackModel->index(row, idColumn).data(Qt::DisplayRole).toInt()
+            : -1;
+    m_loadedTrackLogged = false;
     emit loadTrackToPlayer(pTrack, kDeckGroup, false);
 }
 

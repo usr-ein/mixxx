@@ -68,6 +68,8 @@ class WDeckBrowser : public QWidget, public WBaseWidget {
     /// The tempo fader's range changed: the BPM buckets are a different size
     /// now, so rebuild that level in place if it is the one on screen.
     void onRateRangeChanged();
+    /// The deck got far enough into the loaded track to call it played.
+    void onPlayPositionChanged(double position);
     /// A breadcrumb segment was clicked: pop back to that level.
     void onBreadcrumbClicked(const QString& levelIndex);
 
@@ -159,6 +161,14 @@ class WDeckBrowser : public QWidget, public WBaseWidget {
     std::unique_ptr<ControlProxy> m_pPlayingKey;
     std::unique_ptr<ControlProxy> m_pTrackLoaded;
     std::unique_ptr<ControlProxy> m_pRateRange;
+    std::unique_ptr<ControlProxy> m_pPlayPosition;
+    /// The deck_library row currently on the deck, and whether it has already
+    /// been logged. Remembered at load rather than matched back from the Track:
+    /// two media can hold clones of the same file, so the path does not
+    /// identify the row and the medium would have to be guessed.
+    int m_loadedTrackRowId = -1;
+    bool m_loadedTrackLogged = false;
+    void logPlay();
 
     // The deck's controls. Rotate, push, back, and the two SORT meanings.
     std::unique_ptr<ControlEncoder> m_pMove;
