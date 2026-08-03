@@ -60,6 +60,7 @@
 #include "widget/wnumberrate.h"
 #include "widget/woverview.h"
 #include "widget/deck/wdeckbrowser.h"
+#include "widget/deck/wdecktoast.h"
 #include "widget/wprolinkphasemeter.h"
 #include "widget/wtempopanel.h"
 #include "widget/wpixmapstore.h"
@@ -543,6 +544,8 @@ QList<QWidget*> LegacySkinParser::parseNode(const QDomElement& node) {
         result = wrapWidget(parseOverview(node));
     } else if (nodeName == "DeckBrowser") {
         result = wrapWidget(parseDeckBrowser(node));
+    } else if (nodeName == "DeckToast") {
+        result = wrapWidget(parseDeckToast(node));
     } else if (nodeName == "ProLinkPhaseMeter") {
         result = wrapWidget(parseProLinkPhaseMeter(node));
     } else if (nodeName == "Visual") {
@@ -1088,6 +1091,17 @@ QWidget* LegacySkinParser::parseDeckBrowser(const QDomElement& node) {
     // point the track table uses.
     pBrowser->Init();
     return pBrowser;
+}
+
+QWidget* LegacySkinParser::parseDeckToast(const QDomElement& node) {
+    auto* pToast = new mixxx::deck::WDeckToast(m_pParent);
+    commonWidgetSetup(node, pToast);
+    pToast->setup(node, *m_pContext);
+    // Deliberately NOT given the keyboard event filter: it takes no input at
+    // all, and installing one on a widget that is transparent to the mouse
+    // invites the question of why.
+    pToast->Init();
+    return pToast;
 }
 
 QWidget* LegacySkinParser::parseProLinkPhaseMeter(const QDomElement& node) {

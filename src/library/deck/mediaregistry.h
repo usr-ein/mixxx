@@ -65,6 +65,16 @@ class MediaRegistry : public QObject {
             QObject* pParent = nullptr);
     ~MediaRegistry() override;
 
+    /// The one that exists, or null before the browser is built.
+    ///
+    /// A deliberate shortcut, and a small one. The toast widget has to watch
+    /// these signals, and it lives at the top of the skin's stack rather than
+    /// inside the browser -- a stick landing mid-set has to be visible over the
+    /// waveform, not only over a menu. Wiring the two through the skin parser
+    /// would make widget creation order load-bearing in a file skin authors
+    /// edit, which is a worse thing to owe than one accessor.
+    static MediaRegistry* instance();
+
     const QList<MediumInfo>& media() const {
         return m_media;
     }

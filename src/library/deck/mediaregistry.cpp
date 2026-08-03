@@ -25,10 +25,19 @@ constexpr int kRescanDebounceMs = 400;
 namespace mixxx {
 namespace deck {
 
+namespace {
+MediaRegistry* s_pInstance = nullptr;
+} // namespace
+
+MediaRegistry* MediaRegistry::instance() {
+    return s_pInstance;
+}
+
 MediaRegistry::MediaRegistry(mixxx::DbConnectionPoolPtr dbConnectionPool, QObject* pParent)
         : QObject(pParent),
           m_dbConnectionPool(std::move(dbConnectionPool)) {
     qRegisterMetaType<mixxx::deck::MediumInfo>("mixxx::deck::MediumInfo");
+    s_pInstance = this;
 
     m_rescanDebounce.setSingleShot(true);
     m_rescanDebounce.setInterval(kRescanDebounceMs);
@@ -50,6 +59,9 @@ MediaRegistry::MediaRegistry(mixxx::DbConnectionPoolPtr dbConnectionPool, QObjec
 }
 
 MediaRegistry::~MediaRegistry() {
+    if (s_pInstance == this) {
+        s_pInstance = nullptr;
+    }
     // The worker holds a pool pointer and writes to the database; letting it
     // finish is cheaper than making every step of it cancellable.
     if (m_readWatcher.isRunning()) {
