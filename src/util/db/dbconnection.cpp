@@ -373,11 +373,14 @@ bool DbConnection::open() {
     // takes it to nothing, which matters because the moment a DJ plugs a stick
     // in is precisely the moment they are also scrolling the browser.
     //
-    // The better answer for a deck whose browse tables are rebuilt on every
-    // boot is not to put them on the card at all -- a second database on tmpfs,
-    // ATTACHed, would cost zero card writes and share no locks with Mixxx's own
-    // library. That is a larger change and it fits the whole-filesystem-on-tmpfs
-    // plan, so it is noted rather than done here.
+    // Considered and rejected: a second database on tmpfs for the deck's browse
+    // tables, ATTACHed. It would cost zero card writes and share no locks with
+    // Mixxx's own library, which sounds strictly better for tables that are
+    // rebuilt on every boot anyway -- but it buys that with a second schema, a
+    // second connection lifetime, and schema-qualified names threaded through
+    // BaseSqlTableModel and BaseTrackCache, neither of which is asking for one.
+    // The megabyte per stick it would save is not worth that; one database is
+    // the simpler thing and this pragma is what makes it behave.
     //
     // Three things worth knowing before changing this:
     //
