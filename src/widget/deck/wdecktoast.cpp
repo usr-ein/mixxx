@@ -5,6 +5,7 @@
 #include <QMouseEvent>
 #include <QVBoxLayout>
 
+#include "library/deck/trackcache.h"
 #include "util/logger.h"
 
 namespace {
@@ -80,10 +81,19 @@ void WDeckToast::onAppeared(mixxx::deck::MediumInfo medium) {
 }
 
 void WDeckToast::onVanished(mixxx::deck::MediumInfo medium) {
-    // TODO(cache): once tracks play from a local cache, an eject while playing
-    // from this medium says so instead -- "SAM2 removed, current track is
-    // cached and stays playable" (browser-prd.md 12.3). Until the cache exists
-    // that sentence would be a lie, so it is not said.
+    // The deck plays from a copy, so pulling a stick mid-track is survivable --
+    // and worth saying, because everything a DJ knows about CDJs says it should
+    // not be. The message is only earned when there is genuinely a pinned copy,
+    // though: claiming it and then falling silent would be worse than saying
+    // nothing.
+    TrackCache* pCache = TrackCache::instance();
+    if (pCache && pCache->hasPinnedFrom(medium.id)) {
+        show(medium,
+                tr("%1 removed — current track is cached and stays playable.")
+                        .arg(medium.name),
+                true);
+        return;
+    }
     show(medium, tr("%1 ejected").arg(medium.name), false);
 }
 

@@ -19,6 +19,8 @@
 #include "library/library.h"
 #include "library/trackcollection.h"
 #include "library/trackcollectionmanager.h"
+#include "track/track.h"
+#include "track/trackref.h"
 #include "moc_wdeckbrowser.cpp"
 #include "util/logger.h"
 #include "widget/deck/deckdelegates.h"
@@ -222,7 +224,40 @@ WDeckBrowser::WDeckBrowser(QWidget* pParent, Library* pLibrary, UserSettingsPoin
     connect(m_pSortMenu, &WDeckSortMenu::sortChosen, this, &WDeckBrowser::onSortChosen);
     connect(m_pSortMenu, &WDeckSortMenu::defaultChosen, this, &WDeckBrowser::onSortDefault);
 
+    // The deck never plays off removable media; everything goes through here.
+    m_pCache = std::make_unique<TrackCache>(this);
+
+    // A DJ looks at a track before loading it, so the dwell is what turns
+    // "selected" into "probably wanted" without copying everything scrolled
+    // past. 300 ms is short enough to be ready by the time the encoder is
+    // pushed and long enough that spinning through a list copies nothing.
+    m_prefetchDwell.setSingleShot(true);
+    m_prefetchDwell.setInterval(300);
+    connect(&m_prefetchDwell, &QTimer::timeout, this, [this]() {
+        if (!inTrackList() || !m_pCache) {
+            return;
+        }
+        const int row = m_pTrackView->selectedRow();
+        const int locationColumn = m_pTrackModel->fieldIndex(TRACKLOCATIONSTABLE_LOCATION);
+        if (row < 0 || locationColumn < 0) {
+            return;
+        }
+        const QString source =
+                m_pTrackModel->index(row, locationColumn).data(Qt::DisplayRole).toString();
+        m_pCache->prefetch(currentMedium(), source);
+    });
+
     m_pRegistry = std::make_unique<MediaRegistry>(m_pLibrary->dbConnectionPool(), this);
+    // A medium that has gone cannot be re-read, so what is cached from it is
+    // now the only copy and must not be dropped to reclaim space.
+    connect(m_pRegistry.get(),
+            &MediaRegistry::mediumVanished,
+            this,
+            [this](mixxx::deck::MediumInfo medium) {
+                if (m_pCache) {
+                    m_pCache->markUnreachable(medium.id);
+                }
+            });
     connect(m_pRegistry.get(),
             &MediaRegistry::mediaChanged,
             this,
@@ -767,6 +802,13 @@ void WDeckBrowser::runSearch() {
 void WDeckBrowser::onSelectionMoved(int row) {
     Q_UNUSED(row);
     updateInfoPanel();
+    if (inTrackList()) {
+        m_prefetchDwell.start();
+    }
+}
+
+MediumId WDeckBrowser::currentMedium() const {
+    return m_stack.isEmpty() ? MediumId() : m_stack.last().medium;
 }
 
 void WDeckBrowser::applySort() {
@@ -991,10 +1033,57 @@ void WDeckBrowser::loadSelectedTrack() {
     }
     const QModelIndex index = m_pTrackModel->index(row, 0);
     m_pTrackModel->willLoadTrack(index);
-    TrackPointer pTrack = m_pTrackModel->getTrack(index);
+
+    // Play the COPY, never the medium. This is the whole point of the cache:
+    // the file under the playhead has to be one that survives the stick being
+    // pulled out of the deck.
+    const int locationColumn = m_pTrackModel->fieldIndex(TRACKLOCATIONSTABLE_LOCATION);
+    const QString source = locationColumn >= 0
+            ? m_pTrackModel->index(row, locationColumn).data(Qt::DisplayRole).toString()
+            : QString();
+    QString playPath = source;
+    if (m_pCache && !source.isEmpty()) {
+        // Usually already there from the dwell prefetch; this is the slow path.
+        const QString cached = m_pCache->ensureLocal(currentMedium(), source);
+        if (!cached.isEmpty()) {
+            playPath = cached;
+            if (!m_pinnedPath.isEmpty()) {
+                m_pCache->unpin(m_pinnedPath);
+            }
+            m_pCache->pin(cached);
+            m_pinnedPath = cached;
+        } else {
+            // Could not copy it -- a remote medium whose audio has not been
+            // fetched, or a read error. Falling through to the original path
+            // keeps a local stick playable; a remote one simply will not load,
+            // which is the state the streaming work exists to fix.
+            kLogger.warning() << "not cached, playing from source:" << source;
+        }
+    }
+
+    TrackPointer pTrack = playPath == source
+            ? m_pTrackModel->getTrack(index)
+            : m_pLibrary->trackCollectionManager()->getOrAddTrack(
+                      TrackRef::fromFilePath(playPath));
     if (!pTrack) {
         kLogger.warning() << "no track at row" << row;
         return;
+    }
+    if (playPath != source) {
+        // The cached file has no tags worth reading -- it is a byte copy of
+        // somebody else's file -- so the metadata comes from the pdb, as it
+        // does for the row itself.
+        const auto field = [this, row](const QString& column) {
+            const int c = m_pTrackModel->fieldIndex(column);
+            return c < 0 ? QString()
+                         : m_pTrackModel->index(row, c).data(Qt::DisplayRole).toString();
+        };
+        pTrack->setArtist(field(LIBRARYTABLE_ARTIST));
+        pTrack->setTitle(field(LIBRARYTABLE_TITLE));
+        pTrack->setAlbum(field(LIBRARYTABLE_ALBUM));
+        // Genre is deliberately not set: Track has no plain setter for it (only
+        // setGenreFromTrackDAO, which is the DAO's business), and the browser
+        // reads genre off the pdb row anyway.
     }
     // Which deck_library row this is, kept for the play log. Taken here because
     // this is the only moment it is unambiguous: two sticks can hold clones of

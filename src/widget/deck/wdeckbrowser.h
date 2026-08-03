@@ -1,12 +1,14 @@
 #pragma once
 
 #include <QLabel>
+#include <QTimer>
 #include <QList>
 #include <QWidget>
 #include <memory>
 
 #include "control/controlproxy.h"
 #include "library/deck/mediaregistry.h"
+#include "library/deck/trackcache.h"
 #include "library/deck/mediumid.h"
 #include "preferences/usersettings.h"
 #include "skin/legacy/skincontext.h"
@@ -169,6 +171,16 @@ class WDeckBrowser : public QWidget, public WBaseWidget {
     int m_loadedTrackRowId = -1;
     bool m_loadedTrackLogged = false;
     void logPlay();
+    /// The medium the current list came from, for cache keys. Levels below a
+    /// medium all carry it, so this is just the stack's.
+    MediumId currentMedium() const;
+
+    std::unique_ptr<TrackCache> m_pCache;
+    /// Fires after the selection has sat still long enough to mean something.
+    QTimer m_prefetchDwell;
+    /// The cached file the deck is playing, so it can be unpinned when another
+    /// takes its place.
+    QString m_pinnedPath;
 
     // The deck's controls. Rotate, push, back, and the two SORT meanings.
     std::unique_ptr<ControlEncoder> m_pMove;
