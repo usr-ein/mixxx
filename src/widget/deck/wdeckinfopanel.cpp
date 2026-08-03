@@ -1,5 +1,6 @@
 #include "widget/deck/wdeckinfopanel.h"
 
+#include <QFileInfo>
 #include <QPainter>
 
 namespace {
@@ -14,6 +15,25 @@ constexpr int kRowHeight = 30;
 /// Width of the label column. Fixed, so the values line up down the panel
 /// rather than stepping in and out with the length of each label.
 constexpr int kLabelWidth = 110;
+
+/// The bigger of the two images rekordbox wrote, where there is one.
+///
+/// A rekordbox export carries every cover twice: the path in the pdb points at
+/// an **80x80** thumbnail, and beside it sits the same image at 240x240 with
+/// `_m` before the extension. 80 pixels blown up to this panel's 180 is exactly
+/// as bad as it sounds, and the better file was on the stick all along.
+///
+/// Falls back to the path it was given whenever the companion is absent, which
+/// is the normal case for a remote medium: those covers come over dbserver, by
+/// artwork id, and the protocol has no way to ask for the larger one.
+QString bestQuality(const QString& path) {
+    const int dot = path.lastIndexOf(QChar('.'));
+    if (dot <= 0 || path.endsWith(QStringLiteral("_m"), Qt::CaseInsensitive)) {
+        return path;
+    }
+    const QString larger = path.left(dot) + QStringLiteral("_m") + path.mid(dot);
+    return QFileInfo::exists(larger) ? larger : path;
+}
 } // namespace
 
 namespace mixxx {
@@ -31,7 +51,7 @@ void WDeckInfoPanel::setTrack(const QString& coverPath,
         m_coverPath = coverPath;
         // Loaded here rather than in paintEvent: the panel repaints on every
         // encoder detent, and decoding a JPEG per frame is visible on a Pi.
-        m_cover = coverPath.isEmpty() ? QPixmap() : QPixmap(coverPath);
+        m_cover = coverPath.isEmpty() ? QPixmap() : QPixmap(bestQuality(coverPath));
     }
     m_fields = fields;
     update();
@@ -44,7 +64,7 @@ void WDeckInfoPanel::reloadCover() {
     if (m_coverPath.isEmpty() || !m_cover.isNull()) {
         return;
     }
-    m_cover = QPixmap(m_coverPath);
+    m_cover = QPixmap(bestQuality(m_coverPath));
     if (!m_cover.isNull()) {
         update();
     }

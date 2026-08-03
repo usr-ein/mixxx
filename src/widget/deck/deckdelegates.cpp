@@ -370,54 +370,29 @@ void TrackRowDelegate::paint(QPainter* pPainter,
 
     const QString title = columnValue(m_columns.title);
     const QString artist = columnValue(m_columns.artist);
-    const QString bpm = columnValue(m_columns.bpm);
-    const QString keyText = columnValue(m_columns.key);
-    const int keyId = columnValue(m_columns.keyId).toInt();
 
     QFont titleFont = option.font;
     titleFont.setPixelSize(21);
     QFont smallFont = option.font;
     smallFont.setPixelSize(18);
 
-    // Fixed right-hand columns, measured from the right edge inwards, so the
-    // title and artist share whatever is left rather than pushing them off.
-    const int keyWidth = 70;
-    const int bpmWidth = 90;
-
-    const QRect keyRect(content.right() - keyWidth, content.top(), keyWidth, content.height());
-    // Green AND bold when it will mix with what is playing. Colour alone is a
-    // weak signal on a panel seen at arm's length in a dark room, and it is the
-    // one piece of colour in the list that carries information rather than
-    // state -- so it gets weight as well as hue.
-    const bool compatible = key::isCompatible(m_playingKeyId, keyId);
-    QFont keyFont = smallFont;
-    keyFont.setBold(compatible);
-    pPainter->setFont(keyFont);
-    pPainter->setPen(selected ? kSelectedText : (compatible ? kKeyCompatible : kText));
-    pPainter->drawText(keyRect, Qt::AlignRight | Qt::AlignVCenter, keyText);
-    pPainter->setFont(smallFont);
-
-    const QRect bpmRect(keyRect.left() - bpmWidth, content.top(), bpmWidth, content.height());
-    pPainter->setPen(detailColour);
-    pPainter->drawText(bpmRect, Qt::AlignRight | Qt::AlignVCenter, bpm);
-
-    QRect leftRect = content.adjusted(0, 0, -(keyWidth + bpmWidth + kPadding), 0);
+    QRect leftRect = content;
 
     if (m_infoLayout) {
-        // One line: the title, and the value of whatever the list is sorted by
-        // right-aligned beside it (browser-prd.md 8.2). The panel to the right
-        // says everything else.
-        QString secondary;
-        // Never a column this row already draws down its right-hand side.
-        // Sorting by BPM otherwise printed the BPM twice, side by side, which
-        // reads as a rendering fault rather than as a sort.
+        // **Three things and no more: the cover, the title, and one value.**
+        // The panel on the right is the whole point of this layout -- it says
+        // everything about the selected track -- so anything the row repeats is
+        // width taken from the title for no information. BPM and key are drawn
+        // in the default layout and deliberately not here.
         //
-        // Checked here rather than where the column is chosen, because the
-        // delegate's own column indices are re-resolved on every model change
-        // and a comparison made earlier would be against stale ones.
-        if (m_secondaryColumn >= 0 && m_secondaryColumn != m_columns.bpm &&
-                m_secondaryColumn != m_columns.key) {
-            secondary = index.sibling(index.row(), m_secondaryColumn)
+        // The one value is whatever the list is sorted by, because that is what
+        // the DJ is reading the list *along*; unsorted, it is the artist, which
+        // is what the default layout would have shown.
+        const int secondaryColumn =
+                m_secondaryColumn >= 0 ? m_secondaryColumn : m_columns.artist;
+        QString secondary;
+        if (secondaryColumn >= 0) {
+            secondary = index.sibling(index.row(), secondaryColumn)
                                 .data(Qt::DisplayRole)
                                 .toString();
         }
@@ -437,6 +412,39 @@ void TrackRowDelegate::paint(QPainter* pPainter,
                 Qt::AlignLeft | Qt::AlignVCenter,
                 titleMetrics.elidedText(title, Qt::ElideRight, titleRect.width()));
     } else {
+        // Tempo and key down the right-hand edge, measured from the right
+        // inwards so the title and artist share whatever is left rather than
+        // pushing them off. Only in this layout: with the info panel open they
+        // are on the panel, in a column that lines up down the screen.
+        const int keyWidth = 70;
+        const int bpmWidth = 90;
+        const int keyId = columnValue(m_columns.keyId).toInt();
+
+        const QRect keyRect(
+                content.right() - keyWidth, content.top(), keyWidth, content.height());
+        // Green AND bold when it will mix with what is playing. Colour alone is
+        // a weak signal on a panel seen at arm's length in a dark room, and it
+        // is the one piece of colour in the list that carries information
+        // rather than state -- so it gets weight as well as hue.
+        const bool compatible = key::isCompatible(m_playingKeyId, keyId);
+        QFont keyFont = smallFont;
+        keyFont.setBold(compatible);
+        pPainter->setFont(keyFont);
+        pPainter->setPen(selected ? kSelectedText : (compatible ? kKeyCompatible : kText));
+        pPainter->drawText(keyRect,
+                Qt::AlignRight | Qt::AlignVCenter,
+                columnValue(m_columns.key));
+
+        const QRect bpmRect(
+                keyRect.left() - bpmWidth, content.top(), bpmWidth, content.height());
+        pPainter->setFont(smallFont);
+        pPainter->setPen(detailColour);
+        pPainter->drawText(bpmRect,
+                Qt::AlignRight | Qt::AlignVCenter,
+                columnValue(m_columns.bpm));
+
+        leftRect = content.adjusted(0, 0, -(keyWidth + bpmWidth + kPadding), 0);
+
         // Two columns: the title takes two thirds and the artist one.
         const int artistWidth = leftRect.width() / 3;
         const QRect titleRect = leftRect.adjusted(0, 0, -artistWidth, 0);

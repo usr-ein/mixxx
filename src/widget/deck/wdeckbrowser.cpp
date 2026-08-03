@@ -160,6 +160,14 @@ WDeckBrowser::WDeckBrowser(QWidget* pParent, Library* pLibrary, UserSettingsPoin
             LIBRARYTABLE_BPM,
             LIBRARYTABLE_KEY,
             LIBRARYTABLE_KEY_ID,
+            // What "sort by Key" actually sorts on. Easy to leave out, because
+            // nothing ever *displays* it -- and leaving it out does not fail
+            // loudly: BaseSqlTableModel resolves the column through this list,
+            // fieldIndex() returns -1 for a name that is not here, and
+            // applySort() reads that as "this medium has no such field" and
+            // quietly falls back to Default. So the menu offered Key, the LED
+            // lit, and the list did not move.
+            QStringLiteral("camelot_order"),
             LIBRARYTABLE_COLOR,
             LIBRARYTABLE_DATETIMEADDED,
             LIBRARYTABLE_TIMESPLAYED,
@@ -1005,9 +1013,11 @@ void WDeckBrowser::updateInfoPanel() {
         return m_pTrackModel->index(row, index).data(Qt::DisplayRole).toString().trimmed();
     };
 
-    // Whatever the list is sorted by is already beside every title on the left,
-    // so it is dropped here rather than printed twice.
-    QString sortedDisplay = m_sortColumn;
+    // Whatever the row already shows beside the title is dropped here rather
+    // than printed twice: the sorted-by value, or the artist when the list is
+    // unsorted and the row falls back to it.
+    QString sortedDisplay = m_sortColumn.isEmpty() ? QString(LIBRARYTABLE_ARTIST)
+                                                   : m_sortColumn;
     for (const WDeckSortMenu::Field& field : WDeckSortMenu::fields()) {
         if (field.column == m_sortColumn && !field.displayColumn.isEmpty()) {
             sortedDisplay = field.displayColumn;
