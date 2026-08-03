@@ -26,7 +26,13 @@ const QList<WDeckSortMenu::Field>& WDeckSortMenu::fields() {
     static const QList<Field> kFields = {
             {QStringLiteral("Default"), QString(), false},
             {QStringLiteral("BPM"), LIBRARYTABLE_BPM, false},
-            {QStringLiteral("Key"), LIBRARYTABLE_KEY_ID, false},
+            // Sorts on the stored Camelot index, not key_id -- key_id is
+            // Mixxx's ChromaticKey enum, and sorting on it gives 11A, 6A,
+            // 1A. Displays the key text regardless.
+            {QStringLiteral("Key"),
+                    QStringLiteral("camelot_order"),
+                    false,
+                    LIBRARYTABLE_KEY},
             {QStringLiteral("Title"), LIBRARYTABLE_TITLE, false},
             {QStringLiteral("Artist"), LIBRARYTABLE_ARTIST, false},
             {QStringLiteral("Genre"), LIBRARYTABLE_GENRE, false},

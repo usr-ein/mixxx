@@ -5,6 +5,7 @@
 #include <QWidget>
 #include <memory>
 
+#include "control/controlproxy.h"
 #include "library/deck/mediaregistry.h"
 #include "library/deck/mediumid.h"
 #include "preferences/usersettings.h"
@@ -28,6 +29,7 @@ class DeckTrackModel;
 class MenuRowDelegate;
 class WDeckSortMenu;
 class WDeckKeyboard;
+class WDeckInfoPanel;
 class TrackRowDelegate;
 
 /// The deck's library, as a menu stack.
@@ -60,6 +62,14 @@ class WDeckBrowser : public QWidget, public WBaseWidget {
     void onSelectionMoved(int row);
     void onSortChosen(const QString& column, bool descending);
     void onSortDefault();
+    /// A track was loaded or unloaded: repaint the key column against the new
+    /// reference, without rebuilding anything.
+    void onPlayingKeyChanged();
+    /// The tempo fader's range changed: the BPM buckets are a different size
+    /// now, so rebuild that level in place if it is the one on screen.
+    void onRateRangeChanged();
+    /// A breadcrumb segment was clicked: pop back to that level.
+    void onBreadcrumbClicked(const QString& levelIndex);
 
   private:
     /// What a level is showing. The payload is what rebuilding it needs.
@@ -95,6 +105,8 @@ class WDeckBrowser : public QWidget, public WBaseWidget {
     void showTracks(const Level& level, const QString& selectSql);
     void showSearch(const Level& level);
     void runSearch();
+    void updateInfoPanel();
+    void setInfoLayout(bool on);
     /// Resolve the track delegate's column indices for the current model.
     void refreshTrackColumns();
     void updateBreadcrumb();
@@ -127,6 +139,12 @@ class WDeckBrowser : public QWidget, public WBaseWidget {
     QLabel* m_pSearchQuery;
     WDeckKeyboard* m_pKeyboard;
     QWidget* m_pSearchResults;
+    /// The track list and its info panel side by side. The panel is hidden in
+    /// the default layout, which is why the two need a container of their own
+    /// rather than sitting in the stack directly.
+    QWidget* m_pTracksPage;
+    WDeckInfoPanel* m_pInfoPanel;
+    bool m_infoLayout = false;
     QString m_searchText;
     /// The sort is a BROWSER preference, not a property of a list: leaving one
     /// list and opening another applies the same sort to the new one, until
@@ -136,6 +154,11 @@ class WDeckBrowser : public QWidget, public WBaseWidget {
     /// Applied to whatever list is on screen, and re-applied whenever another
     /// one opens.
     void applySort();
+
+    /// Watched so the UI reacts to the deck rather than to being redrawn.
+    std::unique_ptr<ControlProxy> m_pPlayingKey;
+    std::unique_ptr<ControlProxy> m_pTrackLoaded;
+    std::unique_ptr<ControlProxy> m_pRateRange;
 
     // The deck's controls. Rotate, push, back, and the two SORT meanings.
     std::unique_ptr<ControlEncoder> m_pMove;

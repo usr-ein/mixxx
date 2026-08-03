@@ -9,6 +9,7 @@
 #include <algorithm>
 #include <cmath>
 
+#include "library/deck/camelot.h"
 #include "library/deck/pdbingest.h"
 #include "library/queryutil.h"
 #include "track/keyutils.h"
@@ -53,30 +54,6 @@ QString selectFrom(QSqlDatabase& db,
         sql += QStringLiteral(" AND ") + extraWhere;
     }
     return sql;
-}
-
-/// Camelot wheel position, 1..12, from a Mixxx key.
-///
-/// Open Key and Camelot are the same wheel with the numbering rotated by seven:
-/// Open Key 1 (C major / A minor) is Camelot 8. Minor is Camelot's A ring and
-/// major its B ring, which is the opposite way round from how Open Key spells
-/// them, hence both conversions rather than one.
-int camelotNumber(mixxx::track::io::key::ChromaticKey key) {
-    const int openKey = KeyUtils::keyToOpenKeyNumber(key);
-    if (openKey < 1 || openKey > 12) {
-        return 0;
-    }
-    return ((openKey + 6) % 12) + 1;
-}
-
-/// Sortable Camelot index: 1A, 1B, 2A, 2B … 12B. Not the key text -- as text
-/// `10A` sorts between `1A` and `11A`, which is what makes a key list unusable.
-int camelotOrder(mixxx::track::io::key::ChromaticKey key) {
-    const int number = camelotNumber(key);
-    if (number == 0) {
-        return 1000; // Unknown keys sort last, together.
-    }
-    return number * 2 + (KeyUtils::keyIsMajor(key) ? 1 : 0);
 }
 
 mixxx::track::io::key::ChromaticKey keyFromId(int keyId) {
@@ -271,7 +248,7 @@ QList<CategoryEntry> keyCategory(QSqlDatabase& db, const MediumId& medium) {
     // Sorted here rather than in SQL: the order is the Camelot wheel's, which
     // is neither the text order nor the key_id order.
     std::sort(entries.begin(), entries.end(), [](const CategoryEntry& a, const CategoryEntry& b) {
-        return camelotOrder(keyFromId(a.keyId)) < camelotOrder(keyFromId(b.keyId));
+        return camelot::orderFromKeyId(a.keyId) < camelot::orderFromKeyId(b.keyId);
     });
     return entries;
 }
@@ -578,39 +555,7 @@ QList<CategoryEntry> buckets(QSqlDatabase& db,
 namespace key {
 
 bool isCompatible(int playingKeyId, int candidateKeyId) {
-    const auto playing = keyFromId(playingKeyId);
-    const auto candidate = keyFromId(candidateKeyId);
-    if (playing == mixxx::track::io::key::INVALID ||
-            candidate == mixxx::track::io::key::INVALID) {
-        return false;
-    }
-    if (playing == candidate) {
-        return true; // The most compatible thing there is.
-    }
-
-    const int playingNumber = camelotNumber(playing);
-    const int candidateNumber = camelotNumber(candidate);
-    if (playingNumber == 0 || candidateNumber == 0) {
-        return false;
-    }
-    const bool sameRing = KeyUtils::keyIsMajor(playing) == KeyUtils::keyIsMajor(candidate);
-
-    // Same number, other ring: the relative major/minor.
-    if (playingNumber == candidateNumber) {
-        return !sameRing;
-    }
-    // One step round the wheel, staying on the same ring.
-    if (!sameRing) {
-        return false;
-    }
-    const int forward = playingNumber == 12 ? 1 : playingNumber + 1;
-    const int back = playingNumber == 1 ? 12 : playingNumber - 1;
-    return candidateNumber == forward || candidateNumber == back;
-
-    // Deliberately narrower than KeyUtils::getCompatibleKeys(), which also
-    // returns the relative key's neighbours -- the diagonal moves. Six keys out
-    // of twenty-four is enough of a list to light up green that the colour
-    // stops meaning anything (browser-prd.md 8.3).
+    return camelot::isCompatible(keyFromId(playingKeyId), keyFromId(candidateKeyId));
 }
 
 } // namespace key

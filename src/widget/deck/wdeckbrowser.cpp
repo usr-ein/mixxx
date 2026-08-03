@@ -1,6 +1,7 @@
 #include "widget/deck/wdeckbrowser.h"
 
 #include <QSqlDatabase>
+#include <QHBoxLayout>
 #include <QStackedWidget>
 #include <QVBoxLayout>
 
@@ -20,6 +21,7 @@
 #include "widget/deck/deckdelegates.h"
 #include "widget/deck/decklistview.h"
 #include "widget/deck/deckmenumodel.h"
+#include "widget/deck/wdeckinfopanel.h"
 #include "widget/deck/wdecksearch.h"
 #include "widget/deck/wdecksortmenu.h"
 
@@ -35,6 +37,8 @@ constexpr int kMenuRowHeight = 72;
 constexpr int kValueRowHeight = 64;
 constexpr int kPlaylistRowHeight = 88;
 constexpr int kTrackRowHeight = 72;
+/// 1024 - 560 for the list beside it (browser-prd.md 8.2).
+constexpr int kInfoPanelWidth = 464;
 
 const QString kDeckGroup = QStringLiteral("[Channel1]");
 
@@ -61,6 +65,13 @@ WDeckBrowser::WDeckBrowser(QWidget* pParent, Library* pLibrary, UserSettingsPoin
     m_pBreadcrumb = new QLabel(this);
     m_pBreadcrumb->setObjectName(QStringLiteral("DeckBreadcrumb"));
     m_pBreadcrumb->setFixedHeight(kBreadcrumbHeight);
+    // Rich text, so each segment can be a link back to its level. The href is
+    // the level INDEX rather than its name -- two levels can share a name, and
+    // matching on text would jump to the wrong one.
+    m_pBreadcrumb->setTextFormat(Qt::RichText);
+    m_pBreadcrumb->setOpenExternalLinks(false);
+    m_pBreadcrumb->setTextInteractionFlags(Qt::LinksAccessibleByMouse);
+    connect(m_pBreadcrumb, &QLabel::linkActivated, this, &WDeckBrowser::onBreadcrumbClicked);
     pLayout->addWidget(m_pBreadcrumb);
 
     m_pStack = new QStackedWidget(this);
@@ -73,10 +84,19 @@ WDeckBrowser::WDeckBrowser(QWidget* pParent, Library* pLibrary, UserSettingsPoin
     m_pMenuView->setItemDelegate(m_pMenuDelegate);
     m_pStack->addWidget(m_pMenuView);
 
-    m_pTrackView = new DeckListView(m_pStack);
+    m_pTracksPage = new QWidget(m_pStack);
+    auto* pTracksLayout = new QHBoxLayout(m_pTracksPage);
+    pTracksLayout->setContentsMargins(0, 0, 0, 0);
+    pTracksLayout->setSpacing(0);
+    m_pTrackView = new DeckListView(m_pTracksPage);
     m_pTrackDelegate = new TrackRowDelegate(this);
     m_pTrackView->setItemDelegate(m_pTrackDelegate);
-    m_pStack->addWidget(m_pTrackView);
+    pTracksLayout->addWidget(m_pTrackView, 1);
+    m_pInfoPanel = new WDeckInfoPanel(m_pTracksPage);
+    m_pInfoPanel->setFixedWidth(kInfoPanelWidth);
+    m_pInfoPanel->hide();
+    pTracksLayout->addWidget(m_pInfoPanel);
+    m_pStack->addWidget(m_pTracksPage);
 
     // The bezel strip: the panel's last rows sit under a lip, so anything drawn
     // there cannot be touched and barely seen.
@@ -274,13 +294,21 @@ WDeckBrowser::WDeckBrowser(QWidget* pParent, Library* pLibrary, UserSettingsPoin
         if (v <= 0.0 || !inTrackList()) {
             return;
         }
-        // Toggling is all this does for now; the info panel itself is not
-        // built, so the layout change is the one-line variant of it.
-        m_pTrackDelegate->setInfoLayout(!m_pTrackView->property("infoLayout").toBool());
-        m_pTrackView->setProperty("infoLayout",
-                !m_pTrackView->property("infoLayout").toBool());
-        m_pTrackView->viewport()->update();
+        setInfoLayout(!m_infoLayout);
     });
+
+    // The deck, watched. Everything below reacts to what is playing rather
+    // than to the list being redrawn.
+    m_pPlayingKey = std::make_unique<ControlProxy>(kDeckGroup, QStringLiteral("key"), this);
+    m_pPlayingKey->connectValueChanged(this, &WDeckBrowser::onPlayingKeyChanged);
+    // track_loaded as well as key: unloading leaves `key` where it was, so
+    // without this the colouring would linger against a track that is gone.
+    m_pTrackLoaded = std::make_unique<ControlProxy>(
+            kDeckGroup, QStringLiteral("track_loaded"), this);
+    m_pTrackLoaded->connectValueChanged(this, &WDeckBrowser::onPlayingKeyChanged);
+    m_pRateRange = std::make_unique<ControlProxy>(
+            kDeckGroup, QStringLiteral("rateRange"), this);
+    m_pRateRange->connectValueChanged(this, &WDeckBrowser::onRateRangeChanged);
 
     m_pLevelControl = std::make_unique<ControlObject>(ConfigKey("[Browser]", "level"));
     m_pLevelControl->setReadOnly();
@@ -375,21 +403,37 @@ void WDeckBrowser::rebuildCurrentLevel() {
 
 void WDeckBrowser::updateBreadcrumb() {
     QStringList parts;
-    for (const Level& level : m_stack) {
-        if (!level.title.isEmpty()) {
-            parts.append(level.title);
+    for (int i = 0; i < m_stack.size(); ++i) {
+        // The root is a house, not the word SOURCES: it is the one segment
+        // that is always there, and an icon says "start again" in less width
+        // than any word does. The glyph is the skin's Nerd Font, so it costs no
+        // asset.
+        const QString label = i == 0
+                ? QStringLiteral("\uf015")
+                : m_stack.at(i).title.toHtmlEscaped();
+        if (label.isEmpty()) {
+            continue;
         }
+        // Padded, because a link the height of a line of text is a poor target
+        // for a fingertip in a 48 px bar.
+        parts.append(QStringLiteral(
+                "<a style='color:#88ff00; text-decoration:none;' href='%1'>"
+                "&nbsp;%2&nbsp;</a>")
+                             .arg(i)
+                             .arg(label));
     }
-    QString text = parts.join(QStringLiteral("  ›  "));
+    QString text = parts.join(QStringLiteral("<span style='color:#557700'> › </span>"));
     if (inTrackList() && !m_sortColumn.isEmpty()) {
         // The arrow says the direction and the name says the field, so the
         // breadcrumb answers "what am I looking at, and in what order".
         for (const WDeckSortMenu::Field& field : WDeckSortMenu::fields()) {
             if (field.column == m_sortColumn) {
-                text += QStringLiteral("        %1 %2")
+                text += QStringLiteral(
+                        "<span style='color:#aaaaaa'>&nbsp;&nbsp;&nbsp;&nbsp;"
+                        "%1 %2</span>")
                                 .arg(m_sortDescending ? QStringLiteral("▼")
                                                       : QStringLiteral("▲"),
-                                        field.title);
+                                        field.title.toHtmlEscaped());
                 break;
             }
         }
@@ -431,6 +475,7 @@ void WDeckBrowser::showSources() {
             row.mark = linked ? MenuRow::Mark::UsbLinked : MenuRow::Mark::Usb;
         }
         row.playerNumber = medium.playerNumber;
+        row.slot = medium.slot;
         row.title = medium.name;
         switch (medium.state) {
         case MediumInfo::State::Reading:
@@ -612,8 +657,11 @@ void WDeckBrowser::showArtistAlbums(const Level& level) {
 
 void WDeckBrowser::showTracks(const Level& level, const QString& selectSql) {
     // Reclaim the track view if search had it.
-    if (m_pTrackView->parentWidget() != m_pStack) {
-        m_pStack->addWidget(m_pTrackView);
+    if (m_pTrackView->parentWidget() != m_pTracksPage) {
+        auto* pLayout = qobject_cast<QHBoxLayout*>(m_pTracksPage->layout());
+        if (pLayout) {
+            pLayout->insertWidget(0, m_pTrackView, 1);
+        }
     }
     m_pTrackModel->setQuery(selectSql);
 
@@ -621,7 +669,7 @@ void WDeckBrowser::showTracks(const Level& level, const QString& selectSql) {
 
     applySort();
     m_pTrackView->setRowHeight(kTrackRowHeight);
-    m_pStack->setCurrentWidget(m_pTrackView);
+    m_pStack->setCurrentWidget(m_pTracksPage);
     // qBound asserts when its bounds cross, which they do for an empty list
     // (0 .. -1). An empty track list is a real state -- a genre with nothing
     // under it -- not a programming error.
@@ -629,12 +677,16 @@ void WDeckBrowser::showTracks(const Level& level, const QString& selectSql) {
     if (lastRow >= 0) {
         m_pTrackView->selectRow(qBound(0, level.selectedRow, lastRow));
     }
+    updateInfoPanel();
     m_pTrackView->setFocus();
 }
 
 void WDeckBrowser::showSearch(const Level& level) {
     Q_UNUSED(level);
     m_pKeyboard->setVisible(true);
+    // No room for the panel beside a keyboard; the layout toggle still applies
+    // to the rows themselves.
+    m_pInfoPanel->hide();
     // The track view is re-parented into the search page and back, so the
     // results are literally the same widget, model and delegate as a track
     // list -- there is no second code path to keep in step.
@@ -687,6 +739,7 @@ void WDeckBrowser::runSearch() {
 
 void WDeckBrowser::onSelectionMoved(int row) {
     Q_UNUSED(row);
+    updateInfoPanel();
 }
 
 void WDeckBrowser::applySort() {
@@ -708,9 +761,119 @@ void WDeckBrowser::applySort() {
     }
     m_pTrackModel->setSort(column, m_sortDescending ? Qt::DescendingOrder : Qt::AscendingOrder);
     m_pTrackModel->select();
-    // The info layout shows the sorted-by value beside each title, so the
-    // delegate has to know which column that is.
-    m_pTrackDelegate->setSecondaryColumn(column);
+    // The info layout shows the sorted-by value beside each title -- but not
+    // always the sorted-by COLUMN. Key sorts on camelot_order, an integer
+    // nobody wants to read, and shows the key text instead.
+    QString displayColumn = m_sortColumn;
+    for (const WDeckSortMenu::Field& field : WDeckSortMenu::fields()) {
+        if (field.column == m_sortColumn && !field.displayColumn.isEmpty()) {
+            displayColumn = field.displayColumn;
+            break;
+        }
+    }
+    const int displayIndex = m_pTrackModel->fieldIndex(displayColumn);
+    m_pTrackDelegate->setSecondaryColumn(displayIndex >= 0 ? displayIndex : column);
+}
+
+void WDeckBrowser::onBreadcrumbClicked(const QString& levelIndex) {
+    bool ok = false;
+    const int target = levelIndex.toInt(&ok);
+    if (!ok || target < 0 || target >= m_stack.size() - 1) {
+        return; // The last segment is where we already are.
+    }
+    while (m_stack.size() > target + 1) {
+        m_stack.removeLast();
+    }
+    rebuildCurrentLevel();
+}
+
+void WDeckBrowser::setInfoLayout(bool on) {
+    m_infoLayout = on;
+    m_pTrackDelegate->setInfoLayout(on);
+    m_pInfoPanel->setVisible(on);
+    if (on) {
+        updateInfoPanel();
+    }
+    m_pTrackView->viewport()->update();
+}
+
+void WDeckBrowser::updateInfoPanel() {
+    if (!m_infoLayout) {
+        return;
+    }
+    const int row = m_pTrackView->selectedRow();
+    if (row < 0) {
+        m_pInfoPanel->clear();
+        return;
+    }
+    const auto value = [this, row](const QString& column) {
+        const int index = m_pTrackModel->fieldIndex(column);
+        if (index < 0) {
+            return QString();
+        }
+        return m_pTrackModel->index(row, index).data(Qt::DisplayRole).toString().trimmed();
+    };
+
+    // Whatever the list is sorted by is already beside every title on the left,
+    // so it is dropped here rather than printed twice.
+    QString sortedDisplay = m_sortColumn;
+    for (const WDeckSortMenu::Field& field : WDeckSortMenu::fields()) {
+        if (field.column == m_sortColumn && !field.displayColumn.isEmpty()) {
+            sortedDisplay = field.displayColumn;
+            break;
+        }
+    }
+
+    QList<QPair<QString, QString>> fields;
+    const auto add = [&](const QString& label, const QString& column) {
+        if (column == sortedDisplay) {
+            return;
+        }
+        const QString text = value(column);
+        // Empty fields are omitted entirely: six populated rows read better
+        // than eleven with five em-dashes in them.
+        if (text.isEmpty() || text == QStringLiteral("0")) {
+            return;
+        }
+        fields.append({label, text});
+    };
+
+    add(tr("Artist"), LIBRARYTABLE_ARTIST);
+    add(tr("Album"), LIBRARYTABLE_ALBUM);
+    add(tr("Year"), LIBRARYTABLE_YEAR);
+    add(tr("Duration"), LIBRARYTABLE_DURATION);
+    add(tr("Genre"), LIBRARYTABLE_GENRE);
+    add(tr("Label"), QStringLiteral("label"));
+    add(tr("Key"), LIBRARYTABLE_KEY);
+    add(tr("Rating"), LIBRARYTABLE_RATING);
+    add(tr("Added"), LIBRARYTABLE_DATETIMEADDED);
+    // Not "Last played": the deck has no last-played timestamp for an external
+    // medium yet -- deck_play_log is not written and the stick's own rekordbox
+    // history needs a bridge change. The play COUNT is what the pdb gives us,
+    // and it is worth something on its own.
+    add(tr("Plays"), LIBRARYTABLE_TIMESPLAYED);
+    add(tr("Comment"), LIBRARYTABLE_COMMENT);
+
+    m_pInfoPanel->setTrack(value(LIBRARYTABLE_COVERART_LOCATION), fields);
+}
+
+void WDeckBrowser::onPlayingKeyChanged() {
+    // Repaint, do not rebuild. The list has not changed -- only what the keys
+    // in it should be compared against -- and rebuilding would lose the
+    // selection and the scroll position mid-browse.
+    m_pTrackDelegate->setPlayingKeyId(
+            static_cast<int>(ControlObject::get(ConfigKey(kDeckGroup, "key"))));
+    m_pTrackView->viewport()->update();
+}
+
+void WDeckBrowser::onRateRangeChanged() {
+    // A bucket is one fader's reach, so changing the range changes every
+    // boundary. Rebuild in place rather than waiting for the level to be
+    // re-entered.
+    if (!m_stack.isEmpty() && m_stack.last().kind == Level::Kind::Categories &&
+            m_stack.last().parameter == QStringLiteral("bpm")) {
+        rebuildCurrentLevel();
+    }
 }
 
 void WDeckBrowser::onSortChosen(const QString& column, bool descending) {
@@ -733,10 +896,7 @@ void WDeckBrowser::onReselected(int row) {
     if (inTrackList()) {
         // A tap on the already-selected track opens the info layout, which is
         // the "tell me more" gesture. Loading is the long press.
-        const bool wasInfo = m_pTrackView->property("infoLayout").toBool();
-        m_pTrackView->setProperty("infoLayout", !wasInfo);
-        m_pTrackDelegate->setInfoLayout(!wasInfo);
-        m_pTrackView->viewport()->update();
+        setInfoLayout(!m_infoLayout);
         return;
     }
     // Above a track list a single tap goes in: menus are cheap to enter and

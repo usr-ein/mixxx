@@ -7,6 +7,7 @@
 
 #include "library/coverart.h"
 #include "library/dao/trackschema.h"
+#include "library/deck/camelot.h"
 #include "library/queryutil.h"
 #include "track/keyutils.h"
 #include "util/logger.h"
@@ -64,6 +65,12 @@ bool createTables(QSqlDatabase& database) {
             // names a field the table does not have, the SELECT fails outright,
             // and the whole list comes back empty.
             "    key_id INTEGER,"
+            // Camelot wheel position as a SORTABLE integer. key_id above is
+            // Mixxx's ChromaticKey enum, i.e. chromatic order, and sorting a
+            // track list on it gives 11A, 6A, 1A -- right chromatically and
+            // nonsense to a DJ. SQL cannot know about the wheel, so the order
+            // is computed once here and stored.
+            "    camelot_order INTEGER,"
             "    rating INTEGER,"
             "    datetime_added TEXT,"
             "    timesplayed INTEGER,"
@@ -114,6 +121,8 @@ bool createTables(QSqlDatabase& database) {
                            "ON %1(medium, artist, album)"),
             QStringLiteral("CREATE INDEX IF NOT EXISTS deck_library_medium_bpm "
                            "ON %1(medium, bpm)"),
+            QStringLiteral("CREATE INDEX IF NOT EXISTS deck_library_medium_camelot "
+                           "ON %1(medium, camelot_order)"),
     };
     for (const QString& statement : indexes) {
         query.prepare(statement.arg(kLibraryTable));
@@ -263,6 +272,19 @@ IngestResult writeMedium(QSqlDatabase& database,
     using mixxx::prolink::PdbTrack;
 
     IngestResult result;
+
+    // **One transaction for the whole medium.** Without it SQLite autocommits
+    // every statement: 651 tracks plus a playlist row each plus one row per
+    // playlist membership is well over a thousand transactions, each a journal
+    // write and an fsync to the SD card at 10-20 ms. That was fifteen seconds
+    // to read a stick.
+    //
+    // It is also what stopped the GUI. The collection database is in
+    // rollback-journal mode, where a writer holds an exclusive lock and readers
+    // BLOCK -- so a thousand short write locks on this worker thread locked the
+    // GUI thread out of its own queries, over and over, for the whole read. The
+    // work was already off the GUI thread; the lock contention was not.
+    ScopedTransaction transaction(database);
     clearMedium(database, medium);
 
     QSqlQuery insertTrack(database);
@@ -271,13 +293,14 @@ IngestResult writeMedium(QSqlDatabase& database,
     insertTrack.prepare(QStringLiteral(
             "INSERT OR REPLACE INTO %1 "
             "(medium, rb_id, artist, title, album, year, genre, label, tracknumber, "
-            " location, comment, duration, bitrate, bpm, key, key_id, rating, "
+            " location, comment, duration, bitrate, bpm, key, key_id, camelot_order, rating, "
             " datetime_added, timesplayed, analyze_path, color, artwork_path, "
             " artwork_id, coverart_source, coverart_type, coverart_location, "
             " coverart_digest) "
             "VALUES (:medium, :rb_id, :artist, :title, :album, :year, :genre, :label, "
             " :tracknumber, :location, :comment, :duration, :bitrate, :bpm, :key, "
-            " :key_id, :rating, :datetime_added, :timesplayed, :analyze_path, :color, "
+            " :key_id, :camelot_order, :rating, :datetime_added, :timesplayed, "
+            " :analyze_path, :color, "
             " :artwork_path, :artwork_id, :coverart_source, :coverart_type, "
             " :coverart_location, :coverart_digest)")
                                 .arg(kLibraryTable));
@@ -322,8 +345,9 @@ IngestResult writeMedium(QSqlDatabase& database,
         // row 12 on one export and row 2 on another -- so it cannot be stored
         // directly. An unrecognised spelling yields INVALID and sorts with the
         // other unknowns.
-        insertTrack.bindValue(QStringLiteral(":key_id"),
-                static_cast<int>(KeyUtils::guessKeyFromText(track.key)));
+        const auto chromaticKey = KeyUtils::guessKeyFromText(track.key);
+        insertTrack.bindValue(QStringLiteral(":key_id"), static_cast<int>(chromaticKey));
+        insertTrack.bindValue(QStringLiteral(":camelot_order"), camelot::order(chromaticKey));
         insertTrack.bindValue(QStringLiteral(":rating"), track.rating);
         // Stored exactly as rekordbox wrote it (YYYY-MM-DD), which sorts
         // chronologically as text, so the Date added category needs no parsing.
@@ -502,7 +526,9 @@ IngestResult writeMedium(QSqlDatabase& database,
         kLogger.warning() << "wrote NO tracks for" << medium.key() << "despite"
                           << contents.tracks.size()
                           << "parsed; the insert is failing, see the query above";
+        transaction.commit();
     } else {
+        transaction.commit();
         kLogger.info() << "wrote" << result.trackCount << "tracks,"
                        << result.playlistCount << "playlists and"
                        << result.folderCount << "folders for" << medium.key();

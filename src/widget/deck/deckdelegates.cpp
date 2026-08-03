@@ -197,6 +197,26 @@ void MenuRowDelegate::paint(QPainter* pPainter,
                 markSize);
         paintMark(pPainter, markRect, row.mark, textColour);
         content.setLeft(content.left() + markSize + kPadding + 8);
+
+        // Which physical port the stick is in, beside its mark. Slots are
+        // handed out in plug order, so this is the only thing on screen that
+        // says which of the two to pull -- and pulling the wrong one mid-set is
+        // the mistake it exists to prevent.
+        //
+        // Dimmer than the name, and dimmer than a Pro DJ Link player number,
+        // because the two sit in the same place and mean different things: a
+        // port on this deck versus a device on the network.
+        if (row.slot > 0) {
+            QFont slotFont = option.font;
+            slotFont.setPixelSize(17);
+            pPainter->setFont(slotFont);
+            pPainter->setPen(selected ? kSelectedText : kDimText);
+            const QRect slotRect(content.left() - kPadding, content.top(), 18, content.height());
+            pPainter->drawText(slotRect,
+                    Qt::AlignLeft | Qt::AlignVCenter,
+                    QString::number(row.slot));
+            content.setLeft(content.left() + 14);
+        }
     }
 
     QFont titleFont = option.font;
@@ -320,13 +340,18 @@ void TrackRowDelegate::paint(QPainter* pPainter,
     const int keyWidth = 70;
     const int bpmWidth = 90;
 
-    pPainter->setFont(smallFont);
     const QRect keyRect(content.right() - keyWidth, content.top(), keyWidth, content.height());
-    // Green when it will mix with what is playing. The one piece of colour in
-    // the list that carries information rather than state.
+    // Green AND bold when it will mix with what is playing. Colour alone is a
+    // weak signal on a panel seen at arm's length in a dark room, and it is the
+    // one piece of colour in the list that carries information rather than
+    // state -- so it gets weight as well as hue.
     const bool compatible = key::isCompatible(m_playingKeyId, keyId);
+    QFont keyFont = smallFont;
+    keyFont.setBold(compatible);
+    pPainter->setFont(keyFont);
     pPainter->setPen(selected ? kSelectedText : (compatible ? kKeyCompatible : kText));
     pPainter->drawText(keyRect, Qt::AlignRight | Qt::AlignVCenter, keyText);
+    pPainter->setFont(smallFont);
 
     const QRect bpmRect(keyRect.left() - bpmWidth, content.top(), bpmWidth, content.height());
     pPainter->setPen(detailColour);

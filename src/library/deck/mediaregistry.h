@@ -32,6 +32,10 @@ struct MediumInfo {
     Kind kind = Kind::Usb;
     /// Remote media only: the owning player's device number, 1..4. 0 for local.
     int playerNumber = 0;
+    /// Local media only: which of the deck's ports it is in, from the mount
+    /// point (DJ_USB_1 -> 1). Slots are handed out in plug order, so this is
+    /// unrelated to the name and is exactly why it has to be shown.
+    int slot = 0;
     int trackCount = 0;
     int playlistCount = 0;
     State state = State::Reading;

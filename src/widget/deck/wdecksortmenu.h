@@ -29,8 +29,13 @@ class WDeckSortMenu : public QWidget {
     /// order of reach rather than the schema's.
     struct Field {
         QString title;
-        QString column;   ///< Empty for Default.
+        QString column; ///< What the model sorts on. Empty for Default.
         bool descendingByDefault = false;
+        /// What the info layout shows beside each title, when that is not the
+        /// column being sorted on. Key is the one case: it sorts on
+        /// `camelot_order`, an integer nobody wants to read, and displays the
+        /// key text. Empty means "same as `column`".
+        QString displayColumn;
     };
 
     explicit WDeckSortMenu(QWidget* pParent = nullptr);

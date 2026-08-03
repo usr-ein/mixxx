@@ -31,6 +31,9 @@ struct MenuRow {
     Mark mark = Mark::None;
     /// Remote media only: the owning player's number, drawn before the name.
     int playerNumber = 0;
+    /// Local media only: which of the deck's ports the stick is in, drawn
+    /// beside the mark. 0 for anything that is not a local medium.
+    int slot = 0;
     QString title;
     /// Right-aligned: counts, durations, or a failure.
     QString detail;

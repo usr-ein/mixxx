@@ -120,6 +120,12 @@ void MediaRegistry::rescanLocal() {
         medium.id = id;
         medium.name = volumeLabelFor(mountPoint);
         medium.kind = MediumInfo::Kind::Usb;
+        // "/media/DJ_USB_2" -> 2. Anything mounted elsewhere has no slot, which
+        // is right: the number means a port on this deck, not an ordinal.
+        const QString slotName = QFileInfo(mountPoint).fileName();
+        if (slotName.startsWith(QStringLiteral("DJ_USB_"))) {
+            medium.slot = slotName.mid(7).toInt();
+        }
         medium.state = MediumInfo::State::Reading;
         m_media.append(medium);
         m_readQueue.append({id, mountPoint});
