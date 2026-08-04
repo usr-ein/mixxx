@@ -2,6 +2,7 @@
 
 #include <QtConcurrentRun>
 
+#include "library/deck/mediaregistry.h"
 #include "network/prolink/prolinkanlz.h"
 #include "util/logger.h"
 
@@ -22,6 +23,16 @@ PreviewWaveformCache::PreviewWaveformCache(QObject* pParent)
     // One thread, and ours. See the header: the stick is the contended
     // resource, and four readers of one stick is slower than one.
     m_pool.setMaxThreadCount(1);
+
+    // Remote previews come back through the registry. whenReady() rather than
+    // instance(), because construction order in a file skin authors edit is not
+    // something to rely on -- relying on it cost the toasts entirely once.
+    MediaRegistry::whenReady(this, [this](MediaRegistry* pRegistry) {
+        connect(pRegistry,
+                &MediaRegistry::previewArrived,
+                this,
+                &PreviewWaveformCache::onRemoteArrived);
+    });
 }
 
 PreviewWaveformCache::~PreviewWaveformCache() {
@@ -49,6 +60,24 @@ void PreviewWaveformCache::request(
     }
     const QString key = keyFor(medium, rekordboxId);
     if (m_previews.contains(key) || m_inFlight.contains(key)) {
+        return;
+    }
+    if (!medium.isLocal()) {
+        // **A remote track has no file to read.** Its analysis files are on the
+        // player until the track is loaded, and `analyze_path` names where they
+        // *will* go rather than where they are. So it is asked for over
+        // dbserver instead: 900 bytes on the connection cover art already uses,
+        // nothing written to a filesystem at either end.
+        //
+        // Monochrome, and unavoidably so -- a player answers
+        // GET_WAVEFORM_PREVIEW with PWAV and nothing else, and the colour
+        // preview is behind a request nothing in lib/prolink implements yet.
+        m_inFlight.insert(key);
+        if (MediaRegistry* pRegistry = MediaRegistry::instance()) {
+            pRegistry->requestPreview(medium, rekordboxId);
+        } else {
+            store(key, medium.key(), rekordboxId, PreviewWaveform());
+        }
         return;
     }
     if (analyzePath.isEmpty()) {
@@ -112,6 +141,17 @@ void PreviewWaveformCache::request(
                         },
                         Qt::QueuedConnection);
             });
+}
+
+void PreviewWaveformCache::onRemoteArrived(
+        const MediumId& medium, quint32 rekordboxId, const QByteArray& blob) {
+    const QString key = keyFor(medium, rekordboxId);
+    if (!m_inFlight.contains(key)) {
+        return; // Not ours, or already answered.
+    }
+    // An empty blob is a player saying it has no preview for that track, which
+    // is stored as such so it is never asked for twice.
+    store(key, medium.key(), rekordboxId, PreviewWaveform::fromWire(blob));
 }
 
 void PreviewWaveformCache::store(const QString& key,

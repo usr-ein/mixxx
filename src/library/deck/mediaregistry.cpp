@@ -166,6 +166,10 @@ MediaRegistry::MediaRegistry(mixxx::DbConnectionPoolPtr dbConnectionPool, QObjec
             &mixxx::prolink::ProLinkNetworkService::artworkFetched,
             this,
             &MediaRegistry::onArtworkFetched);
+    connect(m_pNetwork.get(),
+            &mixxx::prolink::ProLinkNetworkService::previewFetched,
+            this,
+            &MediaRegistry::onPreviewFetched);
     m_pNetwork->start();
 #endif
 
@@ -843,6 +847,47 @@ void MediaRegistry::requestArtwork(const QString& coverPath) {
     m_pNetwork->fetchArtwork(mac, slot, artworkId, coverPath);
 }
 
+void MediaRegistry::requestPreview(const MediumId& medium, quint32 rekordboxId) {
+    if (medium.isLocal() || rekordboxId == 0 || !m_pNetwork) {
+        // A local medium has its analysis files on the stick, and reading them
+        // is both cheaper and better -- the file carries the colour preview,
+        // which the wire does not.
+        return;
+    }
+    QByteArray mac;
+    mixxx::prolink::MediaSlot slot = mixxx::prolink::MediaSlot::Usb;
+    if (!addressOf(medium, &mac, &slot)) {
+        return;
+    }
+    m_pNetwork->fetchWaveformPreview(mac, slot, rekordboxId);
+}
+
+void MediaRegistry::onPreviewFetched(const QByteArray& mac,
+        mixxx::prolink::MediaSlot slot,
+        quint32 trackId,
+        const QByteArray& blob,
+        const QString& error) {
+    if (!error.isEmpty()) {
+        // Not worth a warning. A medium has hundreds of tracks and a player
+        // answers for the ones it has; the strip draws its baseline either way.
+        kLogger.debug() << "no preview for track" << trackId << "--" << error;
+    }
+    // Back to a MediumId, because that is what the browser keyed its request
+    // by. The MAC and slot are what the network layer speaks.
+    for (const MediumInfo& medium : m_media) {
+        if (medium.id.isLocal()) {
+            continue;
+        }
+        QByteArray candidateMac;
+        mixxx::prolink::MediaSlot candidateSlot = mixxx::prolink::MediaSlot::Usb;
+        if (addressOf(medium.id, &candidateMac, &candidateSlot) &&
+                candidateMac == mac && candidateSlot == slot) {
+            emit previewArrived(medium.id, trackId, blob);
+            return;
+        }
+    }
+}
+
 void MediaRegistry::onArtworkFetched(const QString& localPath, const QString& error) {
     if (!error.isEmpty() || !QFileInfo::exists(localPath)) {
         // Normal and not worth a warning: a rekordbox medium always has a few
@@ -987,6 +1032,12 @@ void MediaRegistry::requestArtwork(const QString& coverPath) {
     // A local medium carries its own images, so there is never anything to ask
     // for without Pro DJ Link.
     Q_UNUSED(coverPath);
+}
+
+void MediaRegistry::requestPreview(const MediumId& medium, quint32 rekordboxId) {
+    // Likewise: without Pro DJ Link there are no remote media to ask.
+    Q_UNUSED(medium);
+    Q_UNUSED(rekordboxId);
 }
 
 mixxx::prolink::server::ServeStatus MediaRegistry::serveStatus() const {

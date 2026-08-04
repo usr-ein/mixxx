@@ -181,6 +181,16 @@ class MediaRegistry : public QObject {
     /// images are on the mount — or for one already asked for.
     void requestArtwork(const QString& coverPath);
 
+    /// Ask a player for one of its tracks' preview waveforms.
+    ///
+    /// Remote media only, and the only way to get one: a remote track's
+    /// analysis files are not on this machine until the track is loaded, so
+    /// there is no file to read. Answered by `previewArrived` with the 900
+    /// bytes a player sends, or with an empty blob when it has none.
+    ///
+    /// Does nothing for a local medium, which has its files on the stick.
+    void requestPreview(const MediumId& medium, quint32 rekordboxId);
+
   signals:
     /// A streamed file has become readable: its size is known and it is in the
     /// StreamingFileRegistry. Internal, and the only thing startStreaming()'s
@@ -189,6 +199,9 @@ class MediaRegistry : public QObject {
     /// A cover asked for by requestArtwork() is now on disk. Whoever drew the
     /// grey square in its place should draw again.
     void artworkArrived(const QString& coverPath);
+    /// A remote track's preview waveform arrived. Empty when the player had
+    /// none, which is not an error.
+    void previewArrived(const MediumId& medium, quint32 rekordboxId, const QByteArray& blob);
     /// The list changed shape: a medium appeared, vanished, or finished reading.
     /// The browser rebuilds level 0 on this.
     void mediaChanged();
@@ -226,6 +239,11 @@ class MediaRegistry : public QObject {
             quint64 length);
     void onFetchFinished(const QString& localPath, const QString& error);
     void onArtworkFetched(const QString& localPath, const QString& error);
+    void onPreviewFetched(const QByteArray& mac,
+            mixxx::prolink::MediaSlot slot,
+            quint32 trackId,
+            const QByteArray& blob,
+            const QString& error);
 #endif
 
   private:

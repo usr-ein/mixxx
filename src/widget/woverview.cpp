@@ -1520,49 +1520,51 @@ void WOverview::drawNextPixmapPartRGB(QPainter* pPainter,
     float highColor_r, highColor_g, highColor_b;
     getRgbF(m_signalColors.getRgbHighColor(), &highColor_r, &highColor_g, &highColor_b);
 
+    // **One-sided, standing on the baseline, using the whole height.**
+    //
+    // Upstream draws one of the two samples of each pair upward from the centre
+    // and the other downward, which looks like a mirror and is not quite one --
+    // it is the two channels, split. Either way half the strip says what the
+    // other half already said, and on this deck the overview is 56 px of a 600
+    // px screen: 28 of them were spent on the second copy.
+    //
+    // Drawn from the baseline instead, at twice the scale, so the same passage
+    // is twice as tall and a break is twice as easy to see. The source image is
+    // 2 x 255 and the painter is translated to its middle, so the baseline is
+    // +255 and full scale is 2 x the sample.
+    //
+    // Only the RGB overview is changed, because it is the only one this deck
+    // draws. The HSV and filtered variants below are untouched.
+    const float baseline = 255.0f;
     int currentCompletion = 0;
     for (currentCompletion = m_actualCompletion;
             currentCompletion < nextCompletion;
             currentCompletion += 2) {
-        unsigned char left = pWaveform->getAll(currentCompletion);
-        unsigned char right = pWaveform->getAll(currentCompletion + 1);
+        const unsigned char left = pWaveform->getAll(currentCompletion);
+        const unsigned char right = pWaveform->getAll(currentCompletion + 1);
+        // The louder of the two channels sets the height, and its own bands set
+        // the colour -- so the bar is the moment that made it, rather than an
+        // average of two that never happened together.
+        const int louder = left >= right ? currentCompletion : currentCompletion + 1;
+        const float peak = static_cast<float>(std::max(left, right));
 
         // Retrieve "raw" LMH values from waveform
-        float low = static_cast<float>(pWaveform->getLow(currentCompletion));
-        float mid = static_cast<float>(pWaveform->getMid(currentCompletion));
-        float high = static_cast<float>(pWaveform->getHigh(currentCompletion));
+        const float low = static_cast<float>(pWaveform->getLow(louder));
+        const float mid = static_cast<float>(pWaveform->getMid(louder));
+        const float high = static_cast<float>(pWaveform->getHigh(louder));
 
         // Do matrix multiplication
-        float red = low * lowColor_r + mid * midColor_r + high * highColor_r;
-        float green = low * lowColor_g + mid * midColor_g + high * highColor_g;
-        float blue = low * lowColor_b + mid * midColor_b + high * highColor_b;
+        const float red = low * lowColor_r + mid * midColor_r + high * highColor_r;
+        const float green = low * lowColor_g + mid * midColor_g + high * highColor_g;
+        const float blue = low * lowColor_b + mid * midColor_b + high * highColor_b;
 
         // Normalize and draw
-        float max = math_max3(red, green, blue);
+        const float max = math_max3(red, green, blue);
         if (max > 0.0) {
             color.setRgbF(red / max, green / max, blue / max);
             pPainter->setPen(color);
-            pPainter->drawLine(QPointF(currentCompletion / 2, -left),
-                    QPointF(currentCompletion / 2, 0));
-        }
-
-        // Retrieve "raw" LMH values from waveform
-        low = static_cast<float>(pWaveform->getLow(currentCompletion + 1));
-        mid = static_cast<float>(pWaveform->getMid(currentCompletion + 1));
-        high = static_cast<float>(pWaveform->getHigh(currentCompletion + 1));
-
-        // Do matrix multiplication
-        red = low * lowColor_r + mid * midColor_r + high * highColor_r;
-        green = low * lowColor_g + mid * midColor_g + high * highColor_g;
-        blue = low * lowColor_b + mid * midColor_b + high * highColor_b;
-
-        // Normalize and draw
-        max = math_max3(red, green, blue);
-        if (max > 0.0) {
-            color.setRgbF(red / max, green / max, blue / max);
-            pPainter->setPen(color);
-            pPainter->drawLine(QPointF(currentCompletion / 2, 0),
-                    QPointF(currentCompletion / 2, right));
+            pPainter->drawLine(QPointF(currentCompletion / 2, baseline),
+                    QPointF(currentCompletion / 2, baseline - 2.0f * peak));
         }
     }
 

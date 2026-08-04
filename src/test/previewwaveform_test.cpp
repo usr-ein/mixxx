@@ -124,7 +124,10 @@ TEST(PreviewWaveformTest, ColourIsTheMeanOfTheThreeItCovers) {
 
     const PreviewWaveform preview = PreviewWaveform::fromAnlz(pwav(), columns);
     ASSERT_FALSE(preview.isNull());
-    EXPECT_EQ(255 / 3, preview.at(0).green);
+    // (0 + 127 + 0) / 3 = 42 of 127, scaled to 0..255. Written out rather than
+    // as 255/3, which is a pixel more: the mean is taken in the source's own
+    // units and then scaled once, not scaled and then averaged.
+    EXPECT_EQ(42 * 255 / 127, preview.at(0).green);
 }
 
 TEST(PreviewWaveformTest, AShortColourPreviewFallsBackToMonochrome) {

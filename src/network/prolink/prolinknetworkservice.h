@@ -137,6 +137,11 @@ class ProLinkNetworkService : public QObject {
     void setLoadedTrack(int sourcePlayer, MediaSlot slot, quint32 rekordboxId);
 
     /// Fetch a track's artwork into `localPath`.
+    /// Ask a player for a track's preview waveform, over dbserver.
+    ///
+    /// Returns without blocking; the answer arrives as previewFetched().
+    void fetchWaveformPreview(const QByteArray& mac, MediaSlot slot, quint32 trackId);
+
     void fetchArtwork(const QByteArray& mac,
             MediaSlot slot,
             quint32 artworkId,
@@ -163,6 +168,13 @@ class ProLinkNetworkService : public QObject {
             const QString& error);
     void fileFetched(const QString& localPath, const QString& error);
     void artworkFetched(const QString& localPath, const QString& error);
+    /// A track's preview waveform arrived, as the 900 bytes a player sends.
+    /// *blob* is empty when *error* is not.
+    void previewFetched(const QByteArray& mac,
+            MediaSlot slot,
+            quint32 trackId,
+            const QByteArray& blob,
+            const QString& error);
     /// How a transfer is getting on.
     ///
     /// `done`/`total` are a fraction to show a user. `offset`/`length` are the
@@ -272,9 +284,14 @@ class ProLinkNetworkService : public QObject {
     struct Pending {
         bool isDatabase = false;
         bool isArtwork = false;
+        /// A preview waveform, which has no file at either end: the bytes are
+        /// taken off the session when the transfer finishes.
+        bool isPreview = false;
         QByteArray mac;
         MediaSlot slot = MediaSlot::Usb;
         QString localPath;
+        /// For a preview, which track was asked about.
+        quint32 trackId = 0;
     };
 
     /// The device number a MAC currently holds, or 0.

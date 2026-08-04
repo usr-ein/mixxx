@@ -111,31 +111,11 @@ void WaveformRendererRGB::draw(
     const int breadth = m_waveformRenderer->getBreadth();
     const float halfBreadth = static_cast<float>(breadth) / 2.0f;
 
-    // **A one-sided waveform gets the whole height, not half of it.**
-    //
-    // Upstream scales every alignment by halfBreadth, which is right for the
-    // centred one -- it draws both ways from the middle -- and wastes half the
-    // widget for the top- and bottom-aligned ones, which draw one way from an
-    // edge. A mirror image carries no information the other half does not, so
-    // on a deck whose waveform is 414 px of a 600 px screen it is 207 px spent
-    // saying everything twice.
-    //
-    // Given the full breadth instead, the same passage is drawn twice as tall
-    // and every difference in amplitude is twice as easy to see, which is the
-    // whole job of the picture.
-    const bool oneSided = m_alignment == Qt::AlignBottom || m_alignment == Qt::AlignTop ||
-            m_alignment == Qt::AlignLeft || m_alignment == Qt::AlignRight;
-    const float heightFactor = allGain *
-            (oneSided ? static_cast<float>(breadth) : halfBreadth) /
-            sqrtf(255 * 255 * 3);
+    const float heightFactor = allGain * halfBreadth / sqrtf(255 * 255 * 3);
 
-    // Draw reference line. On the baseline for a one-sided waveform rather than
-    // through the middle of it, where it would be a line across the picture.
+    // Draw reference line
     painter->setPen(m_pColors->getAxesColor());
-    const float axis = m_alignment == Qt::AlignBottom ? static_cast<float>(breadth) - 1.0f
-            : m_alignment == Qt::AlignTop              ? 0.0f
-                                                       : halfBreadth;
-    painter->drawLine(QLineF(0, axis, m_waveformRenderer->getLength(), axis));
+    painter->drawLine(QLineF(0, halfBreadth, m_waveformRenderer->getLength(), halfBreadth));
 
     for (int x = 0; x < static_cast<int>(length); ++x) {
         // Width of the x position in visual indices.

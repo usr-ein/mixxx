@@ -87,6 +87,10 @@ class PreviewWaveformCache : public QObject {
     void arrived(const QString& mediumKey, quint32 rekordboxId);
 
   private:
+    /// A remote preview came back off the network, as the 900 bytes a player
+    /// sends. Empty when it had none.
+    void onRemoteArrived(const MediumId& medium, quint32 rekordboxId, const QByteArray& blob);
+
     /// `medium|id`, so one hash covers both sources and survives a medium
     /// coming back.
     static QString keyFor(const MediumId& medium, quint32 rekordboxId);

@@ -932,6 +932,41 @@ void ProLinkNetworkService::pullDatabase(MediaSlot slot) {
     kLogger.info() << "no player has media in that slot yet";
 }
 
+void ProLinkNetworkService::fetchWaveformPreview(
+        const QByteArray& mac, MediaSlot slot, quint32 trackId) {
+    if (!m_pImpl->pSession) {
+        emit previewFetched(mac, slot, trackId, QByteArray(),
+                tr("Pro DJ Link is not running"));
+        return;
+    }
+    const int number = numberFor(mac);
+    if (number == 0) {
+        emit previewFetched(mac, slot, trackId, QByteArray(),
+                tr("that player is no longer on the network"));
+        return;
+    }
+
+    // Over dbserver, on the connection artwork already uses. 900 bytes, and no
+    // file at either end -- the bytes are taken off the session when the
+    // transfer finishes.
+    try {
+        const quint32 id = (*m_pImpl->pSession)
+                                   ->fetch_waveform_preview(
+                                           static_cast<::std::uint8_t>(number),
+                                           toRustSlot(slot),
+                                           trackId);
+        Pending pending;
+        pending.isPreview = true;
+        pending.mac = mac;
+        pending.slot = slot;
+        pending.trackId = trackId;
+        m_pending.insert(id, pending);
+    } catch (const std::exception& error) {
+        emit previewFetched(
+                mac, slot, trackId, QByteArray(), QString::fromUtf8(error.what()));
+    }
+}
+
 void ProLinkNetworkService::fetchArtwork(const QByteArray& mac,
         MediaSlot slot,
         quint32 artworkId,
@@ -1003,7 +1038,7 @@ void ProLinkNetworkService::poll() {
             break;
         case ::prolink::EventKind::TransferProgress: {
             const auto found = m_pending.constFind(event.transfer);
-            if (found != m_pending.constEnd() && !found->isArtwork) {
+            if (found != m_pending.constEnd() && !found->isArtwork && !found->isPreview) {
                 emit fileFetchProgress(found->localPath,
                         static_cast<quint64>(event.done),
                         static_cast<quint64>(event.total),
@@ -1027,7 +1062,7 @@ void ProLinkNetworkService::poll() {
             // A missing cover is not worth reporting as the connection's last
             // error: a medium has hundreds of them, a few are always absent,
             // and this string is what the UI shows about the network itself.
-            if (!error.isEmpty() && !pending.isArtwork) {
+            if (!error.isEmpty() && !pending.isArtwork && !pending.isPreview) {
                 m_lastError = error;
             }
             if (pending.isDatabase) {
@@ -1048,6 +1083,19 @@ void ProLinkNetworkService::poll() {
                     QFile::remove(pending.localPath);
                 }
                 emit databaseFetched(pending.mac, pending.slot, data, reason);
+            } else if (pending.isPreview) {
+                // Taken rather than read back: the bytes never touched a
+                // filesystem, which is the point of fetching a 900-byte blob
+                // over dbserver instead of a 157 kB file over NFS.
+                QByteArray blob;
+                if (error.isEmpty()) {
+                    const auto bytes =
+                            (*m_pImpl->pSession)->take_waveform_preview(event.transfer);
+                    blob = QByteArray(reinterpret_cast<const char*>(bytes.data()),
+                            static_cast<qsizetype>(bytes.size()));
+                }
+                emit previewFetched(
+                        pending.mac, pending.slot, pending.trackId, blob, error);
             } else if (pending.isArtwork) {
                 emit artworkFetched(pending.localPath, error);
             } else {
