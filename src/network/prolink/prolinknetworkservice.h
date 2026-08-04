@@ -202,6 +202,11 @@ class ProLinkNetworkService : public QObject {
     /// Say how far our beat is from the master's, once a second, while synced.
     void reportPhaseDrift();
 
+    /// The master's beat minus ours, in beats, wrapped to plus or minus half a
+    /// beat. False when there is nothing to compare: no master, or no grid
+    /// here.
+    bool phaseErrorBeats(double* pBeats) const;
+
     /// Nudge the playhead so our beat lands on the master's.
     ///
     /// Once, when SYNC is engaged. Continuous phase correction would be a
@@ -220,6 +225,8 @@ class ProLinkNetworkService : public QObject {
     bool m_alignWhenTempoMatches = false;
     /// Rate-limits reportPhaseDrift() to once a second.
     QElapsedTimer m_driftReport;
+    /// Since the last phase correction; see kPhaseHoldMs.
+    QElapsedTimer m_phaseHold;
 
     /// Re-read the device table, emitting found, changed and lost as it moves.
     void syncDevices();
