@@ -2,7 +2,9 @@
 
 #include <QSqlDatabase>
 #include <QDateTime>
+#include <QFileInfo>
 #include <QHBoxLayout>
+#include <QMouseEvent>
 #include <QSqlQuery>
 #include <QStackedWidget>
 #include <QVBoxLayout>
@@ -12,6 +14,7 @@
 #include "control/controlobject.h"
 #include "control/controlpushbutton.h"
 #include "library/basetrackcache.h"
+#include "library/coverart.h"
 #include "library/dao/analysisdao.h"
 #include "library/dao/trackschema.h"
 #include "library/deck/deckqueries.h"
@@ -59,6 +62,10 @@ constexpr int kInfoPanelWidth = 464;
 
 const QString kDeckGroup = QStringLiteral("[Channel1]");
 
+/// Between the end of the path and the sort indicator. Wide enough that the
+/// indicator is plainly a thing of its own and not the next crumb.
+constexpr int kSortChipGap = 28;
+
 /// Categories of a medium, in the order the PRD lists them.
 struct CategorySpec {
     const char* title;
@@ -68,6 +75,43 @@ struct CategorySpec {
 
 namespace mixxx {
 namespace deck {
+
+DeckSortChip::DeckSortChip(QWidget* pParent)
+        : QLabel(pParent) {
+    setObjectName(QStringLiteral("DeckSortChip"));
+    setTextFormat(Qt::RichText);
+    setAlignment(Qt::AlignLeft | Qt::AlignVCenter);
+    hide();
+    m_longPressTimer.setSingleShot(true);
+    m_longPressTimer.setInterval(DeckListView::kLongPressMs);
+    connect(&m_longPressTimer, &QTimer::timeout, this, [this]() {
+        // Consumed, so the release that ends the hold is not also read as the
+        // tap it started out as -- which would flip the direction on the way
+        // into the menu that was about to be opened.
+        m_consumed = true;
+        emit held();
+    });
+}
+
+void DeckSortChip::mousePressEvent(QMouseEvent* pEvent) {
+    Q_UNUSED(pEvent);
+    m_consumed = false;
+    m_longPressTimer.start();
+}
+
+void DeckSortChip::mouseReleaseEvent(QMouseEvent* pEvent) {
+    m_longPressTimer.stop();
+    if (m_consumed) {
+        m_consumed = false;
+        pEvent->accept();
+        return;
+    }
+    // No slop test and no travel test: this is a chip a few characters wide,
+    // and a finger that wandered off it has already left the widget, which ends
+    // the press without either of those being asked.
+    emit tapped();
+    pEvent->accept();
+}
 
 WDeckBrowser::WDeckBrowser(QWidget* pParent, Library* pLibrary, UserSettingsPointer pConfig)
         : QWidget(pParent),
@@ -91,9 +135,23 @@ WDeckBrowser::WDeckBrowser(QWidget* pParent, Library* pLibrary, UserSettingsPoin
     pTopBezelPad->setObjectName(QStringLiteral("DeckBezelPad"));
     pLayout->addWidget(pTopBezelPad);
 
-    m_pBreadcrumb = new QLabel(this);
+    // The breadcrumb bar: the path, and the sort indicator beside it. Two
+    // widgets rather than one label, because the indicator carries gestures of
+    // its own and a rich-text anchor cannot be asked whether it is being held.
+    auto* pBreadcrumbBar = new QWidget(this);
+    pBreadcrumbBar->setObjectName(QStringLiteral("DeckBreadcrumbBar"));
+    // The bar carries the background and the rule under it now, not the label:
+    // the label is only as wide as the path, and a strip that stops where the
+    // words stop is not a bar. And a plain QWidget ignores a stylesheet
+    // background without this attribute, so it would be no strip at all.
+    pBreadcrumbBar->setAttribute(Qt::WA_StyledBackground, true);
+    pBreadcrumbBar->setFixedHeight(kBreadcrumbHeight);
+    auto* pBreadcrumbLayout = new QHBoxLayout(pBreadcrumbBar);
+    pBreadcrumbLayout->setContentsMargins(0, 0, 0, 0);
+    pBreadcrumbLayout->setSpacing(kSortChipGap);
+
+    m_pBreadcrumb = new QLabel(pBreadcrumbBar);
     m_pBreadcrumb->setObjectName(QStringLiteral("DeckBreadcrumb"));
-    m_pBreadcrumb->setFixedHeight(kBreadcrumbHeight);
     // Rich text, so each segment can be a link back to its level. The href is
     // the level INDEX rather than its name -- two levels can share a name, and
     // matching on text would jump to the wrong one.
@@ -101,7 +159,18 @@ WDeckBrowser::WDeckBrowser(QWidget* pParent, Library* pLibrary, UserSettingsPoin
     m_pBreadcrumb->setOpenExternalLinks(false);
     m_pBreadcrumb->setTextInteractionFlags(Qt::LinksAccessibleByMouse);
     connect(m_pBreadcrumb, &QLabel::linkActivated, this, &WDeckBrowser::onBreadcrumbClicked);
-    pLayout->addWidget(m_pBreadcrumb);
+    pBreadcrumbLayout->addWidget(m_pBreadcrumb);
+
+    m_pSortChip = new DeckSortChip(pBreadcrumbBar);
+    connect(m_pSortChip, &DeckSortChip::tapped, this, &WDeckBrowser::onSortFlipped);
+    connect(m_pSortChip, &DeckSortChip::held, this, &WDeckBrowser::openSortMenu);
+    pBreadcrumbLayout->addWidget(m_pSortChip);
+
+    // The stretch is last, so the indicator sits against the end of the path
+    // rather than against the far edge of the screen: it is a statement ABOUT
+    // this list, and it reads as one by being next to what it describes.
+    pBreadcrumbLayout->addStretch(1);
+    pLayout->addWidget(pBreadcrumbBar);
 
     m_pStack = new QStackedWidget(this);
     pLayout->addWidget(m_pStack, 1);
@@ -111,6 +180,12 @@ WDeckBrowser::WDeckBrowser(QWidget* pParent, Library* pLibrary, UserSettingsPoin
     m_pMenuDelegate = new MenuRowDelegate(this);
     m_pMenuView->setModel(m_pMenuModel);
     m_pMenuView->setItemDelegate(m_pMenuDelegate);
+    // One tap goes in, with no select-first step (browser-prd.md 4.2). Every
+    // level this view shows is a menu, and going into a menu is free to undo --
+    // BACK or a right-swipe and you are out -- so it costs one tap. The track
+    // list is the other view and keeps the deliberate hold, because loading
+    // over a playing track is not free to undo.
+    m_pMenuView->setTapActivates(true);
     m_pStack->addWidget(m_pMenuView);
 
     m_pTracksPage = new QWidget(m_pStack);
@@ -319,7 +394,17 @@ WDeckBrowser::WDeckBrowser(QWidget* pParent, Library* pLibrary, UserSettingsPoin
     connect(m_pRegistry.get(),
             &MediaRegistry::artworkArrived,
             this,
-            [this](const QString&) { m_coverRedraw.start(); });
+            [this](const QString& coverPath) {
+                m_coverRedraw.start();
+                // The deck's header too, when the track on it was the one
+                // waiting. The redraw above is a repaint of the list; the deck
+                // draws from the Track, and the Track has no cover yet.
+                if (!m_pendingCoverPath.isEmpty() && coverPath == m_pendingCoverPath) {
+                    applyCoverArt(m_pendingCoverTrack.lock(),
+                            m_pendingCoverPath,
+                            m_pendingArtworkPath);
+                }
+            });
     // A medium that has gone cannot be re-read, so what is cached from it is
     // now the only copy and must not be dropped to reclaim space.
     connect(m_pRegistry.get(),
@@ -406,14 +491,7 @@ WDeckBrowser::WDeckBrowser(QWidget* pParent, Library* pLibrary, UserSettingsPoin
                     m_pSortMenu->dismiss();
                     return;
                 }
-                // Only over a track list. Anywhere else the button does
-                // nothing at all, which is what the dark LED already says.
-                if (!inTrackList()) {
-                    return;
-                }
-                m_pSortMenu->move((width() - m_pSortMenu->width()) / 2,
-                        kTopBezelPadHeight + kBreadcrumbHeight);
-                m_pSortMenu->open(m_sortColumn);
+                openSortMenu();
             });
     m_pInfoToggle = std::make_unique<ControlPushButton>(ConfigKey("[Browser]", "info_toggle"));
     connect(m_pInfoToggle.get(), &ControlPushButton::valueChanged, this, [this](double v) {
@@ -567,23 +645,28 @@ void WDeckBrowser::updateBreadcrumb() {
                              .arg(i)
                              .arg(label));
     }
-    QString text = parts.join(QStringLiteral("<span style='color:#557700'> › </span>"));
+    m_pBreadcrumb->setText(
+            parts.join(QStringLiteral("<span style='color:#557700'> › </span>")));
+
+    // The arrow says the direction and the name says the field, so the
+    // breadcrumb answers "what am I looking at, and in what order" -- and the
+    // chip is the control for both: tap flips it, hold opens the field menu.
+    QString sortText;
     if (inTrackList() && !m_sortColumn.isEmpty()) {
-        // The arrow says the direction and the name says the field, so the
-        // breadcrumb answers "what am I looking at, and in what order".
         for (const WDeckSortMenu::Field& field : WDeckSortMenu::fields()) {
             if (field.column == m_sortColumn) {
-                text += QStringLiteral(
-                        "<span style='color:#aaaaaa'>&nbsp;&nbsp;&nbsp;&nbsp;"
-                        "%1 %2</span>")
-                                .arg(m_sortDescending ? QStringLiteral("▼")
-                                                      : QStringLiteral("▲"),
-                                        field.title.toHtmlEscaped());
+                sortText = QStringLiteral("%1 %2")
+                                   .arg(m_sortDescending ? QStringLiteral("▼")
+                                                         : QStringLiteral("▲"),
+                                           field.title.toHtmlEscaped());
                 break;
             }
         }
     }
-    m_pBreadcrumb->setText(text);
+    m_pSortChip->setText(sortText);
+    // Hidden rather than blank: an empty chip still holds its padding, and a
+    // gap in the bar with nothing in it reads as something that failed to draw.
+    m_pSortChip->setVisible(!sortText.isEmpty());
 }
 
 void WDeckBrowser::onMediaChanged() {
@@ -906,13 +989,18 @@ MediumId WDeckBrowser::currentMedium() const {
     return m_stack.isEmpty() ? MediumId() : m_stack.last().medium;
 }
 
-void WDeckBrowser::applySort() {
+void WDeckBrowser::applySort(bool keepSelection) {
     // Which track the DJ is looking at, so the sort can put the selection back
     // on it. Re-selecting the model drops the current index entirely, which
     // left the list with nothing highlighted and the info panel blank -- and a
     // DJ who sorts a list is usually looking at a track and wants to keep
     // looking at it, not to be dumped back at the top.
-    const int wasSelected = m_pTrackView->selectedRow();
+    //
+    // Flipping the direction is the exception, and *keepSelection* is how the
+    // caller says so: asking for the other end of a list is asking to be taken
+    // there, and staying put would leave the DJ in the middle of a list that
+    // had visibly reversed around them.
+    const int wasSelected = keepSelection ? m_pTrackView->selectedRow() : -1;
     const int idColumn = m_pTrackModel->fieldIndex(QStringLiteral("track_id"));
     const int keepTrackId = (wasSelected >= 0 && idColumn >= 0)
             ? m_pTrackModel->index(wasSelected, idColumn).data(Qt::DisplayRole).toInt()
@@ -982,6 +1070,28 @@ void WDeckBrowser::restoreSelection(int trackId) {
         }
     }
     m_pTrackView->selectRow(0);
+}
+
+void WDeckBrowser::openSortMenu() {
+    // Only over a track list. Anywhere else the SORT pad does nothing at all,
+    // which is what its dark LED already says -- and the chip that is the other
+    // way in is not on screen at all.
+    if (!inTrackList()) {
+        return;
+    }
+    m_pSortMenu->move((width() - m_pSortMenu->width()) / 2,
+            kTopBezelPadHeight + kBreadcrumbHeight);
+    m_pSortMenu->open(m_sortColumn, m_sortDescending);
+}
+
+void WDeckBrowser::onSortFlipped() {
+    if (m_sortColumn.isEmpty()) {
+        return;
+    }
+    // The same route the menu takes, so "the direction changed" is decided in
+    // one place and the LED, the breadcrumb and the selection all follow from
+    // it.
+    onSortChosen(m_sortColumn, !m_sortDescending);
 }
 
 void WDeckBrowser::onBreadcrumbClicked(const QString& levelIndex) {
@@ -1055,6 +1165,12 @@ void WDeckBrowser::updateInfoPanel() {
     add(tr("Duration"), LIBRARYTABLE_DURATION);
     add(tr("Genre"), LIBRARYTABLE_GENRE);
     add(tr("Label"), QStringLiteral("label"));
+    // Tempo and key: the two a DJ is actually matching on, and the two the row
+    // stops drawing the moment this panel opens. Each drops itself when it is
+    // what the list is sorted by, so sorting by Key leaves the BPM on the panel
+    // and sorting by BPM leaves the key -- never neither, which is what
+    // omitting the tempo here amounted to.
+    add(tr("BPM"), LIBRARYTABLE_BPM);
     add(tr("Key"), LIBRARYTABLE_KEY);
     add(tr("Rating"), LIBRARYTABLE_RATING);
     add(tr("Added"), LIBRARYTABLE_DATETIMEADDED);
@@ -1124,9 +1240,12 @@ void WDeckBrowser::onRateRangeChanged() {
 }
 
 void WDeckBrowser::onSortChosen(const QString& column, bool descending) {
+    // Same field, other way round: the list is being reversed rather than
+    // re-sorted, and what was asked for is at the top of it now.
+    const bool reversed = column == m_sortColumn && descending != m_sortDescending;
     m_sortColumn = column;
     m_sortDescending = descending;
-    applySort();
+    applySort(!reversed);
     updateBreadcrumb();
     m_pTrackView->setFocus();
 }
@@ -1140,6 +1259,15 @@ void WDeckBrowser::onSortDefault() {
 }
 
 void WDeckBrowser::onReselected(int row) {
+    if (!m_stack.isEmpty() && m_stack.last().kind == Level::Kind::Search) {
+        // A search result is a track somebody typed a name to find, so the tap
+        // that lands on it loads it -- there is nothing left to decide. The
+        // info layout is not the alternative here that it is in a track list:
+        // the keyboard has the width the panel would need, so the panel is
+        // hidden on this page and toggling it only changed what the rows drew.
+        loadSelectedTrack();
+        return;
+    }
     if (inTrackList()) {
         // A tap on the already-selected track opens the info layout, which is
         // the "tell me more" gesture. Loading is the long press.
@@ -1209,6 +1337,11 @@ void WDeckBrowser::loadSelectedTrack() {
     const QString artist = field(LIBRARYTABLE_ARTIST);
     const QString title = field(LIBRARYTABLE_TITLE);
     const QString album = field(LIBRARYTABLE_ALBUM);
+    // The two halves of one cover: where the image is (or will be) on this
+    // machine, and what it is called on the medium. The second is the one the
+    // cache key is derived from, and the pdb writes both or neither.
+    const QString coverPath = field(LIBRARYTABLE_COVERART_LOCATION);
+    const QString artworkPath = field(QStringLiteral("artwork_path"));
     // Which deck_library row this is, kept for the play log. Taken here because
     // this is the only moment it is unambiguous: two sticks can hold clones of
     // the same file, so afterwards the path alone does not say which medium it
@@ -1279,6 +1412,12 @@ void WDeckBrowser::loadSelectedTrack() {
         // reads genre off the pdb row anyway.
     }
 
+    // The cover, from the pdb for the same reason as the metadata above: the
+    // art is not in the file and not beside it. Unconditional, unlike the
+    // metadata -- a stick's tracks are played from a copy *and* read through
+    // getTrack(), and neither route finds a cover on its own.
+    applyCoverArt(pTrack, coverPath, artworkPath);
+
     // The beat grid, hot cues, loops and memory cues rekordbox already worked
     // out, from the ANLZ files beside the track.
     //
@@ -1325,6 +1464,74 @@ void WDeckBrowser::loadSelectedTrack() {
                     << "waveform" << !pTrack->getWaveform().isNull()
                     << "summary" << !pTrack->getWaveformSummary().isNull();
     emit loadTrackToPlayer(pTrack, kDeckGroup, false);
+}
+
+void WDeckBrowser::applyCoverArt(const TrackPointer& pTrack,
+        QString coverPath,
+        QString artworkPath) {
+    // Whatever the last track was waiting for, it is not waiting any more, and
+    // its cover is not this widget's to defend any more either.
+    m_pendingCoverPath.clear();
+    m_pendingArtworkPath.clear();
+    m_pendingCoverTrack.reset();
+    QObject::disconnect(m_coverGuard);
+    if (!pTrack || coverPath.isEmpty()) {
+        return;
+    }
+
+    if (!QFileInfo::exists(coverPath)) {
+        // A remote medium's covers come over dbserver one at a time, and only
+        // the ones a DJ has looked at -- so a track loaded from a list that
+        // scrolled past quickly can reach the deck before its image does.
+        //
+        // The CoverInfo is *not* set here, and that is the whole reason this
+        // waits rather than setting it now and again on arrival: Track only
+        // emits coverArtUpdated when the info actually changes, so the second
+        // set would be a no-op and the header would keep the empty square it
+        // drew for a file that was not there. It is set exactly once, when
+        // there is something to load.
+        if (m_pRegistry) {
+            m_pRegistry->requestArtwork(coverPath);
+        }
+        m_pendingCoverPath = std::move(coverPath);
+        m_pendingArtworkPath = std::move(artworkPath);
+        m_pendingCoverTrack = pTrack;
+        return;
+    }
+
+    CoverInfoRelative cover;
+    cover.type = CoverInfo::FILE;
+    cover.source = CoverInfo::GUESSED;
+    cover.coverLocation = coverPath;
+    // The same key the browser's rows are drawn with. Skipping it would leave
+    // every rekordbox track sharing CoverInfo's single default key, and
+    // CoverArtCache indexes its pixmaps by that -- so the header would show
+    // whichever cover was decoded last until the load of the real one caught
+    // up and corrected it.
+    cover.setImageDigest(artworkDigest(artworkPath));
+    pTrack->setCoverInfo(cover);
+    guardCoverArt(pTrack, cover);
+}
+
+void WDeckBrowser::guardCoverArt(const TrackPointer& pTrack, const CoverInfoRelative& cover) {
+    QObject::disconnect(m_coverGuard);
+    m_coverGuard = connect(pTrack.get(),
+            &Track::coverArtUpdated,
+            this,
+            [this, weakTrack = TrackWeakPointer(pTrack), cover]() {
+                const TrackPointer pLoaded = weakTrack.lock();
+                if (!pLoaded || pLoaded->getCoverInfo() == cover) {
+                    // Still ours, or gone. Either way there is nothing here to
+                    // put right -- and this fires for our own set as well as
+                    // for the one that overwrote it.
+                    return;
+                }
+                // Disconnected BEFORE setting, not after: setCoverInfo() emits
+                // this signal synchronously, so a guard still armed would be
+                // straight back in here looking at its own work.
+                QObject::disconnect(m_coverGuard);
+                pLoaded->setCoverInfo(cover);
+            });
 }
 
 void WDeckBrowser::onActivated(int row) {

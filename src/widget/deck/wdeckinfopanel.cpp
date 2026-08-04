@@ -3,6 +3,8 @@
 #include <QFileInfo>
 #include <QPainter>
 
+#include "library/coverartutils.h"
+
 namespace {
 const QColor kBackground(0x14, 0x14, 0x14);
 const QColor kLabel(0x77, 0x77, 0x77);
@@ -34,6 +36,13 @@ QString bestQuality(const QString& path) {
     const QString larger = path.left(dot) + QStringLiteral("_m") + path.mid(dot);
     return QFileInfo::exists(larger) ? larger : path;
 }
+
+/// What a track with no cover is drawn as: Mixxx's own placeholder, the same
+/// one the deck's header falls back to. A bare dark square read as a panel that
+/// had failed to draw its picture rather than as a track without one.
+QPixmap defaultCover() {
+    return QPixmap(CoverArtUtils::defaultCoverLocation());
+}
 } // namespace
 
 namespace mixxx {
@@ -52,6 +61,15 @@ void WDeckInfoPanel::setTrack(const QString& coverPath,
         // Loaded here rather than in paintEvent: the panel repaints on every
         // encoder detent, and decoding a JPEG per frame is visible on a Pi.
         m_cover = coverPath.isEmpty() ? QPixmap() : QPixmap(bestQuality(coverPath));
+        // Whether what is on screen is the track's own cover or the stand-in.
+        // This is the question reloadCover() has to ask, and "is it null" stopped
+        // answering it the moment there was always something to draw: the
+        // placeholder would count as loaded and a cover arriving afterwards
+        // would never replace it.
+        m_coverIsPlaceholder = m_cover.isNull();
+        if (m_coverIsPlaceholder) {
+            m_cover = defaultCover();
+        }
     }
     m_fields = fields;
     update();
@@ -61,18 +79,24 @@ void WDeckInfoPanel::reloadCover() {
     // The cover is decoded once, in setTrack, and setTrack short-circuits when
     // the path has not changed -- so a cover that arrives *after* the panel was
     // filled in would never be picked up without this.
-    if (m_coverPath.isEmpty() || !m_cover.isNull()) {
+    if (m_coverPath.isEmpty() || !m_coverIsPlaceholder) {
         return;
     }
-    m_cover = QPixmap(bestQuality(m_coverPath));
-    if (!m_cover.isNull()) {
-        update();
+    const QPixmap cover(bestQuality(m_coverPath));
+    if (cover.isNull()) {
+        return;
     }
+    m_cover = cover;
+    m_coverIsPlaceholder = false;
+    update();
 }
 
 void WDeckInfoPanel::clear() {
     m_coverPath.clear();
+    // Null, not the placeholder: there is no track selected at all, and a
+    // record sleeve drawn for nothing is worse than an empty panel.
     m_cover = QPixmap();
+    m_coverIsPlaceholder = false;
     m_fields.clear();
     update();
 }

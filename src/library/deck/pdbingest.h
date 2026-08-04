@@ -1,5 +1,6 @@
 #pragma once
 
+#include <QByteArray>
 #include <QSqlDatabase>
 #include <QString>
 
@@ -33,6 +34,21 @@ void dropTables(QSqlDatabase& database);
 /// Delete everything belonging to one medium, so a re-read replaces rather than
 /// duplicates.
 void clearMedium(QSqlDatabase& database, const MediumId& medium);
+
+/// The cache key for one cover, derived from its **medium-relative** artwork
+/// path rather than from the image.
+///
+/// CoverArtCache indexes its pixmaps by this and loads the image from the
+/// location beside it, so it never has to be the digest of any actual bytes —
+/// which is what makes it usable for a remote medium, whose images have not
+/// been downloaded when the row is written. Paths are unique per image on a
+/// medium, so two covers cannot collide.
+///
+/// Shared rather than computed at each site because the two sites have to
+/// agree: `deck_library.coverart_digest` and the CoverInfo the deck is handed
+/// key the same pixmap cache, and a disagreement means the same image cached
+/// and decoded twice under two names.
+QByteArray artworkDigest(const QString& artworkPath);
 
 /// What one ingest produced, for the source row's summary line.
 struct IngestResult {

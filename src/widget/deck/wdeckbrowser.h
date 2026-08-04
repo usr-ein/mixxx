@@ -7,6 +7,7 @@
 #include <memory>
 
 #include "control/controlproxy.h"
+#include "library/coverart.h"
 #include "library/deck/mediaregistry.h"
 #include "library/deck/trackcache.h"
 #include "library/deck/mediumid.h"
@@ -34,6 +35,37 @@ class WDeckKeyboard;
 class WDeckInfoPanel;
 class WDeckDiagnostics;
 class TrackRowDelegate;
+
+/// The `▲ Album` in the breadcrumb: what the list is sorted by, and the control
+/// for it.
+///
+/// A widget of its own rather than a link inside the breadcrumb's rich text,
+/// and that is what buys the second gesture: a QLabel anchor knows it was
+/// clicked and nothing more, so there was no way to ask whether a press that
+/// was still being held was on the indicator or on `SAM1 › Genre`. A widget is
+/// asked that by being pressed.
+///
+/// Tap flips the direction; hold opens the sort menu — the same short/long
+/// split the SORT pad has, in the place the sort is displayed.
+class DeckSortChip : public QLabel {
+    Q_OBJECT
+
+  public:
+    explicit DeckSortChip(QWidget* pParent = nullptr);
+
+  signals:
+    void tapped();
+    void held();
+
+  protected:
+    void mousePressEvent(QMouseEvent* pEvent) override;
+    void mouseReleaseEvent(QMouseEvent* pEvent) override;
+
+  private:
+    QTimer m_longPressTimer;
+    /// The hold already fired, so the release that ends it is not also a tap.
+    bool m_consumed = false;
+};
 
 /// The deck's library, as a menu stack.
 ///
@@ -75,6 +107,10 @@ class WDeckBrowser : public QWidget, public WBaseWidget {
     void onPlayPositionChanged(double position);
     /// A breadcrumb segment was clicked: pop back to that level.
     void onBreadcrumbClicked(const QString& levelIndex);
+    /// The sort indicator was tapped: the other way round.
+    void onSortFlipped();
+    /// The sort indicator was held: the field menu, as the SORT pad raises it.
+    void openSortMenu();
 
   private:
     /// What a level is showing. The payload is what rebuilding it needs.
@@ -117,6 +153,38 @@ class WDeckBrowser : public QWidget, public WBaseWidget {
     void refreshTrackColumns();
     void updateBreadcrumb();
     void loadSelectedTrack();
+    /// Point a Track at the cover its medium carries, so the deck's header
+    /// draws it.
+    ///
+    /// Nothing else does: a rekordbox medium keeps its art under `PIONEER/`,
+    /// nowhere near the audio file, and the deck plays from a byte copy in the
+    /// cache anyway -- so every way Mixxx has of finding a cover on its own
+    /// (embedded tags, an image beside the file) comes back with nothing and
+    /// the header falls back to the empty square. The path is in the pdb, and
+    /// the browser row already has it.
+    ///
+    /// Taken by value because the caller may be handing over the pending-cover
+    /// members, which this clears.
+    void applyCoverArt(const TrackPointer& pTrack,
+            QString coverPath,
+            QString artworkPath);
+    /// Put the medium's cover back if something guesses over it.
+    ///
+    /// `TrackDAO::getOrAddTrack()` fires `guessTrackCoverInfoConcurrently()` on
+    /// a worker for every track it adds to the library for the first time. That
+    /// worker looks for an image beside the audio file — which for this deck is
+    /// the byte-copy cache, and holds nothing but other tracks — finishes a few
+    /// milliseconds after the load has returned, and writes `CoverInfo::NONE`
+    /// over the path taken out of the pdb.
+    ///
+    /// It is a race and it cannot be won by ordering: the guess is already
+    /// running when `getOrAddTrack()` returns. So the cover is *defended*
+    /// instead, once, and the guess loses the rematch.
+    ///
+    /// This is the whole of "the artwork appears on the second load and never
+    /// the first": the second load finds the track already in the library, so
+    /// no guess is fired and nothing overwrites anything.
+    void guardCoverArt(const TrackPointer& pTrack, const CoverInfoRelative& cover);
     /// Put the selection back after the model has been re-selected, on the same
     /// track if it is still in the list.
     void restoreSelection(int trackId);
@@ -130,6 +198,7 @@ class WDeckBrowser : public QWidget, public WBaseWidget {
     std::unique_ptr<MediaRegistry> m_pRegistry;
 
     QLabel* m_pBreadcrumb;
+    DeckSortChip* m_pSortChip;
     QStackedWidget* m_pStack;
     DeckListView* m_pMenuView;
     DeckListView* m_pTrackView;
@@ -163,7 +232,10 @@ class WDeckBrowser : public QWidget, public WBaseWidget {
     bool m_sortDescending = false;
     /// Applied to whatever list is on screen, and re-applied whenever another
     /// one opens.
-    void applySort();
+    ///
+    /// *keepSelection* puts the selection back on the track it was on, which is
+    /// what a DJ wants from every sort except a reversal — see the body.
+    void applySort(bool keepSelection = true);
 
     /// Watched so the UI reacts to the deck rather than to being redrawn.
     std::unique_ptr<ControlProxy> m_pPlayingKey;
@@ -190,6 +262,19 @@ class WDeckBrowser : public QWidget, public WBaseWidget {
     /// The cached file the deck is playing, so it can be unpinned when another
     /// takes its place.
     QString m_pinnedPath;
+    /// A cover the track on the deck is still waiting for, and the track that
+    /// wants it. Only ever set for a remote medium: its images come over the
+    /// network one at a time, as they are looked at, so a track can reach the
+    /// deck before its own cover does.
+    ///
+    /// **Weak on purpose.** The deck owns what it is playing; holding a
+    /// TrackPointer here would keep the last one alive in GlobalTrackCache
+    /// until the next load, waveform and all, for a cover that may never come.
+    QString m_pendingCoverPath;
+    QString m_pendingArtworkPath;
+    TrackWeakPointer m_pendingCoverTrack;
+    /// Armed by guardCoverArt() for the track on the deck, and only that one.
+    QMetaObject::Connection m_coverGuard;
 
     // The deck's controls. Rotate, push, back, and the two SORT meanings.
     std::unique_ptr<ControlEncoder> m_pMove;

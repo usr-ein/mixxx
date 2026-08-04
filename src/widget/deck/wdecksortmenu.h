@@ -13,13 +13,21 @@ class MenuRowDelegate;
 
 /// The sort menu (browser-prd.md 9).
 ///
-/// A pop-over, raised by a short SORT press or a tap on the breadcrumb's sort
-/// indicator, and only ever over a track list. Two steps: pick a field, then
-/// pick a direction — except `Default`, which is one step because "the order
-/// the list came in" has no direction to choose.
+/// A pop-over, raised by a short SORT press, and only ever over a track list.
+/// **One step:** pick a field and the list re-sorts, in the direction that
+/// field is normally read in.
+///
+/// There is no direction step. It was a second screen that every sort had to
+/// walk through to answer a question that already had a right answer, and it
+/// is now a toggle in the place the direction is *shown*: the breadcrumb's
+/// `▲ Album`, which flips to `▼ Album` when tapped. Picking the field that is
+/// already in force does the same thing, so the direction stays reachable from
+/// the encoder alone.
 ///
 /// While it is up it takes all input, which is what "in focus" has to mean when
-/// there is one encoder and no pointer to click elsewhere with.
+/// there is one encoder and no pointer to click elsewhere with — and a tap
+/// anywhere outside it closes it, which is what "elsewhere" means when there
+/// is one.
 class WDeckSortMenu : public QWidget {
     Q_OBJECT
 
@@ -40,8 +48,9 @@ class WDeckSortMenu : public QWidget {
 
     explicit WDeckSortMenu(QWidget* pParent = nullptr);
 
-    /// Raise it, with *currentColumn* preselected.
-    void open(const QString& currentColumn);
+    /// Raise it, with the sort in force preselected and marked with the arrow
+    /// it is running in.
+    void open(const QString& currentColumn, bool descending);
     bool isOpen() const;
 
     static const QList<Field>& fields();
@@ -59,18 +68,23 @@ class WDeckSortMenu : public QWidget {
     void activateSelection();
     void dismiss();
 
+  protected:
+    /// Watches the whole application while this is up, for the one thing a
+    /// child widget cannot see: a press that landed somewhere else.
+    bool eventFilter(QObject* pObject, QEvent* pEvent) override;
+    void showEvent(QShowEvent* pEvent) override;
+    void hideEvent(QHideEvent* pEvent) override;
+
   private:
     void showFields();
-    void showDirections();
 
     DeckListView* m_pView;
     DeckMenuModel* m_pModel;
     MenuRowDelegate* m_pDelegate;
-    /// Which step is on screen. The direction step is not a second widget: it
-    /// is the same list with two rows in it.
-    bool m_choosingDirection = false;
-    int m_chosenField = -1;
+    /// The sort the list is running, so the menu can mark it and so picking it
+    /// again means "the other way round" rather than "no change".
     QString m_currentColumn;
+    bool m_currentDescending = false;
 };
 
 } // namespace deck

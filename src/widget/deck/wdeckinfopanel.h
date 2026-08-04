@@ -28,7 +28,8 @@ class WDeckInfoPanel : public QWidget {
     /// Fields are drawn in the order given; the caller decides what to omit.
     void setTrack(const QString& coverPath, const QList<QPair<QString, QString>>& fields);
     /// Try the cover file again, for one that arrived after the panel was
-    /// filled in. Nothing if it is already loaded, or if there is no path.
+    /// filled in. Nothing if the track's own cover is already up, or if there
+    /// is no path.
     void reloadCover();
     void clear();
 
@@ -38,6 +39,9 @@ class WDeckInfoPanel : public QWidget {
   private:
     QString m_coverPath;
     QPixmap m_cover;
+    /// `m_cover` is the stand-in rather than this track's own artwork, so a
+    /// file arriving later is still worth loading.
+    bool m_coverIsPlaceholder = false;
     QList<QPair<QString, QString>> m_fields;
 };
 

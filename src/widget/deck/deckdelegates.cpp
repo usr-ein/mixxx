@@ -4,9 +4,11 @@
 #include <QPainter>
 #include <QStringList>
 
+#include "library/coverartutils.h"
 #include "library/dao/trackschema.h"
 #include "library/deck/deckqueries.h"
 #include "library/deck/mediaregistry.h"
+#include "widget/deck/decklistview.h"
 #include "widget/deck/deckmenumodel.h"
 
 namespace {
@@ -26,6 +28,38 @@ const QColor kKeyCompatible(0x44, 0xff, 0x66);
 const QColor kPlayingMark(0xff, 0x66, 0x00);
 
 constexpr int kStripeWidth = 5;
+/// The selected row's outline while the list is moving under it. Thick enough
+/// to read as the highlight it replaces from arm's length.
+constexpr int kSelectionBorder = 3;
+
+/// Is this view scrolling with the selection riding it?
+///
+/// Asked of the view through `option.widget` rather than pushed in by a setter,
+/// because a delegate is shared by every row and the answer changes between one
+/// repaint and the next -- there is no moment at which something could usefully
+/// have told it.
+bool selectionIsRiding(const QWidget* pWidget) {
+    const auto* pView = qobject_cast<const mixxx::deck::DeckListView*>(pWidget);
+    return pView && pView->isScrollingSelection();
+}
+
+/// The selected row, while the list runs under it.
+///
+/// An outline rather than the solid fill it has at rest. A bright green block
+/// sliding up the screen is the one thing on that screen you cannot read, and
+/// reading it is the entire reason the highlight follows the scroll at all.
+void paintSelectionOutline(QPainter* pPainter, const QRect& rect, const QColor& colour) {
+    pPainter->save();
+    pPainter->setRenderHint(QPainter::Antialiasing, false);
+    pPainter->setPen(QPen(colour, kSelectionBorder));
+    pPainter->setBrush(Qt::NoBrush);
+    // Inset by half the pen, or half of every edge is drawn outside the row and
+    // clipped away -- which reads as a one-pixel line on three sides and none
+    // at all on the fourth.
+    const int inset = kSelectionBorder / 2;
+    pPainter->drawRect(rect.adjusted(inset, inset, -inset - 1, -inset - 1));
+    pPainter->restore();
+}
 
 constexpr int kPadding = 16;
 constexpr int kCoverMargin = 8;
@@ -48,6 +82,21 @@ QPixmap loadCover(const QString& path) {
         }
     }
     return cover;
+}
+
+/// What a track with no cover gets drawn as: Mixxx's own placeholder, which is
+/// what the deck's header already falls back to.
+///
+/// A plain dark square reads as a row that failed to draw, and it is the same
+/// square an empty cell would be — so a stick of untagged tracks looked like a
+/// rendering fault down the whole list. The placeholder says "no cover" in the
+/// one visual language the rest of the screen is already speaking.
+///
+/// Loaded once. It is an SVG, and rasterising one per row per repaint is a
+/// cost paid for a picture that is identical every time.
+const QPixmap& defaultCover() {
+    static const QPixmap kCover(CoverArtUtils::defaultCoverLocation());
+    return kCover;
 }
 
 /// The mark on the left of a menu row. Drawn rather than loaded: these are
@@ -162,7 +211,15 @@ QPixmap MenuRowDelegate::coverFor(const QStringList& paths, int size) const {
     if (paths.size() == 1) {
         // One cover fills the square; a 2x2 with three empty cells would look
         // like three missing covers rather than one present one.
+        //
+        // The placeholder stands in when it will not load, as it does for a
+        // track row. Only here: in the 2x2 below, four placeholders would be
+        // four times the noise for the same nothing, and the point of the grid
+        // is the covers that ARE there.
         QPixmap cover = loadCover(paths.first());
+        if (cover.isNull()) {
+            cover = defaultCover();
+        }
         if (!cover.isNull()) {
             painter.drawPixmap(stitched.rect(),
                     cover.scaled(size, size, Qt::KeepAspectRatioByExpanding,
@@ -196,13 +253,18 @@ void MenuRowDelegate::paint(QPainter* pPainter,
     }
     const MenuRow row = data.value<MenuRow>();
     const bool selected = option.state & QStyle::State_Selected;
+    // Outlined while the list moves under it, solid the rest of the time. The
+    // text is drawn in its ordinary colours either way, because outlined means
+    // the background under it is the ordinary background.
+    const bool outlined = selected && selectionIsRiding(option.widget);
+    const bool filled = selected && !outlined;
 
     pPainter->save();
     pPainter->setRenderHint(QPainter::Antialiasing, true);
-    pPainter->fillRect(option.rect, selected ? kSelected : kBackground);
+    pPainter->fillRect(option.rect, filled ? kSelected : kBackground);
 
-    QColor textColour = selected ? kSelectedText : (row.dimmed ? kDimText : kText);
-    QColor detailColour = selected ? kSelectedText : (row.dimmed ? kDimText : kDetail);
+    QColor textColour = filled ? kSelectedText : (row.dimmed ? kDimText : kText);
+    QColor detailColour = filled ? kSelectedText : (row.dimmed ? kDimText : kDetail);
 
     QRect content = option.rect.adjusted(kPadding, 0, -kPadding, 0);
 
@@ -235,7 +297,7 @@ void MenuRowDelegate::paint(QPainter* pPainter,
             QFont slotFont = option.font;
             slotFont.setPixelSize(17);
             pPainter->setFont(slotFont);
-            pPainter->setPen(selected ? kSelectedText : kDimText);
+            pPainter->setPen(filled ? kSelectedText : kDimText);
             const QRect slotRect(content.left() - kPadding, content.top(), 18, content.height());
             pPainter->drawText(slotRect,
                     Qt::AlignLeft | Qt::AlignVCenter,
@@ -278,6 +340,9 @@ void MenuRowDelegate::paint(QPainter* pPainter,
         pPainter->setPen(kSeparator);
         pPainter->drawLine(option.rect.bottomLeft(), option.rect.bottomRight());
     }
+    if (outlined) {
+        paintSelectionOutline(pPainter, option.rect, kSelected);
+    }
     pPainter->restore();
 }
 
@@ -292,21 +357,21 @@ QSize TrackRowDelegate::sizeHint(const QStyleOptionViewItem& option,
 }
 
 QPixmap TrackRowDelegate::coverFor(const QString& path, int size) const {
-    if (path.isEmpty()) {
-        return QPixmap();
-    }
+    // An empty path is a key like any other ("@72"): a track the pdb has no
+    // artwork for is exactly as coverless as one whose file is missing, and
+    // both want the same square.
     const QString cacheKey = path + QStringLiteral("@%1").arg(size);
     if (QPixmap* pCached = m_coverCache.object(cacheKey)) {
         return *pCached;
     }
     QPixmap cover = loadCover(path);
     if (cover.isNull()) {
-        // Cached as null too: a missing cover is a disk hit per redraw
-        // otherwise, and on a remote medium it is missing on purpose until the
-        // artwork lands.
-        m_coverCache.insert(cacheKey, new QPixmap());
-        return QPixmap();
+        cover = defaultCover();
     }
+    // The placeholder is cached under the path like any real cover would be: a
+    // missing file is a disk hit per redraw otherwise. It cannot get stuck
+    // there -- on a remote medium the artwork arriving fires clearCoverCache(),
+    // and the next paint loads the real one.
     const QPixmap scaled = cover.scaled(size,
             size,
             Qt::KeepAspectRatioByExpanding,
@@ -323,6 +388,10 @@ void TrackRowDelegate::paint(QPainter* pPainter,
         return;
     }
     const bool selected = option.state & QStyle::State_Selected;
+    // Outlined while the list moves under it, solid once it stops. See
+    // paintSelectionOutline().
+    const bool outlined = selected && selectionIsRiding(option.widget);
+    const bool filled = selected && !outlined;
 
     // Indices, resolved once by the browser when the model changed. A column
     // that is not there yields an empty string rather than a crash: a query
@@ -335,10 +404,10 @@ void TrackRowDelegate::paint(QPainter* pPainter,
     };
 
     pPainter->save();
-    pPainter->fillRect(option.rect, selected ? kSelected : kBackground);
+    pPainter->fillRect(option.rect, filled ? kSelected : kBackground);
 
-    const QColor textColour = selected ? kSelectedText : kText;
-    const QColor detailColour = selected ? kSelectedText : kDetail;
+    const QColor textColour = filled ? kSelectedText : kText;
+    const QColor detailColour = filled ? kSelectedText : kDetail;
 
     QRect content = option.rect.adjusted(kPadding, 0, -kPadding, 0);
 
@@ -418,6 +487,20 @@ void TrackRowDelegate::paint(QPainter* pPainter,
         // are on the panel, in a column that lines up down the screen.
         const int keyWidth = 70;
         const int bpmWidth = 90;
+        // And the sorted-by value as a column of its own, between the artist
+        // and the tempo. A list you are reading *along* one field is a list
+        // where that field has to be on every row -- and in this layout it was
+        // nowhere, so sorting by Album gave no way to see the albums go past.
+        //
+        // Unless the field is already drawn here. Sorting by BPM printing the
+        // BPM twice is a fault this row has had once before, and Title, Artist
+        // and Key are all as present as the tempo is.
+        const bool sortHasOwnColumn = m_secondaryColumn >= 0 &&
+                m_secondaryColumn != m_columns.title &&
+                m_secondaryColumn != m_columns.artist &&
+                m_secondaryColumn != m_columns.bpm &&
+                m_secondaryColumn != m_columns.key;
+        const int sortWidth = sortHasOwnColumn ? 160 : 0;
         const int keyId = columnValue(m_columns.keyId).toInt();
 
         const QRect keyRect(
@@ -430,7 +513,7 @@ void TrackRowDelegate::paint(QPainter* pPainter,
         QFont keyFont = smallFont;
         keyFont.setBold(compatible);
         pPainter->setFont(keyFont);
-        pPainter->setPen(selected ? kSelectedText : (compatible ? kKeyCompatible : kText));
+        pPainter->setPen(filled ? kSelectedText : (compatible ? kKeyCompatible : kText));
         pPainter->drawText(keyRect,
                 Qt::AlignRight | Qt::AlignVCenter,
                 columnValue(m_columns.key));
@@ -443,7 +526,7 @@ void TrackRowDelegate::paint(QPainter* pPainter,
                 Qt::AlignRight | Qt::AlignVCenter,
                 columnValue(m_columns.bpm));
 
-        leftRect = content.adjusted(0, 0, -(keyWidth + bpmWidth + kPadding), 0);
+        leftRect = content.adjusted(0, 0, -(keyWidth + bpmWidth + sortWidth + kPadding), 0);
 
         // Two columns: the title takes two thirds and the artist one.
         const int artistWidth = leftRect.width() / 3;
@@ -466,11 +549,32 @@ void TrackRowDelegate::paint(QPainter* pPainter,
         pPainter->drawText(artistRect,
                 Qt::AlignLeft | Qt::AlignVCenter,
                 smallMetrics.elidedText(artist, Qt::ElideRight, artistRect.width()));
+
+        // Left-aligned, unlike the two numeric columns beside it: these are
+        // words, and what a DJ does with this column is run an eye down the
+        // starts of them.
+        if (sortWidth > 0) {
+            const QRect sortRect(bpmRect.left() - sortWidth,
+                    content.top(),
+                    sortWidth - kPadding,
+                    content.height());
+            pPainter->drawText(sortRect,
+                    Qt::AlignLeft | Qt::AlignVCenter,
+                    smallMetrics.elidedText(columnValue(m_secondaryColumn),
+                            Qt::ElideRight,
+                            sortRect.width()));
+        }
     }
 
     if (!selected) {
         pPainter->setPen(kSeparator);
         pPainter->drawLine(option.rect.bottomLeft(), option.rect.bottomRight());
+    }
+    // Last, so the colour stripe and the cover do not paint over the edge of
+    // it. The row is only 72 px tall and the outline is what says which one it
+    // is, so a broken edge is a broken answer.
+    if (outlined) {
+        paintSelectionOutline(pPainter, option.rect, kSelected);
     }
     pPainter->restore();
 }

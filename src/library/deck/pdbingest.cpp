@@ -297,6 +297,10 @@ void clearMedium(QSqlDatabase& database, const MediumId& medium) {
     }
 }
 
+QByteArray artworkDigest(const QString& artworkPath) {
+    return QCryptographicHash::hash(artworkPath.toUtf8(), QCryptographicHash::Sha1);
+}
+
 IngestResult writeMedium(QSqlDatabase& database,
         const mixxx::prolink::PdbContents& contents,
         const MediumId& medium,
@@ -414,17 +418,10 @@ IngestResult writeMedium(QSqlDatabase& database,
             // Without a cache key BaseSqlTableModel::getCoverInfo() returns an
             // empty CoverInfo -- it reads type, source and location only
             // `if (coverInfo.hasCacheKey())` -- so the column stays blank
-            // however correct the location is.
-            //
-            // The key is opaque: CoverArtCache uses it to index its pixmap cache
-            // and loads the image from coverLocation, so it can be derived from
-            // the artwork *path* rather than from the image bytes. That matters
-            // for a remote medium, whose images have not been downloaded yet.
-            // Paths are unique per image on a medium, so two covers cannot
-            // collide.
+            // however correct the location is. See artworkDigest() for why the
+            // path is what it is derived from.
             insertTrack.bindValue(QStringLiteral(":coverart_digest"),
-                    QCryptographicHash::hash(
-                            track.artworkPath.toUtf8(), QCryptographicHash::Sha1));
+                    artworkDigest(track.artworkPath));
         }
         if (!insertTrack.exec()) {
             LOG_FAILED_QUERY(insertTrack);

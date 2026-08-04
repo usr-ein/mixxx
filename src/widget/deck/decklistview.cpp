@@ -6,9 +6,6 @@
 #include <QScroller>
 
 namespace {
-/// Past this, a press is a hold. Matches LONG_PRESS_MS in TriMixxx.scripts.js,
-/// so the screen and the deck's buttons agree on what "held" means.
-constexpr int kLongPressMs = 600;
 /// A swipe has to travel this far, and be mostly horizontal, to be a swipe
 /// rather than a shaky tap.
 constexpr int kSwipeMinPx = 120;
@@ -43,6 +40,26 @@ DeckListView::DeckListView(QWidget* pParent)
     properties.setScrollMetric(QScrollerProperties::HorizontalOvershootPolicy,
             QVariant::fromValue(QScrollerProperties::OvershootAlwaysOff));
     QScroller::scroller(viewport())->setScrollerProperties(properties);
+    // What turns a free scroll back into a selection. Without it a flick leaves
+    // the list somewhere the selection is not, which is the state this whole
+    // widget exists to avoid.
+    connect(QScroller::scroller(viewport()),
+            &QScroller::stateChanged,
+            this,
+            &DeckListView::onScrollerStateChanged);
+    // And this is what makes it a reel rather than a settle: the highlight
+    // follows the middle of the view all the way through the scroll, so what is
+    // selected is legible at every moment of it rather than announced at the
+    // end.
+    connect(verticalScrollBar(),
+            &QScrollBar::valueChanged,
+            this,
+            &DeckListView::onScrolled);
+    // Nothing else may scroll this. QAbstractItemView's autoScroll follows the
+    // current index with EnsureVisible whenever it changes -- which is a second
+    // opinion about where the list should be, formed from inside the change
+    // this widget makes to answer that same question.
+    setAutoScroll(false);
 
     m_longPressTimer.setSingleShot(true);
     m_longPressTimer.setInterval(kLongPressMs);
@@ -77,23 +94,95 @@ void DeckListView::moveSelection(int steps) {
     selectRow(row);
 }
 
+void DeckListView::setCentreSelection(bool on) {
+    m_centreSelection = on;
+}
+
+bool DeckListView::isScrollingSelection() const {
+    return m_centreSelection &&
+            QScroller::scroller(viewport())->state() != QScroller::Inactive;
+}
+
 void DeckListView::selectRow(int row) {
     if (!model() || row < 0 || row >= model()->rowCount()) {
         return;
     }
     const QModelIndex index = model()->index(row, 0);
     setCurrentIndex(index);
-    // EnsureVisible rather than PositionAtCenter: centring makes every detent
-    // scroll the whole list, which is disorienting when the list is short
-    // enough to fit.
-    scrollTo(index, QAbstractItemView::EnsureVisible);
+    // The middle, always, so the selection has one place on the screen and the
+    // list is what moves. Qt clamps this at both ends by itself, which is the
+    // behaviour the ends need: a list that fits entirely does not scroll at
+    // all, and this becomes a plain selection change.
+    scrollTo(index,
+            m_centreSelection ? QAbstractItemView::PositionAtCenter
+                              : QAbstractItemView::EnsureVisible);
     emit selectionMoved(row);
+}
+
+int DeckListView::centreRow() const {
+    if (!model() || model()->rowCount() == 0) {
+        return -1;
+    }
+    // An invalid index means the middle of the viewport is past the last row --
+    // a list shorter than the view -- and there is no row in the middle to
+    // speak of.
+    const QModelIndex index = indexAt(
+            QPoint(viewport()->width() / 2, viewport()->height() / 2));
+    return index.isValid() ? index.row() : -1;
+}
+
+void DeckListView::onScrolled() {
+    // Only while a finger is driving it. The encoder's path picks a row and
+    // then scrolls to match, and reacting to that scroll would be the same
+    // decision taken twice -- the second time from a viewport still moving.
+    if (!isScrollingSelection()) {
+        return;
+    }
+    const int row = centreRow();
+    if (row < 0 || row == selectedRow()) {
+        return;
+    }
+    // The index only, NOT selectRow(): that would scroll the list to centre the
+    // row it had just picked, from inside the scroll that picked it. The reel
+    // is already exactly where the finger put it; the highlight is the only
+    // thing missing from it.
+    setCurrentIndex(model()->index(row, 0));
+    emit selectionMoved(row);
+}
+
+void DeckListView::onScrollerStateChanged(QScroller::State state) {
+    if (state != QScroller::Inactive) {
+        return;
+    }
+    // The selected row goes back from an outline to a solid highlight, and
+    // nothing else would ask for that repaint: the row itself has not changed,
+    // only what a stopped list draws it as.
+    viewport()->update();
+    if (!m_centreSelection) {
+        return;
+    }
+    // A tap goes through the scroller too -- press and release with nothing in
+    // between -- and it must not be answered by selecting the middle row, which
+    // is not the row that was touched. The list not having moved is what tells
+    // the two apart, and it is the only signal that survives however Qt routed
+    // the events.
+    if (verticalScrollBar()->value() == m_scrollAtPress) {
+        return;
+    }
+    // The settle. onScrolled() has been keeping the selection on the middle row
+    // the whole way, so this is almost always that same row -- what it adds is
+    // the last half-row of travel that lines it up exactly.
+    const int row = centreRow();
+    if (row >= 0) {
+        selectRow(row);
+    }
 }
 
 void DeckListView::mousePressEvent(QMouseEvent* pEvent) {
     m_pressPos = pEvent->pos();
     m_pressRow = indexAt(pEvent->pos()).row();
     m_gestureConsumed = false;
+    m_scrollAtPress = verticalScrollBar()->value();
     m_pressTimer.start();
     if (m_pressRow >= 0) {
         m_longPressTimer.start();
@@ -134,8 +223,13 @@ void DeckListView::mouseReleaseEvent(QMouseEvent* pEvent) {
     }
 
     if (delta.manhattanLength() <= kTapSlopPx && m_pressRow >= 0) {
-        const bool wasSelected = m_pressRow == selectedRow();
-        if (wasSelected) {
+        if (m_tapActivates) {
+            // Selected first, so whoever handles `activated` reads the row that
+            // was touched rather than the one that happened to be selected when
+            // the finger came down.
+            selectRow(m_pressRow);
+            emit activated(m_pressRow);
+        } else if (m_pressRow == selectedRow()) {
             // The caller decides what this means: in a track list it toggles
             // the info layout, everywhere else the browser treats it as going
             // in. Both come from the same tap, so both cannot be decided here.
