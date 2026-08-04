@@ -11,6 +11,33 @@ QString toQString(const ::rust::String& text) {
 namespace mixxx {
 namespace prolink {
 
+AnlzPreview readAnlzPreview(const QString& path) {
+    AnlzPreview out;
+    if (path.isEmpty()) {
+        out.error = QStringLiteral("no analysis path");
+        return out;
+    }
+
+    const QByteArray utf8 = path.toUtf8();
+    const ::prolink::AnlzPreview parsed =
+            ::prolink::read_anlz_preview(::rust::Str(utf8.constData(), utf8.size()));
+    out.ok = parsed.ok;
+    out.error = toQString(parsed.error);
+    out.mono = QByteArray(reinterpret_cast<const char*>(parsed.mono.data()),
+            static_cast<qsizetype>(parsed.mono.size()));
+
+    out.colour.reserve(static_cast<qsizetype>(parsed.colour.size()));
+    for (const ::prolink::AnlzPreviewColumn& column : parsed.colour) {
+        AnlzPreviewColumn converted;
+        converted.bass = column.bass;
+        converted.mid = column.mid;
+        converted.treble = column.treble;
+        converted.envelope = column.envelope;
+        out.colour.append(converted);
+    }
+    return out;
+}
+
 AnlzContents readAnlz(const QString& path) {
     AnlzContents out;
     if (path.isEmpty()) {

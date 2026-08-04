@@ -10,10 +10,30 @@ const QColor kBackground(0x14, 0x14, 0x14);
 const QColor kLabel(0x77, 0x77, 0x77);
 const QColor kValue(0xee, 0xee, 0xee);
 const QColor kCoverBackdrop(0x1a, 0x1a, 0x1a);
+/// What the strip shows when there is no waveform: a hairline, so the space
+/// reads as a waveform that is absent rather than as a panel that failed to
+/// draw one.
+const QColor kWaveBaseline(0x33, 0x33, 0x33);
 
-constexpr int kCoverSize = 180;
-constexpr int kPadding = 20;
-constexpr int kRowHeight = 30;
+/// The panel's height budget, which has to add up to 460 — 36 + 48 + **460** +
+/// 56 = 600 down the screen:
+///
+///     16 padding + 160 cover + 12 + 44 strip + 12 + 8 rows x 27 = 460
+///
+/// The cover lost 20 px and the rows 3 each to pay for the strip, which is what
+/// keeps the field list at the eight rows it could already draw. paintEvent
+/// stops when it runs out of panel, so a ninth field was never shown anyway.
+constexpr int kCoverSize = 160;
+constexpr int kPadding = 16;
+constexpr int kGap = 12;
+constexpr int kRowHeight = 27;
+/// Height of the waveform strip.
+constexpr int kPreviewHeight = 44;
+/// **Exactly one pixel per rekordbox column.** `PWAV` is 400 columns and the
+/// panel is 464 wide, so the strip is drawn 400 px wide and centred, with 32 px
+/// either side. No scaling, no interpolation, no resampling — which is most of
+/// the reason this tag is the right one to draw.
+constexpr int kPreviewWidth = mixxx::deck::PreviewWaveform::kColumns;
 /// Width of the label column. Fixed, so the values line up down the panel
 /// rather than stepping in and out with the length of each label.
 constexpr int kLabelWidth = 110;
@@ -91,6 +111,46 @@ void WDeckInfoPanel::reloadCover() {
     update();
 }
 
+void WDeckInfoPanel::setPreview(const PreviewWaveform& preview) {
+    if (preview.isNull()) {
+        m_preview = QPixmap();
+        update();
+        return;
+    }
+
+    QPixmap strip(kPreviewWidth, kPreviewHeight);
+    strip.fill(Qt::transparent);
+    QPainter painter(&strip);
+    // Off deliberately: every bar is one pixel wide and sits on an integer x,
+    // so there is nothing to smooth and smoothing it would grey the edges of a
+    // picture whose whole content is edges.
+    painter.setRenderHint(QPainter::Antialiasing, false);
+
+    for (int column = 0; column < kPreviewWidth; ++column) {
+        const PreviewWaveform::Column bar = preview.at(column);
+        const int height = bar.height * kPreviewHeight / 255;
+        if (height <= 0) {
+            continue;
+        }
+        // The colour is the column's own -- three frequency bands off the
+        // colour preview, or blue going white with the shade when only the
+        // monochrome one was there. Which of the two it came from is settled
+        // before this and deliberately invisible here: the panel draws one kind
+        // of picture.
+        painter.setPen(QColor(bar.red, bar.green, bar.blue));
+        // Drawn up from the baseline, the way a CDJ draws a preview, rather
+        // than mirrored about the middle the way Mixxx draws an overview. Half
+        // the pixels for the same information, and the shape a DJ already reads.
+        painter.drawLine(column,
+                kPreviewHeight - 1,
+                column,
+                kPreviewHeight - height);
+    }
+
+    m_preview = strip;
+    update();
+}
+
 void WDeckInfoPanel::clear() {
     m_coverPath.clear();
     // Null, not the placeholder: there is no track selected at all, and a
@@ -98,6 +158,7 @@ void WDeckInfoPanel::clear() {
     m_cover = QPixmap();
     m_coverIsPlaceholder = false;
     m_fields.clear();
+    m_preview = QPixmap();
     update();
 }
 
@@ -117,12 +178,28 @@ void WDeckInfoPanel::paintEvent(QPaintEvent* pEvent) {
                         Qt::SmoothTransformation));
     }
 
+    // The strip, always in the same place whether or not there is a waveform to
+    // put in it -- see setPreview() for why it does not collapse.
+    const QRect previewRect((width() - kPreviewWidth) / 2,
+            coverRect.bottom() + kGap,
+            kPreviewWidth,
+            kPreviewHeight);
+    if (m_preview.isNull()) {
+        painter.fillRect(previewRect.left(),
+                previewRect.bottom() - 1,
+                previewRect.width(),
+                1,
+                kWaveBaseline);
+    } else {
+        painter.drawPixmap(previewRect.topLeft(), m_preview);
+    }
+
     QFont labelFont = font();
     labelFont.setPixelSize(15);
     QFont valueFont = font();
     valueFont.setPixelSize(17);
 
-    int y = coverRect.bottom() + kPadding;
+    int y = previewRect.bottom() + kGap;
     for (const auto& field : m_fields) {
         if (y + kRowHeight > height()) {
             break; // Ran out of panel; the rest is simply not shown.

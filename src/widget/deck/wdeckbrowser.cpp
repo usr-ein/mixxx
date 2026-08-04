@@ -346,6 +346,24 @@ WDeckBrowser::WDeckBrowser(QWidget* pParent, Library* pLibrary, UserSettingsPoin
     // The deck never plays off removable media; everything goes through here.
     m_pCache = std::make_unique<TrackCache>(this);
 
+    // Preview waveforms for the info panel. Its reads happen on its own thread;
+    // what arrives here is a value, on this one.
+    m_pPreviews = std::make_unique<PreviewWaveformCache>(this);
+    connect(m_pPreviews.get(),
+            &PreviewWaveformCache::arrived,
+            this,
+            [this](const QString& mediumKey, quint32 rekordboxId) {
+                // Only if it is still the track being looked at. The selection
+                // moves faster than a stick answers, so most of these are for a
+                // row three detents ago -- cached, and not drawn.
+                if (!m_infoLayout || rekordboxId != m_previewTrackId ||
+                        mediumKey != m_previewMedium.key()) {
+                    return;
+                }
+                m_pInfoPanel->setPreview(
+                        m_pPreviews->lookup(m_previewMedium, rekordboxId));
+            });
+
     // A DJ looks at a track before loading it, so the dwell is what turns
     // "selected" into "probably wanted" without copying everything scrolled
     // past. 300 ms is short enough to be ready by the time the encoder is
@@ -413,6 +431,13 @@ WDeckBrowser::WDeckBrowser(QWidget* pParent, Library* pLibrary, UserSettingsPoin
             [this](mixxx::deck::MediumInfo medium) {
                 if (m_pCache) {
                     m_pCache->markUnreachable(medium.id);
+                }
+                // The opposite call for the previews, and deliberately so: a
+                // cached track is the only copy left once the stick is out,
+                // while a cached waveform is a picture of a track that can no
+                // longer be played.
+                if (m_pPreviews) {
+                    m_pPreviews->forget(medium.id);
                 }
             });
     connect(m_pRegistry.get(),
@@ -1123,6 +1148,7 @@ void WDeckBrowser::updateInfoPanel() {
     const int row = m_pTrackView->selectedRow();
     if (row < 0) {
         m_pInfoPanel->clear();
+        m_previewTrackId = 0;
         return;
     }
     const auto value = [this, row](const QString& column) {
@@ -1181,6 +1207,27 @@ void WDeckBrowser::updateInfoPanel() {
     add(tr("Comment"), LIBRARYTABLE_COMMENT);
 
     m_pInfoPanel->setTrack(value(LIBRARYTABLE_COVERART_LOCATION), fields);
+
+    // The waveform strip. Asked for only while the panel is on screen -- the
+    // default layout has nowhere to draw one, and a DJ who never opens the
+    // panel should pay nothing for this.
+    m_previewMedium = currentMedium();
+    m_previewTrackId = static_cast<quint32>(value(QStringLiteral("rb_id")).toUInt());
+    if (m_pPreviews && m_previewTrackId != 0) {
+        const PreviewWaveform preview =
+                m_pPreviews->lookup(m_previewMedium, m_previewTrackId);
+        m_pInfoPanel->setPreview(preview);
+        if (preview.isNull()) {
+            // Everything queued behind this is for a row nobody is looking at
+            // any more, so it goes before the new request rather than after.
+            m_pPreviews->cancelQueued();
+            m_pPreviews->request(m_previewMedium,
+                    m_previewTrackId,
+                    value(QStringLiteral("analyze_path")));
+        }
+    } else {
+        m_pInfoPanel->setPreview(PreviewWaveform());
+    }
 }
 
 void WDeckBrowser::onPlayingKeyChanged() {

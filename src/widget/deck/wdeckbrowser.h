@@ -9,6 +9,7 @@
 #include "control/controlproxy.h"
 #include "library/coverart.h"
 #include "library/deck/mediaregistry.h"
+#include "library/deck/previewwaveformcache.h"
 #include "library/deck/trackcache.h"
 #include "library/deck/mediumid.h"
 #include "preferences/usersettings.h"
@@ -224,6 +225,12 @@ class WDeckBrowser : public QWidget, public WBaseWidget {
     WDeckInfoPanel* m_pInfoPanel;
     WDeckDiagnostics* m_pDiagnostics;
     bool m_infoLayout = false;
+    /// Preview waveforms for the info panel, read off the GUI thread.
+    std::unique_ptr<PreviewWaveformCache> m_pPreviews;
+    /// Which track the panel is currently showing, so a preview arriving late
+    /// is only drawn if it is still the one being looked at.
+    MediumId m_previewMedium;
+    quint32 m_previewTrackId = 0;
     QString m_searchText;
     /// The sort is a BROWSER preference, not a property of a list: leaving one
     /// list and opening another applies the same sort to the new one, until

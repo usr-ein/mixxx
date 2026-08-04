@@ -92,6 +92,45 @@ struct AnlzContents {
     QByteArray preview;
 };
 
+/// One column of the `PWV4` colour preview waveform.
+///
+/// The band names are not the colour names, and which byte is which was
+/// measured rather than read off the field order — see the bridge's own note.
+struct AnlzPreviewColumn {
+    /// Bottom third. Drawn red.
+    quint8 bass = 0;
+    /// Middle third. Drawn green.
+    quint8 mid = 0;
+    /// Top third. Drawn blue.
+    quint8 treble = 0;
+    /// Energy of the bottom half, and the best proxy for the column's height:
+    /// it is the byte that tracks the monochrome preview.
+    quint8 envelope = 0;
+};
+
+/// The preview waveforms of one analysis file, and nothing else from it.
+struct AnlzPreview {
+    bool ok = false;
+    QString error;
+    /// `PWAV`: 400 packed bytes. Empty when the file has none.
+    QByteArray mono;
+    /// `PWV4`: 1200 colour columns. Empty when the file has none.
+    QVector<AnlzPreviewColumn> colour;
+};
+
+/// Read only the preview waveforms out of one analysis file.
+///
+/// **Not `readAnlz(path).preview`**, and the difference is the point: this
+/// seeks past every tag it was not asked for, so reaching the 1200 colour
+/// columns of a 157 kB `.EXT` costs about 10 kB of reads and does not decode
+/// the two fifty-thousand-entry detail waveforms sitting beside them.
+///
+/// That matters because it runs once per row a DJ pauses on, off a stick that
+/// may be busy copying the track they are about to play.
+///
+/// Safe to call from any thread, like readAnlz().
+AnlzPreview readAnlzPreview(const QString& path);
+
 /// Read one analysis file.
 ///
 /// Never throws and never blocks on anything but the filesystem. A missing or

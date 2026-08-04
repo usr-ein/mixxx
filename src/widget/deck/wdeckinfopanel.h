@@ -6,6 +6,8 @@
 #include <QString>
 #include <QWidget>
 
+#include "library/deck/previewwaveform.h"
+
 namespace mixxx {
 namespace deck {
 
@@ -31,6 +33,19 @@ class WDeckInfoPanel : public QWidget {
     /// filled in. Nothing if the track's own cover is already up, or if there
     /// is no path.
     void reloadCover();
+
+    /// The waveform strip under the cover.
+    ///
+    /// A null preview is drawn as a baseline rather than as nothing, and **the
+    /// strip is reserved whether or not there is one**: the panel follows the
+    /// selection with no click, so a strip that collapsed would move every
+    /// field 56 px up and down as the encoder turned. Unreadable, and a far
+    /// worse cost than 44 px of background.
+    ///
+    /// Rendered here, once, rather than in paintEvent — the panel repaints on
+    /// every detent, and 400 lines drawn per frame for a picture that has not
+    /// changed is the same mistake the cover already taught this class.
+    void setPreview(const PreviewWaveform& preview);
     void clear();
 
   protected:
@@ -43,6 +58,9 @@ class WDeckInfoPanel : public QWidget {
     /// file arriving later is still worth loading.
     bool m_coverIsPlaceholder = false;
     QList<QPair<QString, QString>> m_fields;
+    /// The strip, already drawn. Null when this track has no preview, or when
+    /// one has been asked for and not arrived.
+    QPixmap m_preview;
 };
 
 } // namespace deck
