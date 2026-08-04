@@ -4,6 +4,8 @@
 #include <QPainter>
 #include <QTimer>
 
+#include <cmath>
+
 #include "control/controlproxy.h"
 #include "moc_wtempopanel.cpp"
 #include "skin/legacy/skincontext.h"
@@ -39,6 +41,21 @@ constexpr int kColumnGap = 14;
 constexpr int kBoxPadX = 14;
 constexpr int kBoxPadY = 16;
 constexpr int kBoxRadius = 4;
+
+/// Anything below this is "the fader has not been heard from", which is not the
+/// same as centre. The skin seeds the control at -2 for exactly this.
+constexpr double kFaderUnknown = -1.5;
+
+/// How close the fader has to get before it counts as having caught the tempo,
+/// as a fraction of the fader's travel.
+///
+/// Mixxx's own soft-takeover threshold, which is what actually decides when the
+/// fader takes over -- 3/128 of the parameter's range, and the parameter runs
+/// 0..1 across a `rate` of -1..1, so it is twice that in rate units. Deriving
+/// it rather than picking a number is what keeps the read-out honest: the
+/// hardware tempo disappears at the moment the fader is really in control, not
+/// a little before or after it.
+constexpr double kTakeoverRate = 2.0 * 3.0 / 128.0;
 } // namespace
 
 WTempoPanel::WTempoPanel(QWidget* pParent, const QString& group)
@@ -46,6 +63,24 @@ WTempoPanel::WTempoPanel(QWidget* pParent, const QString& group)
     m_pBpm = std::make_unique<ControlProxy>(group, QStringLiteral("bpm"), this);
     m_pRateRatio = std::make_unique<ControlProxy>(group, QStringLiteral("rate_ratio"), this);
     m_pRateRange = std::make_unique<ControlProxy>(group, QStringLiteral("rateRange"), this);
+    m_pFileBpm = std::make_unique<ControlProxy>(group, QStringLiteral("file_bpm"), this);
+    // Where the fader physically is, published by the mapping. The direction
+    // preference is Mixxx's own and lives outside the deck's group, because it
+    // is a preference about every deck rather than about this one.
+    m_pTempoFader = std::make_unique<ControlProxy>(QStringLiteral("[TriMixxx]"),
+            QStringLiteral("tempo_fader"),
+            this,
+            ControlFlag::NoWarnIfMissing);
+    // Per DECK, not a global preference: `[ChannelN],rate_dir`, which is what
+    // RateControl multiplies by. Reading it from `[Controls],RateDir` -- which
+    // is where the *preference* lives -- resolved to nothing, fell back to +1,
+    // and drew the fader running the opposite way to the tempo it was chasing.
+    m_pRateDir = std::make_unique<ControlProxy>(group, QStringLiteral("rate_dir"), this);
+    // Whether the fader is ours to use. See the read-out's own comment.
+    m_pIsMaster = std::make_unique<ControlProxy>(QStringLiteral("[ProLink]"),
+            QStringLiteral("is_master"),
+            this,
+            ControlFlag::NoWarnIfMissing);
 
     // Polled: three controls, and a repaint ten times a second is cheaper than
     // wiring three valueChanged signals to the same update().
@@ -135,9 +170,49 @@ void WTempoPanel::paintEvent(QPaintEvent* pEvent) {
             ? tr("WIDE")
             : QStringLiteral("%1%").arg(range * 100.0, 0, 'g', 3);
 
+    // What the fader is asking for, while it is not yet the thing being obeyed.
+    //
+    // Drawn only when the two differ by more than soft-takeover's own
+    // threshold, which is precisely "the fader has not caught it yet": at the
+    // moment it does, the number it was aiming at becomes the number already on
+    // screen and a second copy of it would be noise.
+    // **Only while this deck holds tempo master**, which is the only time the
+    // fader is a thing the DJ can act with.
+    //
+    // Following a master, the fader is disconnected because the tempo is coming
+    // off the wire, and it will still be disconnected when the master next
+    // changes it -- so where it happens to be sitting is not a target, it is
+    // noise. The moment mastership is taken it becomes the opposite: the tempo
+    // is this deck's to set, the fader is the only thing that can set it, and
+    // soft-takeover is standing between the two until it is met. That is the
+    // gap this number exists to close, and it does not exist anywhere else.
+    QString faderText;
+    const double faderRate = m_pTempoFader->get();
+    const double fileBpm = m_pFileBpm->get();
+    const bool ourFader = m_pIsMaster->valid() && m_pIsMaster->get() > 0.0;
+    if (ourFader && faderRate > kFaderUnknown && fileBpm > 0.0) {
+        // Mixxx's own arithmetic, with Mixxx's own direction preference, so the
+        // number the fader is aiming at is the number it will produce.
+        const double dir = m_pRateDir->valid() ? m_pRateDir->get() : 1.0;
+        const double faderBpm = fileBpm * (1.0 + faderRate * range * dir);
+        // In BPM, from a threshold expressed in fader travel: the same distance
+        // means different tempos at ±6% and at WIDE, and it is the tempo the
+        // read-out is in.
+        const double caught = fileBpm * range * kTakeoverRate;
+        if (std::abs(faderBpm - bpm) > caught) {
+            faderText = QStringLiteral("%1").arg(faderBpm, 0, 'f', 2);
+        }
+    }
+
+    QFont faderFont(m_tempoFamily);
+    faderFont.setPixelSize(m_tempoSize * 3 / 5);
+    const QFontMetrics faderMetrics(faderFont);
+    const int faderWidth =
+            faderText.isEmpty() ? 0 : faderMetrics.horizontalAdvance(faderText) + kColumnGap;
+
     const int columnWidth = std::max(smallMetrics.horizontalAdvance(pitchText),
             rangeMetrics.horizontalAdvance(rangeText));
-    const int contentWidth = columnWidth + kColumnGap + tempoWidth;
+    const int contentWidth = columnWidth + kColumnGap + faderWidth + tempoWidth;
     const int contentHeight = tempoMetrics.height();
 
     const int right = width() - kPadRight;
@@ -156,11 +231,20 @@ void WTempoPanel::paintEvent(QPaintEvent* pEvent) {
 
     const int baseline = box.bottom() - kBoxPadY - tempoMetrics.descent();
     const int tempoRight = box.right() - kBoxPadX;
-    const int columnRight = tempoRight - tempoWidth - kColumnGap;
+    const int columnRight = tempoRight - tempoWidth - faderWidth - kColumnGap;
 
     painter.setFont(tempoFont);
     painter.setPen(m_tempoColour);
     painter.drawText(tempoRight - tempoWidth, baseline, tempoText);
+
+    // Smaller and dimmer than the tempo, and to its left: it is where the fader
+    // is, not where the deck is, and nothing should be able to mistake the two
+    // at a glance in a dark booth.
+    if (!faderText.isEmpty()) {
+        painter.setFont(faderFont);
+        painter.setPen(QColor(0x88, 0x88, 0x88));
+        painter.drawText(tempoRight - tempoWidth - faderWidth, baseline, faderText);
+    }
 
     painter.setFont(smallFont);
     painter.setPen(QColor(0xcc, 0xcc, 0xcc));

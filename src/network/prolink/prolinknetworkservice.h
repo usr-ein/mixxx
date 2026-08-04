@@ -188,6 +188,20 @@ class ProLinkNetworkService : public QObject {
     /// may tell a CDJ what phase it is at.
     void publishMaster();
 
+    /// Reconcile our claim on tempo master with the network's, and return
+    /// whether we really hold it.
+    ///
+    /// **Exactly one device is tempo master** (docs/tempo-sync.md, invariant 1)
+    /// and this is the only thing that enforces it. Our claim was ours alone to
+    /// clear, so it survived every way a handover can fail to reach us — and a
+    /// deck that goes on claiming mastership the network has moved on from is
+    /// a deck the CDJ cannot take master back from.
+    ///
+    /// *rivalMaster* is the number of another player claiming it, or zero.
+    /// A number rather than the player, so the Rust bridge's types stay out of
+    /// this header as everything else about them does.
+    bool reconcileMastership(int rivalMaster);
+
     /// Tell the network what this deck is playing.
     ///
     /// **The only thing that makes us a tempo other players can see.**
@@ -227,6 +241,10 @@ class ProLinkNetworkService : public QObject {
     QElapsedTimer m_driftReport;
     /// Since the last phase correction; see kPhaseHoldMs.
     QElapsedTimer m_phaseHold;
+    /// Since this deck's claim on tempo master began, so a handover is not
+    /// mistaken for a rival claim; see kMasterSettleMs. Invalid while we are
+    /// not claiming it.
+    QElapsedTimer m_masterSince;
 
     /// Re-read the device table, emitting found, changed and lost as it moves.
     void syncDevices();

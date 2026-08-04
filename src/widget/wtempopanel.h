@@ -11,7 +11,16 @@ class QDomNode;
 class SkinContext;
 
 /// The tempo read-out: playing BPM, how far the pitch fader is from the track's
-/// own tempo, and how wide that fader's range is.
+/// own tempo, how wide that fader's range is — and, while the fader is not the
+/// thing deciding the tempo, what the fader is *asking for*.
+///
+/// **That last one is what makes the fader usable again after following a
+/// master.** Soft-takeover leaves the fader connected to nothing until it comes
+/// back to meet the playing tempo, and until this the screen said nothing about
+/// where it was: the DJ moved a dead fader toward a number they could not see,
+/// and found the catch by accident. The dim second number is the sight, and it
+/// goes away at the moment the fader takes over, because from then on the one
+/// number is the answer.
 ///
 /// One widget that paints all three rather than three widgets in a layout,
 /// because this is laid *over* the waveform. Mixxx's stacked layout applies
@@ -46,6 +55,14 @@ class WTempoPanel : public WWidget {
     std::unique_ptr<ControlProxy> m_pBpm;
     std::unique_ptr<ControlProxy> m_pRateRatio;
     std::unique_ptr<ControlProxy> m_pRateRange;
+    std::unique_ptr<ControlProxy> m_pFileBpm;
+    /// Where the tempo fader physically is, in the same -1..1 as `rate`,
+    /// published by the mapping. See the skin's `[TriMixxx],tempo_fader`.
+    std::unique_ptr<ControlProxy> m_pTempoFader;
+    std::unique_ptr<ControlProxy> m_pRateDir;
+    /// Whether this deck holds Pro DJ Link tempo master, and so whether the
+    /// fader is a control rather than a disconnected stick.
+    std::unique_ptr<ControlProxy> m_pIsMaster;
 
     /// The seven-segment face, for the tempo only. The smaller text stays in the
     /// UI font: Digital-7 has digits and almost nothing else, so "WIDE" would

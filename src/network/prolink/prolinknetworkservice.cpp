@@ -41,11 +41,65 @@ constexpr double kTempoMatchedBpm = 0.05;
 /// phase from packets that arrive every 200 ms.
 constexpr double kPhaseSlipBeats = 0.02;
 
+/// How long a fresh claim on tempo master is left unchallenged.
+///
+/// A deck handing over keeps claiming mastership until its successor has picked
+/// it up, and its status drops within ~70 ms of that (S28). This is twenty
+/// times that: long enough that a handover is never mistaken for a rival, short
+/// enough that a DJ pressing MASTER on the CDJ and watching its light does not
+/// notice the gap.
+constexpr int kMasterSettleMs = 1500;
+
 /// The shortest gap between two phase corrections.
 ///
 /// A correction has to have taken effect *and* been measured before the next
 /// one is considered, or one error is chased by a burst of overlapping seeks.
 constexpr int kPhaseHoldMs = 1500;
+
+/// Is this deck one to line the phase meter up against?
+///
+/// **Two questions, and the second one used to be skipped for the master.**
+///
+///  1. *Is there a phase to draw?* `bar_phase` is negative for a player that
+///     has sent no beat or whose last beat has gone stale, so this one
+///     question covers both.
+///  2. *Is it playing?* Asked of the status packet, which a deck sends every
+///     ~200 ms whatever it is doing — including while paused, which is the
+///     whole point. Beats are the other way round: they simply stop, and
+///     "stopped" is indistinguishable from "the packet was dropped" until
+///     three seconds have passed.
+///
+/// The master was exempt from both, and that is the bug this exists to close:
+/// a CDJ that holds tempo master and is then paused goes on saying it is
+/// master, so the meter went on drawing a deck standing still — and a beat
+/// phase extrapolated from a beat that never came kept the ticks walking.
+///
+/// A deck we have no status for at all is judged on its beats alone. Fresh
+/// beats *are* playing — they stop when the platter does — so this is the same
+/// answer arrived at by the only route left.
+bool isWorthFollowing(const ::prolink::Player& player) {
+    if (player.bar_phase < 0.0) {
+        return false;
+    }
+    if (!player.has_status) {
+        return true;
+    }
+    switch (player.play_state) {
+    case ::prolink::PlayState::Playing:
+    case ::prolink::PlayState::Looping:
+    case ::prolink::PlayState::CuePlay:
+        return true;
+    case ::prolink::PlayState::Emergency:
+        // The medium was pulled and the deck is looping what it had. Still
+        // making sound, still on the grid, and still a deck a DJ is mixing
+        // against -- the emergency is the medium's, not the music's.
+        return true;
+    default:
+        // Paused, cued, searching, spun down, loading, nothing loaded. All of
+        // them are a deck that is not keeping time for anybody.
+        return false;
+    }
+}
 
 mixxx::prolink::MediaSlot toMixxxSlot(::prolink::Slot slot) {
     switch (slot) {
@@ -421,8 +475,20 @@ void ProLinkNetworkService::reportPhaseDrift() {
         return;
     }
     m_driftReport.start();
+    // Both sides of the subtraction, not only the difference. A drift that will
+    // not close is either a master phase that is not moving or a correction
+    // that is not landing, and the difference alone cannot tell those apart --
+    // which cost three rounds of reasoning about a number that turned out to be
+    // measured against the wrong tempo.
     kLogger.debug() << "phase drift" << beats * 60000.0 / effectiveBpm << "ms ("
-                    << beats << "beats )";
+                    << beats << "beats ) -- master" << m_pControls->masterBarPhase()->get()
+                    << "ours"
+                    << mixxx::prolink::barPhaseOf(
+                               mixxx::prolink::beatPositionOf(m_pDeckPlayPosition->get(),
+                                       m_pDeckDuration->get(),
+                                       m_pDeckFileBpm->get(),
+                                       m_pDeckBeatDistance->get()))
+                    << "beat distance" << m_pDeckBeatDistance->get();
 }
 
 void ProLinkNetworkService::alignPhaseToMaster() {
@@ -460,15 +526,57 @@ void ProLinkNetworkService::alignPhaseToMaster() {
     if (withinBeat > 0.5) {
         withinBeat -= 1.0;
     }
-    const double seconds = withinBeat * 60.0 / effectiveBpm;
+    // **The track's own tempo, not the one being played.** `playposition` is a
+    // fraction of the track, so moving it walks the beat grid at the grid's own
+    // rate -- which is `file_bpm`, because that is the tempo the grid was laid
+    // out at and the tempo beatPositionOf() reads it back with. Converting the
+    // correction at the *playing* tempo instead made every correction wrong by
+    // the pitch fader: at +6% it fell 6% short, and at the wide range it
+    // undershot by half.
+    const double seconds = withinBeat * 60.0 / fileBpm;
     const double position = m_pDeckPlayPosition->get() + seconds / duration;
     if (position < 0.0 || position > 1.0) {
         return;
     }
-    kLogger.debug() << "phase align: moving" << seconds * 1000.0 << "ms onto the master's beat";
-    ControlObject::set(ConfigKey(QString::fromLatin1(kDeckGroup),
-                               QStringLiteral("playposition")),
-            position);
+    const double before = m_pDeckPlayPosition->get();
+    // **Through the proxy, which is how every other seek in Mixxx is written.**
+    // `ControlObject::set(key, value)` looks the control up and writes it with a
+    // null sender; a ControlProxy writes it with itself as the sender, which is
+    // what WOverview and the waveform do when a click seeks. The two are
+    // supposed to be equivalent and the deck says otherwise: the correction was
+    // logged every 1.5 s for minutes on end and the playhead never moved by so
+    // much as a millisecond, with the phase error sitting at a constant 0.23
+    // beats through all of it.
+    m_pDeckPlayPosition->set(position);
+    kLogger.debug() << "phase align: moving" << seconds * 1000.0
+                    << "ms onto the master's beat -- from" << before << "to" << position
+                    << "now reads" << m_pDeckPlayPosition->get();
+}
+
+bool ProLinkNetworkService::reconcileMastership(int rivalMaster) {
+    if (!(*m_pImpl->pSession)->is_tempo_master()) {
+        m_masterSince.invalidate();
+        return false;
+    }
+    if (!m_masterSince.isValid()) {
+        m_masterSince.start();
+    }
+    if (rivalMaster == 0) {
+        return true;
+    }
+    // **Not during a handover.** A deck handing mastership over keeps claiming
+    // it until its successor has picked it up, so for a moment after winning a
+    // takeover the deck we took it FROM is still saying it is master. Standing
+    // down on that would abandon, one poll later, the takeover just won.
+    if (m_masterSince.elapsed() < kMasterSettleMs) {
+        return true;
+    }
+    // Past the handover window with somebody else still claiming it: the
+    // network has settled on a master and it is not this deck.
+    kLogger.info() << "player" << rivalMaster << "holds tempo master; standing down";
+    (*m_pImpl->pSession)->release_tempo_master();
+    m_masterSince.invalidate();
+    return false;
 }
 
 void ProLinkNetworkService::publishMaster() {
@@ -476,18 +584,48 @@ void ProLinkNetworkService::publishMaster() {
         return;
     }
 
-    // Published here rather than beside the playback, because that returns
-    // early when no track is loaded -- and holding tempo master with the deck
-    // stopped is an ordinary state whose button must not go dark.
-    m_pControls->isMaster()->forceSet(
-            m_pImpl->pSession && (*m_pImpl->pSession)->is_tempo_master() ? 1.0 : 0.0);
-
     if (!m_pImpl->pSession) {
+        m_pControls->isMaster()->forceSet(0.0);
         m_pControls->masterDevice()->forceSet(0.0);
         m_pControls->masterBpm()->forceSet(0.0);
         m_pControls->masterBarPhase()->forceSet(-1.0);
         return;
     }
+
+    const ::rust::Vec<::prolink::Player> players = (*m_pImpl->pSession)->players();
+
+    // **Exactly one device is tempo master** -- invariant 1 of
+    // docs/tempo-sync.md, and until now nothing enforced it.
+    //
+    // Our claim was ours to set and nobody else's to clear, so it outlived
+    // every way a handover can fail to reach us: a master request lost on the
+    // wire, a `0x27` reply the requester never heard, or a CDJ that simply
+    // asserts mastership instead of asking for it. In each case the network has
+    // settled on a master and it is not this deck -- but this deck went on
+    // saying it was, which from the booth is "the CDJ cannot take master back",
+    // and which never healed on its own because nothing ever asked again.
+    //
+    // So it is asked every poll: who else is claiming it?
+    const int ours = static_cast<int>((*m_pImpl->pSession)->device_number());
+    int rivalMaster = 0;
+    for (const ::prolink::Player& player : players) {
+        if (!player.is_master || static_cast<int>(player.number) == ours) {
+            continue;
+        }
+        if (static_cast<int>(player.yielding_to) == ours) {
+            // Naming us its successor: a takeover of ours in flight, not a
+            // rival claim (F52).
+            continue;
+        }
+        rivalMaster = static_cast<int>(player.number);
+        break;
+    }
+    const bool weAreMaster = reconcileMastership(rivalMaster);
+    // Published here rather than beside the playback, because that returns
+    // early when no track is loaded -- and holding tempo master with the deck
+    // stopped is an ordinary state whose button must not go dark.
+    m_pControls->isMaster()->forceSet(weAreMaster ? 1.0 : 0.0);
+
     // **Who to draw is "the deck I am mixing against", not literally "the
     // master".** The two are the same until this deck takes mastership, and
     // then they stop being: the master becomes us, the top row would be our own
@@ -496,16 +634,16 @@ void ProLinkNetworkService::publishMaster() {
     // followed. So the master is preferred, and any other playing deck is the
     // fallback -- which is the deck whose beats are worth lining up with either
     // way.
-    const ::rust::Vec<::prolink::Player> players = (*m_pImpl->pSession)->players();
     const ::prolink::Player* pShow = nullptr;
     for (const ::prolink::Player& player : players) {
+        if (!isWorthFollowing(player)) {
+            continue;
+        }
         if (player.is_master) {
             pShow = &player;
             break;
         }
-        // Only a deck that is actually keeping time: `bar_phase` is negative
-        // for a player that has sent no beat, or whose beat has gone stale.
-        if (pShow == nullptr && player.is_beating && player.bar_phase >= 0.0) {
+        if (pShow == nullptr) {
             pShow = &player;
         }
     }
