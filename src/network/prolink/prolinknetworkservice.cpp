@@ -6,6 +6,7 @@
 #include <QTimer>
 #include <exception>
 
+#include <algorithm>
 #include <cmath>
 
 #include "control/controlobject.h"
@@ -14,6 +15,7 @@
 #include "moc_prolinknetworkservice.cpp"
 #include "network/prolink/prolinkbeatposition.h"
 #include "network/prolink/prolinkcontrols.h"
+#include "network/prolink/synctempo.h"
 #include "prolink-cxx/src/lib.rs.h"
 #include "util/assert.h"
 #include "util/logger.h"
@@ -29,8 +31,21 @@ const mixxx::Logger kLogger("ProLinkNetworkService");
 /// less demanding than the marker is.
 constexpr int kPollIntervalMs = 33;
 
-/// How close two tempos have to be to count as matched. See followMaster().
+/// How close two tempos have to be before the one-shot landing runs.
 constexpr double kTempoMatchedBpm = 0.05;
+
+/// How far out of phase the deck may drift before it is nudged back.
+///
+/// A fiftieth of a beat, which at 120 BPM is 10 ms -- below what anyone can
+/// hear as a flam, and comfortably above the jitter in measuring the master's
+/// phase from packets that arrive every 200 ms.
+constexpr double kPhaseSlipBeats = 0.02;
+
+/// The shortest gap between two phase corrections.
+///
+/// A correction has to have taken effect *and* been measured before the next
+/// one is considered, or one error is chased by a burst of overlapping seeks.
+constexpr int kPhaseHoldMs = 1500;
 
 mixxx::prolink::MediaSlot toMixxxSlot(::prolink::Slot slot) {
     switch (slot) {
@@ -294,47 +309,101 @@ void ProLinkNetworkService::followMaster() {
         return;
     }
 
-    if (m_pControls->syncEnabled()->get() <= 0.0) {
+    // Which of the eight states this is, and therefore whether the tempo comes
+    // off the wire or off the fader. The table and the reasoning are in
+    // docs/tempo-sync.md; the decision itself is in SyncTempo so that every row
+    // of that table is a test rather than a branch nobody can find.
+    //
+    // Nothing to do in the Fader case: not writing the tempo *is* letting the
+    // fader have it. Catching up afterwards is `soft-takeover` in the mapping,
+    // which is Mixxx's own.
+    SyncTempo::State state;
+    state.syncEnabled = m_pControls->syncEnabled()->get() > 0.0;
+    state.isMaster = m_pControls->isMaster()->get() > 0.0;
+    state.masterBpm = m_pControls->masterBpm()->get();
+    if (SyncTempo::decide(state) != SyncTempo::Source::Master) {
         return;
     }
-    // A master follows nobody. Without this the deck would chase the tempo of
-    // whichever other player the meter happens to be drawing -- which is a deck
-    // that is, at that moment, supposed to be following *us*.
-    if (m_pControls->isMaster()->get() > 0.0) {
-        return;
-    }
-    const double masterBpm = m_pControls->masterBpm()->get();
+    const double masterBpm = state.masterBpm;
     const double ours = m_pDeckBpm->get();
-    if (masterBpm <= 0.0 || ours <= 0.0) {
+    if (ours <= 0.0) {
         return;
     }
-    // **A deadband, not an equality.** The master's effective tempo is its
-    // centi-BPM times a fixed-point pitch, and this deck's is whatever the rate
-    // slider quantises to -- so the two agree to about a hundredth and then
-    // stop converging. Chasing the last thousandth means writing `bpm` on every
-    // one of the thirty polls a second, for ever, which fights the engine and
-    // never reports the match; five hundredths at 116 BPM is one beat of drift
-    // in forty minutes, which is well past where a phase alignment holds.
-    if (std::abs(masterBpm - ours) < kTempoMatchedBpm) {
-        // **Now**, and not when the button was pressed.
+    // **The tempo is the master's, exactly, and is not used to steer.**
+    //
+    // An earlier version held the phase by trimming the tempo a fraction of a
+    // percent. It worked -- the error closed smoothly -- but it rewrote the
+    // tempo on every one of thirty polls a second, and the deck's own BPM
+    // readout jittered around the master's value for as long as SYNC was lit.
+    // A tempo display that will not sit still is worse than the drift it was
+    // correcting, because it is the number a DJ reads to decide whether the two
+    // decks agree at all.
+    //
+    // So the tempo is set once and left alone, and the phase is corrected by
+    // moving the playhead: a few tens of milliseconds, which is what a nudge on
+    // a jog wheel is, and inaudible on anything but a solo drum hit.
+    //
+    // A deadband rather than equality, because the master's effective tempo is
+    // its centi-BPM times a fixed-point pitch and this deck's is whatever the
+    // rate slider quantises to: the two converge to about a hundredth of a BPM
+    // and then stop.
+    const bool tempoMatched = std::abs(masterBpm - ours) < kTempoMatchedBpm;
+    if (!tempoMatched) {
+        ControlObject::set(ConfigKey(QString::fromLatin1(kDeckGroup),
+                                   QStringLiteral("bpm")),
+                masterBpm);
+    }
+
+    // **Only while playing.** A paused deck's playhead does not move, so the
+    // master walks away from it and the error grows without bound; there is
+    // nothing to correct until the deck is running.
+    if (tempoMatched && m_pDeckPlay->get() > 0.0) {
+        // **A sync that aligns once is not a sync.** Landing on the beat when
+        // the button is pressed is the easy half; the two then drift apart
+        // whenever the master's tempo is nudged, and nothing was closing that
+        // gap again. A CDJ holds the phase for as long as SYNC is lit.
         //
-        // Matching the tempo takes a poll or two, and a phase nudge applied
-        // before it lands is a nudge measured at the wrong tempo that the
-        // tempo change then walks away from. So the alignment waits here, for
-        // the first moment the two tempos agree, which is also the first
-        // moment an alignment can hold.
-        if (m_alignWhenTempoMatches) {
+        // Rate-limited, so a correction always has time to take effect and be
+        // measured before the next one is considered -- otherwise a single
+        // error is chased by a burst of overlapping seeks.
+        const bool pending = m_alignWhenTempoMatches;
+        const bool due = !m_phaseHold.isValid() || m_phaseHold.elapsed() > kPhaseHoldMs;
+        double error = 0.0;
+        if ((pending || due) && phaseErrorBeats(&error) &&
+                (pending || std::abs(error) > kPhaseSlipBeats)) {
             m_alignWhenTempoMatches = false;
-            kLogger.debug() << "tempo matched at" << ours << "against" << masterBpm
-                            << "-- aligning phase";
+            m_phaseHold.start();
             alignPhaseToMaster();
         }
-        reportPhaseDrift();
-        return;
     }
-    ControlObject::set(ConfigKey(QString::fromLatin1(kDeckGroup),
-                               QStringLiteral("bpm")),
-            masterBpm);
+    reportPhaseDrift();
+}
+
+bool ProLinkNetworkService::phaseErrorBeats(double* pBeats) const {
+    const double masterPhase = m_pControls->masterBarPhase()->get();
+    const double duration = m_pDeckDuration->get();
+    const double fileBpm = m_pDeckFileBpm->get();
+    if (masterPhase < 0.0 || duration <= 0.0 || fileBpm <= 0.0) {
+        return false;
+    }
+    const double ourPhase = mixxx::prolink::barPhaseOf(
+            mixxx::prolink::beatPositionOf(m_pDeckPlayPosition->get(),
+                    duration,
+                    fileBpm,
+                    m_pDeckBeatDistance->get()));
+    if (ourPhase < 0.0) {
+        return false;
+    }
+    // Wrapped to the nearest **beat**, not the nearest bar. Bar alignment
+    // across devices is not knowable -- nothing in a Mixxx grid names a
+    // downbeat -- so chasing it would drag the track by up to two beats.
+    double beats = (masterPhase - ourPhase) * mixxx::prolink::kBeatsPerBar;
+    beats -= std::floor(beats);
+    if (beats > 0.5) {
+        beats -= 1.0;
+    }
+    *pBeats = beats;
+    return true;
 }
 
 void ProLinkNetworkService::reportPhaseDrift() {
@@ -346,28 +415,12 @@ void ProLinkNetworkService::reportPhaseDrift() {
     if (m_driftReport.isValid() && m_driftReport.elapsed() < 1000) {
         return;
     }
-    m_driftReport.start();
-
-    const double masterPhase = m_pControls->masterBarPhase()->get();
-    const double duration = m_pDeckDuration->get();
-    const double fileBpm = m_pDeckFileBpm->get();
+    double beats = 0.0;
     const double effectiveBpm = m_pDeckBpm->get();
-    if (masterPhase < 0.0 || duration <= 0.0 || fileBpm <= 0.0 || effectiveBpm <= 0.0) {
+    if (!phaseErrorBeats(&beats) || effectiveBpm <= 0.0) {
         return;
     }
-    const double ourPhase = mixxx::prolink::barPhaseOf(
-            mixxx::prolink::beatPositionOf(m_pDeckPlayPosition->get(),
-                    duration,
-                    fileBpm,
-                    m_pDeckBeatDistance->get()));
-    if (ourPhase < 0.0) {
-        return;
-    }
-    double beats = (masterPhase - ourPhase) * mixxx::prolink::kBeatsPerBar;
-    beats -= std::floor(beats);
-    if (beats > 0.5) {
-        beats -= 1.0;
-    }
+    m_driftReport.start();
     kLogger.debug() << "phase drift" << beats * 60000.0 / effectiveBpm << "ms ("
                     << beats << "beats )";
 }
