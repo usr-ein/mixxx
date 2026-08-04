@@ -1,5 +1,7 @@
 #include "waveformrendererrgb.h"
 
+#include <QElapsedTimer>
+
 #include "waveformwidgetrenderer.h"
 #include "waveform/waveform.h"
 #include "util/math.h"
@@ -16,16 +18,34 @@ WaveformRendererRGB::~WaveformRendererRGB() {
 void WaveformRendererRGB::onSetup(const QDomNode& /* node */) {
 }
 
+namespace {
+/// Say why nothing was drawn, at most once a second.
+///
+/// A waveform that does not appear looks identical whatever the reason, and
+/// all five reasons below are silent. Rate-limited because this is a render
+/// path: a warning per frame would be sixty a second.
+void declined(const char* why) {
+    static QElapsedTimer since;
+    if (since.isValid() && since.elapsed() < 1000) {
+        return;
+    }
+    since.start();
+    qWarning() << "waveform not drawn:" << why;
+}
+} // namespace
+
 void WaveformRendererRGB::draw(
         QPainter* painter,
         QPaintEvent* /*event*/) {
     ConstWaveformPointer pWaveform = m_waveformRenderer->getWaveform();
     if (pWaveform.isNull()) {
+        declined("the track has no waveform");
         return;
     }
 
     const double audioVisualRatio = pWaveform->getAudioVisualRatio();
     if (audioVisualRatio <= 0) {
+        declined("the waveform has no audio-to-visual ratio");
         return;
     }
 
@@ -33,16 +53,19 @@ void WaveformRendererRGB::draw(
 
     const int dataSize = pWaveform->getDataSize();
     if (dataSize <= 1) {
+        declined("the waveform is empty");
         return;
     }
 
     const WaveformData* data = pWaveform->data();
     if (data == nullptr) {
+        declined("the waveform has no data");
         return;
     }
 
     const double trackSamples = m_waveformRenderer->getTrackSamples();
     if (trackSamples <= 0) {
+        declined("the engine has not published a track length");
         return;
     }
 
