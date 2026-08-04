@@ -43,16 +43,30 @@ class PreviewWaveform final {
 
     PreviewWaveform() = default;
 
-    /// From a `PWAV` payload, as a local `.DAT` carries it.
+    /// From a track's two analysis files: `PWAV` out of the `.DAT`, `PWV4` out
+    /// of the `.EXT`. Either may be empty.
     ///
-    /// Null unless the payload is exactly kColumns bytes. A shorter one is a
-    /// tag we cannot read, and stretching it would draw a plausible waveform
-    /// that is wrong about where everything in the track is — worse than
-    /// drawing none, because nothing on screen would say so.
+    /// **The height comes from `PWAV` and the colour from `PWV4`**, because
+    /// each is better at one of them and neither is good at both.
     ///
-    /// Drawn blue going white with the shade rekordbox stored, which is how a
-    /// CDJ draws this same tag.
-    static PreviewWaveform fromPwav(const QByteArray& payload);
+    /// `PWV4`'s envelope byte is badly compressed: measured over five tracks it
+    /// puts the median column at 87–98 % of full height and the lower quartile
+    /// at 58–89 %, so a whole track draws as one solid block and a breakdown is
+    /// the only thing that reads. `PWAV`'s height, an independent encoding of
+    /// the same music, puts those at 58–77 % and 39–74 % on the same tracks —
+    /// consistently the wider range, and it is what a CDJ draws its own preview
+    /// from. It is also exactly kColumns long, so the height needs no
+    /// resampling at all.
+    ///
+    /// What `PWV4` is good at is the three frequency bands, which `PWAV` does
+    /// not carry. So: its bands, `PWAV`'s envelope.
+    ///
+    /// Falls back gracefully. No `PWV4` — an older rekordbox, or a `.DAT` with
+    /// no `.EXT` beside it — draws blue going white with `PWAV`'s shade, the way
+    /// a CDJ draws that tag. No `PWAV` uses `PWV4`'s envelope after all, which
+    /// is compressed but is not nothing.
+    static PreviewWaveform fromAnlz(const QByteArray& pwav,
+            const QVector<prolink::AnlzPreviewColumn>& colour);
 
     /// From a `GET_WAVEFORM_PREVIEW` reply, as a player puts it on the wire.
     ///
@@ -61,14 +75,6 @@ class PreviewWaveform final {
     /// ignores. Accepts anything holding at least the 800.
     static PreviewWaveform fromWire(const QByteArray& blob);
 
-    /// From a `PWV4` colour preview.
-    ///
-    /// 1200 columns into 400, three to one, keeping the loudest of each three.
-    /// The **peak** rather than the mean, because three inputs per output is a
-    /// narrow window and averaging it would round off exactly the transients a
-    /// preview is read for — the same rule, and the same reason, as the detail
-    /// waveform's resampler.
-    static PreviewWaveform fromColourPreview(const QVector<prolink::AnlzPreviewColumn>& columns);
 
     /// True for a track with no preview, and for one whose preview did not
     /// parse. The panel draws the same thing for both.

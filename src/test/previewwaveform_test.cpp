@@ -42,7 +42,7 @@ TEST(PreviewWaveformTest, DefaultIsNull) {
 }
 
 TEST(PreviewWaveformTest, PwavSplitsHeightFromShade) {
-    const PreviewWaveform preview = PreviewWaveform::fromPwav(pwav());
+    const PreviewWaveform preview = PreviewWaveform::fromAnlz(pwav(), {});
     ASSERT_FALSE(preview.isNull());
     // Height 6 of 31, scaled to the 0..255 the panel draws from.
     EXPECT_EQ(6 * 255 / 31, preview.at(0).height);
@@ -55,9 +55,9 @@ TEST(PreviewWaveformTest, AWrongLengthPwavIsRefused) {
     // Not stretched, not padded. A preview of the wrong length is a tag we
     // cannot read, and a plausible-but-wrong waveform is worse than none
     // because nothing on screen would say it is wrong.
-    EXPECT_TRUE(PreviewWaveform::fromPwav(QByteArray(399, kPacked)).isNull());
-    EXPECT_TRUE(PreviewWaveform::fromPwav(QByteArray(401, kPacked)).isNull());
-    EXPECT_TRUE(PreviewWaveform::fromPwav(QByteArray()).isNull());
+    EXPECT_TRUE(PreviewWaveform::fromAnlz(QByteArray(399, kPacked), {}).isNull());
+    EXPECT_TRUE(PreviewWaveform::fromAnlz(QByteArray(401, kPacked), {}).isNull());
+    EXPECT_TRUE(PreviewWaveform::fromAnlz(QByteArray(), {}).isNull());
 }
 
 TEST(PreviewWaveformTest, TheWireAndTheFileDrawTheSamePicture) {
@@ -72,7 +72,7 @@ TEST(PreviewWaveformTest, TheWireAndTheFileDrawTheSamePicture) {
     }
     blob.append(QByteArray(100, '\x01')); // the PWV2 the wire appends
 
-    const PreviewWaveform fromFile = PreviewWaveform::fromPwav(pwav());
+    const PreviewWaveform fromFile = PreviewWaveform::fromAnlz(pwav(), {});
     const PreviewWaveform fromWire = PreviewWaveform::fromWire(blob);
     ASSERT_FALSE(fromWire.isNull());
     for (int column = 0; column < PreviewWaveform::kColumns; ++column) {
@@ -86,45 +86,66 @@ TEST(PreviewWaveformTest, ATruncatedWireBlobIsRefused) {
     EXPECT_TRUE(PreviewWaveform::fromWire(QByteArray(799, '\x01')).isNull());
 }
 
-TEST(PreviewWaveformTest, ColourPreviewIsSevenBitAndFillsTheStrip) {
+TEST(PreviewWaveformTest, ColourIsSevenBitAndSaturates) {
     const PreviewWaveform preview =
-            PreviewWaveform::fromColourPreview(colourPreview());
+            PreviewWaveform::fromAnlz(pwav(), colourPreview());
     ASSERT_FALSE(preview.isNull());
-    // 127 is the ceiling, so the loudest column fills the strip. Scaling by 255
-    // instead would draw every waveform at half height -- plausible, uniformly
+    // 127 is the ceiling, so a band at 127 is fully saturated. Scaling by 255
+    // instead would draw every colour at half strength -- plausible, uniformly
     // wrong, and with nothing on screen to say so.
-    EXPECT_EQ(255, preview.at(0).height);
     EXPECT_EQ(255, preview.at(0).red);
     EXPECT_EQ(0, preview.at(0).green);
     EXPECT_EQ(0, preview.at(0).blue);
 }
 
-TEST(PreviewWaveformTest, ColourPreviewKeepsTheLoudestOfEachThree) {
-    // 1200 columns into 400. The peak rather than the mean, and the peak's own
-    // colour: the bar drawn is the moment that set the height, not an average
-    // of three moments that never happened.
+TEST(PreviewWaveformTest, TheHeightComesFromPwavAndNotFromTheColourEnvelope) {
+    // The whole point of reading both files. PWV4's envelope is compressed --
+    // it puts a whole track in the top fifth of the strip -- so the height is
+    // PWAV's, which is the wider range and needs no resampling.
     QVector<AnlzPreviewColumn> columns = colourPreview();
-    // Make the middle of the first group the loud one, and a different colour.
-    columns[0].envelope = 10;
-    columns[1].envelope = static_cast<quint8>(kColourMax);
-    columns[1].bass = 0;
-    columns[1].mid = static_cast<quint8>(kColourMax);
-    columns[2].envelope = 20;
-
-    const PreviewWaveform preview = PreviewWaveform::fromColourPreview(columns);
+    for (AnlzPreviewColumn& column : columns) {
+        column.envelope = static_cast<quint8>(kColourMax); // "full height"
+    }
+    // PWAV says this column is quiet: height 6 of 31.
+    const PreviewWaveform preview = PreviewWaveform::fromAnlz(pwav(), columns);
     ASSERT_FALSE(preview.isNull());
-    EXPECT_EQ(255, preview.at(0).height) << "the loudest of the three";
-    EXPECT_EQ(255, preview.at(0).green) << "and its own colour, not a blend";
-    EXPECT_EQ(0, preview.at(0).red);
+    EXPECT_EQ(6 * 255 / 31, preview.at(0).height)
+            << "the envelope byte must not win the argument";
 }
 
-TEST(PreviewWaveformTest, AShortColourPreviewIsRefused) {
-    EXPECT_TRUE(PreviewWaveform::fromColourPreview(colourPreview(1199)).isNull());
-    EXPECT_TRUE(PreviewWaveform::fromColourPreview({}).isNull());
+TEST(PreviewWaveformTest, ColourIsTheMeanOfTheThreeItCovers) {
+    // A hue, averaged. The loudest of three has no better claim to the colour
+    // of the moment than its neighbours, and following it makes the strip
+    // flicker between bands on every transient.
+    QVector<AnlzPreviewColumn> columns = colourPreview();
+    columns[0].mid = 0;
+    columns[1].mid = static_cast<quint8>(kColourMax);
+    columns[2].mid = 0;
+
+    const PreviewWaveform preview = PreviewWaveform::fromAnlz(pwav(), columns);
+    ASSERT_FALSE(preview.isNull());
+    EXPECT_EQ(255 / 3, preview.at(0).green);
+}
+
+TEST(PreviewWaveformTest, AShortColourPreviewFallsBackToMonochrome) {
+    // Not a failure: an older rekordbox wrote no PWV4 at all, and a CDJ hands
+    // over none. The strip then draws blue going white, as that tag is meant to.
+    const PreviewWaveform preview =
+            PreviewWaveform::fromAnlz(pwav(), colourPreview(1199));
+    ASSERT_FALSE(preview.isNull());
+    EXPECT_EQ(6 * 255 / 31, preview.at(0).height);
+    EXPECT_GT(preview.at(0).blue, preview.at(0).red) << "the CDJ blue";
+}
+
+TEST(PreviewWaveformTest, WithNoPwavTheEnvelopeIsBetterThanNothing) {
+    const PreviewWaveform preview =
+            PreviewWaveform::fromAnlz(QByteArray(), colourPreview());
+    ASSERT_FALSE(preview.isNull());
+    EXPECT_EQ(255, preview.at(0).height);
 }
 
 TEST(PreviewWaveformTest, OutOfRangeColumnsAreZeroRatherThanACrash) {
-    const PreviewWaveform preview = PreviewWaveform::fromPwav(pwav());
+    const PreviewWaveform preview = PreviewWaveform::fromAnlz(pwav(), {});
     EXPECT_EQ(0, preview.at(-1).height);
     EXPECT_EQ(0, preview.at(PreviewWaveform::kColumns).height);
     EXPECT_EQ(0, preview.at(PreviewWaveform::kColumns + 100).height);

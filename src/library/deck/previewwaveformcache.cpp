@@ -86,18 +86,21 @@ void PreviewWaveformCache::request(
                 // entries each -- so parsing it to reach 1200 colour columns
                 // would decode both and throw them away, once per row a DJ
                 // pauses on, off a stick that may be busy copying a track.
-                PreviewWaveform preview;
+                // **Both files, because each carries half the answer.** The
+                // `.DAT`'s `PWAV` is the envelope -- one column per column
+                // drawn, and the least compressed of the two encodings -- and
+                // the `.EXT`'s `PWV4` is the three frequency bands. See
+                // PreviewWaveform::fromAnlz for the measurements behind that
+                // split.
+                const prolink::AnlzPreview mono = prolink::readAnlzPreview(analyzePath);
+                QVector<prolink::AnlzPreviewColumn> colour;
                 if (analyzePath.endsWith(QStringLiteral(".DAT"))) {
-                    const QString ext =
-                            analyzePath.left(analyzePath.size() - 3) +
+                    const QString ext = analyzePath.left(analyzePath.size() - 3) +
                             QStringLiteral("EXT");
-                    const prolink::AnlzPreview colour = prolink::readAnlzPreview(ext);
-                    preview = PreviewWaveform::fromColourPreview(colour.colour);
+                    colour = prolink::readAnlzPreview(ext).colour;
                 }
-                if (preview.isNull()) {
-                    const prolink::AnlzPreview mono = prolink::readAnlzPreview(analyzePath);
-                    preview = PreviewWaveform::fromPwav(mono.mono);
-                }
+                const PreviewWaveform preview =
+                        PreviewWaveform::fromAnlz(mono.mono, colour);
 
                 if (m_shuttingDown.loadRelaxed()) {
                     return;
