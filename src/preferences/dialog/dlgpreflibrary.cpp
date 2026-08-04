@@ -266,7 +266,6 @@ void DlgPrefLibrary::slotResetToDefaults() {
     checkBox_show_banshee->setChecked(true);
     checkBox_show_itunes->setChecked(true);
     checkBox_show_traktor->setChecked(true);
-    checkBox_show_rekordbox->setChecked(true);
 }
 
 void DlgPrefLibrary::slotUpdate() {
