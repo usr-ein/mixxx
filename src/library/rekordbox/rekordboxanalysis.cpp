@@ -1,17 +1,15 @@
 #include "library/rekordbox/rekordboxanalysis.h"
 
 #include <mp3guessenc.h>
-#include <rekordbox_anlz.h>
 
-#include <QFile>
 #include <QSet>
-#include <QTextCodec>
 #include <QtDebug>
 
-#include <fstream>
+#include <algorithm>
 
 #include "library/rekordbox/rekordboxconstants.h"
 #include "library/rekordbox/rekordboxwaveform.h"
+#include "network/prolink/prolinkanlz.h"
 #include "track/beats.h"
 #include "track/cue.h"
 #include "track/track.h"
@@ -20,18 +18,6 @@
 namespace {
 
 const mixxx::Logger kLogger("RekordboxAnalysis");
-
-/// Kaitai uses std::string as the single container for every string encoding,
-/// so the decode has to happen here rather than in the schema. UTF-16 **big**
-/// endian for ANLZ cue comments -- note that the pdb strings next door are
-/// little-endian, and the two must not share a helper.
-QString fromUtf16BeString(const std::string& toConvert) {
-    const int length = static_cast<int>(toConvert.length()) - 2; // trailing NUL
-    if (length <= 0) {
-        return QString();
-    }
-    return QTextCodec::codecForName("UTF-16BE")->toUnicode(toConvert.data(), length);
-}
 
 enum class IDForColor : uint8_t {
     Pink = 1,
@@ -119,284 +105,193 @@ void setHotCue(TrackPointer track,
     }
 }
 
-void readAnalyzeFile(TrackPointer track,
+/// Milliseconds from the file, as a position in the track's frames.
+///
+/// The offset compensates for MP3 decoders disagreeing about where a file
+/// starts; see timingOffsetForFile(). Clamped to 1 ms because a cue at frame
+/// zero of a file whose decoder starts late lands before the audio does.
+mixxx::audio::FramePos framePosOf(quint32 timeMs,
+        int timingOffset,
+        double sampleRateKhz) {
+    const int time = std::max(1, static_cast<int>(timeMs) - timingOffset);
+    return mixxx::audio::FramePos(sampleRateKhz * static_cast<double>(time));
+}
+
+/// Apply a `PQTZ` beat grid.
+///
+/// **Only ever from the `.DAT`.** Beat grids are correct there and not in the
+/// `.EXT`, which is the one asymmetry between the two files that matters.
+void applyBeatGrid(TrackPointer track,
         mixxx::audio::SampleRate sampleRate,
         int timingOffset,
-        bool ignoreCues,
-        const QString& anlzPath) {
-    if (!QFile(anlzPath).exists()) {
+        const mixxx::prolink::AnlzContents& contents) {
+    if (contents.beats.isEmpty()) {
         return;
     }
-
-    qDebug() << "Rekordbox ANLZ path:" << anlzPath << " for: " << track->getTitle();
-
-    std::ifstream ifs(anlzPath.toStdString(), std::ifstream::binary);
-    kaitai::kstream ks(&ifs);
-
-    rekordbox_anlz_t anlz = rekordbox_anlz_t(&ks);
-
     const double sampleRateKhz = sampleRate / 1000.0;
 
-    QList<memory_cue_loop_t> memoryCuesAndLoops;
-    int lastHotCueIndex = 0;
+    QVector<mixxx::audio::FramePos> beats;
+    beats.reserve(contents.beats.size());
+    mixxx::audio::FramePos firstDownbeatPosition;
+    mixxx::audio::FramePos firstBeatPosition;
+    // Every beat carries the tempo rekordbox analysed it at. On a fixed-tempo
+    // track they are all the same value, and that value is exact -- see below
+    // for why it matters more than the positions.
+    QSet<quint16> storedTempos;
 
-    for (const auto& section : *anlz.sections()) {
-        switch (section->fourcc()) {
-        case rekordbox_anlz_t::SECTION_TAGS_BEAT_GRID: {
-            if (!ignoreCues) {
-                break;
-            }
+    for (const mixxx::prolink::AnlzBeat& beat : contents.beats) {
+        const auto position = framePosOf(beat.timeMs, timingOffset, sampleRateKhz);
+        beats << position;
+        if (beat.tempo > 0) {
+            storedTempos.insert(beat.tempo);
+        }
+        if (!firstBeatPosition.isValid()) {
+            firstBeatPosition = position;
+        }
 
-            auto* beatGridTag =
-                    static_cast<rekordbox_anlz_t::beat_grid_tag_t*>(
-                            section->body());
-
-            QVector<mixxx::audio::FramePos> beats;
-            mixxx::audio::FramePos firstDownbeatPosition;
-            mixxx::audio::FramePos firstBeatPosition;
-            // Every beat carries the tempo rekordbox analysed it at. On a
-            // fixed-tempo track they are all the same value, and that value is
-            // exact -- see below for why it matters more than the positions.
-            QSet<uint16_t> storedTempos;
-
-            for (const auto& beat : *beatGridTag->beats()) {
-                int time = static_cast<int>(beat->time()) - timingOffset;
-                // Ensure no offset times are less than 1
-                if (time < 1) {
-                    time = 1;
-                }
-                const auto position =
-                        mixxx::audio::FramePos(sampleRateKhz * static_cast<double>(time));
-                beats << position;
-                if (beat->tempo() > 0) {
-                    storedTempos.insert(beat->tempo());
-                }
-                if (!firstBeatPosition.isValid()) {
-                    firstBeatPosition = position;
-                }
-
-                // Rekordbox numbers every beat 1..4 within its bar. Mixxx has
-                // nowhere to store that, but remembering the first downbeat is
-                // enough to reconstruct the phase of the whole grid.
-                if (beat->beat_number() == 1 && !firstDownbeatPosition.isValid()) {
-                    firstDownbeatPosition = position;
-                }
-            }
-
-            // **A fixed-tempo track gets a fixed-tempo grid, from the stored
-            // tempo rather than from the beat positions.**
-            //
-            // rekordbox writes beat times as whole milliseconds. At 144 BPM a
-            // beat is 416.67 ms, so the stored gaps alternate 417, 417, 416 --
-            // and a grid built from those positions has a local tempo that
-            // swings by up to 0.45 BPM depending on which pair of beats is
-            // being measured. That is what makes the displayed BPM wander as a
-            // track plays: not the hardware, and not rekordbox being clever,
-            // just millisecond rounding preserved into a variable-tempo grid.
-            //
-            // The tempo field alongside each beat has no such problem: it is
-            // centi-BPM, it is exact, and on all six real tracks checked it was
-            // identical for every beat of the track. So when there is exactly
-            // one, use it and anchor the grid at the first beat.
-            mixxx::BeatsPointer pBeats;
-            if (storedTempos.size() == 1 && firstBeatPosition.isValid()) {
-                const double bpm = *storedTempos.constBegin() / 100.0;
-                pBeats = mixxx::Beats::fromConstTempo(sampleRate,
-                        firstBeatPosition,
-                        mixxx::Bpm(bpm),
-                        mixxx::rekordboxconstants::beatsSubversion);
-            } else {
-                // Genuinely variable tempo -- a live recording, or a track
-                // gridded by hand. The per-beat positions are all there is, and
-                // their millisecond rounding is the least of the problem.
-                pBeats = mixxx::Beats::fromBeatPositions(
-                        sampleRate,
-                        beats,
-                        mixxx::rekordboxconstants::beatsSubversion);
-            }
-            track->trySetBeats(pBeats);
-
-            // The intro cue is what WaveformRenderBeat anchors its downbeat
-            // display to, so seed it from the grid to get the same bar phase
-            // Rekordbox shows. Never clobber an existing intro cue: the user
-            // (or AnalyzerSilence) may have placed it deliberately.
-            if (firstDownbeatPosition.isValid() &&
-                    !track->findCueByType(mixxx::CueType::Intro)) {
-                track->createAndAddCue(mixxx::CueType::Intro,
-                        Cue::kNoHotCue,
-                        firstDownbeatPosition,
-                        mixxx::audio::kInvalidFramePos);
-            }
-        } break;
-        case rekordbox_anlz_t::SECTION_TAGS_CUES: {
-            if (ignoreCues) {
-                break;
-            }
-
-            auto* cuesTag =
-                    static_cast<rekordbox_anlz_t::cue_tag_t*>(
-                            section->body());
-
-            for (const auto& cueEntry : *cuesTag->cues()) {
-                int time = static_cast<int>(cueEntry->time()) - timingOffset;
-                // Ensure no offset times are less than 1
-                if (time < 1) {
-                    time = 1;
-                }
-                const auto position = mixxx::audio::FramePos(
-                        sampleRateKhz * static_cast<double>(time));
-
-                switch (cuesTag->type()) {
-                case rekordbox_anlz_t::CUE_LIST_TYPE_MEMORY_CUES: {
-                    switch (cueEntry->type()) {
-                    case rekordbox_anlz_t::CUE_ENTRY_TYPE_MEMORY_CUE: {
-                        memory_cue_loop_t memoryCue;
-                        memoryCue.startPosition = position;
-                        memoryCue.endPosition = mixxx::audio::kInvalidFramePos;
-                        memoryCue.color = mixxx::RgbColor::nullopt();
-                        memoryCuesAndLoops << memoryCue;
-                    } break;
-                    case rekordbox_anlz_t::CUE_ENTRY_TYPE_LOOP: {
-                        int endTime = static_cast<int>(cueEntry->loop_time()) - timingOffset;
-                        // Ensure no offset times are less than 1
-                        if (endTime < 1) {
-                            endTime = 1;
-                        }
-
-                        memory_cue_loop_t loop;
-                        loop.startPosition = position;
-                        loop.endPosition = mixxx::audio::FramePos(
-                                sampleRateKhz * static_cast<double>(endTime));
-                        loop.color = mixxx::RgbColor::nullopt();
-                        memoryCuesAndLoops << loop;
-                    } break;
-                    }
-                } break;
-                case rekordbox_anlz_t::CUE_LIST_TYPE_HOT_CUES: {
-                    int hotCueIndex = static_cast<int>(cueEntry->hot_cue() - 1);
-                    if (hotCueIndex > lastHotCueIndex) {
-                        lastHotCueIndex = hotCueIndex;
-                    }
-                    setHotCue(
-                            track,
-                            position,
-                            mixxx::audio::kInvalidFramePos,
-                            hotCueIndex,
-                            QString(),
-                            mixxx::RgbColor::nullopt());
-                } break;
-                }
-            }
-        } break;
-        case rekordbox_anlz_t::SECTION_TAGS_CUES_2: {
-            if (ignoreCues) {
-                break;
-            }
-
-            auto* cuesExtendedTag =
-                    static_cast<rekordbox_anlz_t::cue_extended_tag_t*>(
-                            section->body());
-
-            for (const auto& cueExtendedEntry : *cuesExtendedTag->cues()) {
-                int time = static_cast<int>(cueExtendedEntry->time()) - timingOffset;
-                // Ensure no offset times are less than 1
-                if (time < 1) {
-                    time = 1;
-                }
-                const auto position = mixxx::audio::FramePos(
-                        sampleRateKhz * static_cast<double>(time));
-
-                switch (cuesExtendedTag->type()) {
-                case rekordbox_anlz_t::CUE_LIST_TYPE_MEMORY_CUES: {
-                    switch (cueExtendedEntry->type()) {
-                    case rekordbox_anlz_t::CUE_ENTRY_TYPE_MEMORY_CUE: {
-                        memory_cue_loop_t memoryCue;
-                        memoryCue.startPosition = position;
-                        memoryCue.endPosition = mixxx::audio::kInvalidFramePos;
-                        memoryCue.comment = fromUtf16BeString(cueExtendedEntry->comment());
-                        memoryCue.color = colorFromIDLocal(static_cast<int>(
-                                cueExtendedEntry->color_id()));
-                        memoryCuesAndLoops << memoryCue;
-                    } break;
-                    case rekordbox_anlz_t::CUE_ENTRY_TYPE_LOOP: {
-                        int endTime =
-                                static_cast<int>(
-                                        cueExtendedEntry->loop_time()) -
-                                timingOffset;
-                        // Ensure no offset times are less than 1
-                        if (endTime < 1) {
-                            endTime = 1;
-                        }
-
-                        memory_cue_loop_t loop;
-                        loop.startPosition = position;
-                        loop.endPosition = mixxx::audio::FramePos(
-                                sampleRateKhz * static_cast<double>(endTime));
-                        loop.comment = fromUtf16BeString(cueExtendedEntry->comment());
-                        loop.color = colorFromIDLocal(static_cast<int>(cueExtendedEntry->color_id()));
-                        memoryCuesAndLoops << loop;
-                    } break;
-                    }
-                } break;
-                case rekordbox_anlz_t::CUE_LIST_TYPE_HOT_CUES: {
-                    int hotCueIndex = static_cast<int>(cueExtendedEntry->hot_cue() - 1);
-                    if (hotCueIndex > lastHotCueIndex) {
-                        lastHotCueIndex = hotCueIndex;
-                    }
-                    setHotCue(track,
-                            position,
-                            mixxx::audio::kInvalidFramePos,
-                            hotCueIndex,
-                            fromUtf16BeString(cueExtendedEntry->comment()),
-                            mixxx::RgbColor(qRgb(
-                                    static_cast<int>(
-                                            cueExtendedEntry->color_red()),
-                                    static_cast<int>(
-                                            cueExtendedEntry->color_green()),
-                                    static_cast<int>(cueExtendedEntry
-                                                    ->color_blue()))));
-                } break;
-                }
-            }
-        } break;
-        default:
-            break;
+        // Rekordbox numbers every beat 1..4 within its bar. Mixxx has nowhere
+        // to store that, but remembering the first downbeat is enough to
+        // reconstruct the phase of the whole grid.
+        if (beat.beatNumber == 1 && !firstDownbeatPosition.isValid()) {
+            firstDownbeatPosition = position;
         }
     }
 
-    if (memoryCuesAndLoops.size() > 0) {
-        std::sort(memoryCuesAndLoops.begin(),
-                memoryCuesAndLoops.end(),
-                [](const memory_cue_loop_t& a, const memory_cue_loop_t& b)
-                        -> bool { return a.startPosition < b.startPosition; });
+    // **A fixed-tempo track gets a fixed-tempo grid, from the stored tempo
+    // rather than from the beat positions.**
+    //
+    // rekordbox writes beat times as whole milliseconds. At 144 BPM a beat is
+    // 416.67 ms, so the stored gaps alternate 417, 417, 416 -- and a grid built
+    // from those positions has a local tempo that swings by up to 0.45 BPM
+    // depending on which pair of beats is being measured. That is what makes
+    // the displayed BPM wander as a track plays: not the hardware, and not
+    // rekordbox being clever, just millisecond rounding preserved into a
+    // variable-tempo grid.
+    //
+    // The tempo field alongside each beat has no such problem: it is centi-BPM,
+    // it is exact, and on all six real tracks checked it was identical for
+    // every beat of the track. So when there is exactly one, use it and anchor
+    // the grid at the first beat.
+    mixxx::BeatsPointer pBeats;
+    if (storedTempos.size() == 1 && firstBeatPosition.isValid()) {
+        const double bpm = *storedTempos.constBegin() / 100.0;
+        pBeats = mixxx::Beats::fromConstTempo(sampleRate,
+                firstBeatPosition,
+                mixxx::Bpm(bpm),
+                mixxx::rekordboxconstants::beatsSubversion);
+    } else {
+        // Genuinely variable tempo -- a live recording, or a track gridded by
+        // hand. The per-beat positions are all there is, and their millisecond
+        // rounding is the least of the problem.
+        pBeats = mixxx::Beats::fromBeatPositions(
+                sampleRate,
+                beats,
+                mixxx::rekordboxconstants::beatsSubversion);
+    }
+    track->trySetBeats(pBeats);
 
-        bool mainCueFound = false;
+    // The intro cue is what WaveformRenderBeat anchors its downbeat display to,
+    // so seed it from the grid to get the same bar phase Rekordbox shows. Never
+    // clobber an existing intro cue: the user (or AnalyzerSilence) may have
+    // placed it deliberately.
+    if (firstDownbeatPosition.isValid() &&
+            !track->findCueByType(mixxx::CueType::Intro)) {
+        track->createAndAddCue(mixxx::CueType::Intro,
+                Cue::kNoHotCue,
+                firstDownbeatPosition,
+                mixxx::audio::kInvalidFramePos);
+    }
+}
 
-        // Add memory cues and loops
-        for (int memoryCueOrLoopIndex = 0;
-                memoryCueOrLoopIndex < memoryCuesAndLoops.size();
-                memoryCueOrLoopIndex++) {
-            memory_cue_loop_t memoryCueOrLoop = memoryCuesAndLoops[memoryCueOrLoopIndex];
+/// Apply every cue and loop of both lists.
+///
+/// Hot cues go straight on; memory cues and loops are collected, sorted by
+/// position, and applied afterwards, because the first of them chronologically
+/// becomes Mixxx's main cue.
+///
+/// The plain and extended entries are applied in that order and not merged. A
+/// `PCO2` entry for a hot cue the `PCOB` list also holds lands second and wins,
+/// which is what carries its comment and its pad colour onto a cue that was
+/// already placed.
+void applyCues(TrackPointer track,
+        mixxx::audio::SampleRate sampleRate,
+        int timingOffset,
+        const mixxx::prolink::AnlzContents& contents) {
+    const double sampleRateKhz = sampleRate / 1000.0;
+    QList<memory_cue_loop_t> memoryCuesAndLoops;
+    int lastHotCueIndex = 0;
 
-            if (!mainCueFound && !memoryCueOrLoop.endPosition.isValid()) {
-                // Set first chronological memory cue as Mixxx MainCue
-                track->setMainCuePosition(memoryCueOrLoop.startPosition);
-                CuePointer pMainCue = track->findCueByType(mixxx::CueType::MainCue);
-                pMainCue->setLabel(memoryCueOrLoop.comment);
-                pMainCue->setColor(*memoryCueOrLoop.color);
-                mainCueFound = true;
-            } else {
-                // Mixxx v2.4 will feature multiple loops, so these saved here will be usable
-                // For 2.3, Mixxx treats them as hotcues and the first one will be loaded as the single loop Mixxx supports
-                lastHotCueIndex++;
-                setHotCue(
-                        track,
-                        memoryCueOrLoop.startPosition,
-                        memoryCueOrLoop.endPosition,
-                        lastHotCueIndex,
-                        memoryCueOrLoop.comment,
-                        memoryCueOrLoop.color);
+    for (const mixxx::prolink::AnlzCue& cue : contents.cues) {
+        const auto position = framePosOf(cue.timeMs, timingOffset, sampleRateKhz);
+
+        if (cue.hotList) {
+            const int hotCueIndex = static_cast<int>(cue.hotCue) - 1;
+            if (hotCueIndex > lastHotCueIndex) {
+                lastHotCueIndex = hotCueIndex;
             }
+            setHotCue(track,
+                    position,
+                    mixxx::audio::kInvalidFramePos,
+                    hotCueIndex,
+                    cue.comment,
+                    cue.extended ? mixxx::RgbColor::optional(
+                                           mixxx::RgbColor(qRgb(cue.colorRed,
+                                                   cue.colorGreen,
+                                                   cue.colorBlue)))
+                                 : mixxx::RgbColor::nullopt());
+            continue;
+        }
+
+        memory_cue_loop_t entry;
+        entry.startPosition = position;
+        entry.endPosition = cue.isLoop
+                ? framePosOf(cue.loopTimeMs, timingOffset, sampleRateKhz)
+                : mixxx::audio::kInvalidFramePos;
+        entry.comment = cue.comment;
+        entry.color = cue.extended
+                ? mixxx::RgbColor::optional(
+                          colorFromIDLocal(static_cast<int>(cue.colorId)))
+                : mixxx::RgbColor::nullopt();
+        memoryCuesAndLoops << entry;
+    }
+
+    if (memoryCuesAndLoops.isEmpty()) {
+        return;
+    }
+    std::sort(memoryCuesAndLoops.begin(),
+            memoryCuesAndLoops.end(),
+            [](const memory_cue_loop_t& a, const memory_cue_loop_t& b) -> bool {
+                return a.startPosition < b.startPosition;
+            });
+
+    bool mainCueFound = false;
+    for (const memory_cue_loop_t& memoryCueOrLoop : memoryCuesAndLoops) {
+        if (!mainCueFound && !memoryCueOrLoop.endPosition.isValid()) {
+            // Set first chronological memory cue as Mixxx MainCue
+            track->setMainCuePosition(memoryCueOrLoop.startPosition);
+            CuePointer pMainCue = track->findCueByType(mixxx::CueType::MainCue);
+            pMainCue->setLabel(memoryCueOrLoop.comment);
+            // Guarded, unlike everything else about this optional. A plain
+            // `PCOB` memory cue has no colour at all, and dereferencing the
+            // empty optional it comes with is undefined behaviour rather than a
+            // default colour -- reachable on any medium whose tracks have no
+            // `.EXT`, which is what an older rekordbox writes.
+            if (memoryCueOrLoop.color) {
+                pMainCue->setColor(*memoryCueOrLoop.color);
+            }
+            mainCueFound = true;
+        } else {
+            // Mixxx v2.4 will feature multiple loops, so these saved here will
+            // be usable. For 2.3, Mixxx treats them as hotcues and the first one
+            // will be loaded as the single loop Mixxx supports.
+            lastHotCueIndex++;
+            setHotCue(
+                    track,
+                    memoryCueOrLoop.startPosition,
+                    memoryCueOrLoop.endPosition,
+                    lastHotCueIndex,
+                    memoryCueOrLoop.comment,
+                    memoryCueOrLoop.color);
         }
     }
 }
@@ -408,14 +303,6 @@ namespace rekordbox {
 
 RgbColor colorFromID(int colorID) {
     return colorFromIDLocal(colorID);
-}
-
-void readAnalyze(TrackPointer track,
-        audio::SampleRate sampleRate,
-        int timingOffset,
-        bool ignoreCues,
-        const QString& anlzPath) {
-    readAnalyzeFile(track, sampleRate, timingOffset, ignoreCues, anlzPath);
 }
 
 int timingOffsetForFile(const QString& location) {
@@ -495,17 +382,29 @@ void applyAnalysis(TrackPointer track,
     }
     const QString anlzPathExt = anlzPath.left(anlzPath.length() - 3) + QStringLiteral("EXT");
 
-    if (QFile(anlzPathExt).exists()) {
-        // Beatgrids appear to be only correct in the legacy ANLZ file, so the
-        // grid comes from the .DAT and everything else from the .EXT.
-        readAnalyzeFile(track, sampleRate, timingOffset, true, anlzPath);
-        readAnalyzeFile(track, sampleRate, timingOffset, false, anlzPathExt);
-        // The waveform too, which is what otherwise makes Mixxx decode the whole
-        // file after everything else has already been imported.
-        importWaveforms(track, anlzPathExt, pAnalysisDao, sampleRate);
-    } else {
-        readAnalyzeFile(track, sampleRate, timingOffset, false, anlzPath);
+    // Each file read once, here, rather than once per thing wanted out of it.
+    // The .EXT used to be parsed twice -- once for its cues and again for its
+    // waveform -- because both were reached by a path.
+    const prolink::AnlzContents dat = prolink::readAnlz(anlzPath);
+    const prolink::AnlzContents ext = prolink::readAnlz(anlzPathExt);
+    if (!dat.ok && !ext.ok) {
+        // Nothing to apply. Not an error: plenty of tracks have no analysis at
+        // all, and one that has none still plays.
+        kLogger.debug() << "no rekordbox analysis for" << location << "--" << dat.error;
+        return;
     }
+
+    // Beatgrids appear to be only correct in the legacy ANLZ file, so the grid
+    // comes from the .DAT and everything else from the .EXT.
+    applyBeatGrid(track, sampleRate, timingOffset, dat);
+    // **The .DAT is the fallback and not merely the other file.** An older
+    // rekordbox writes no .EXT at all, and the grid used to be skipped entirely
+    // for those tracks -- the one call that could have applied it asked for
+    // cues instead. A track with a perfectly good PQTZ tag arrived ungridded.
+    applyCues(track, sampleRate, timingOffset, ext.ok ? ext : dat);
+    // The waveform too, which is what otherwise makes Mixxx decode the whole
+    // file after everything else has already been imported.
+    importWaveforms(track, ext, pAnalysisDao, sampleRate);
 
     // Mixxx's main cue is where the track loads and where CUE returns to. Above,
     // it is set from the first *memory* cue -- but plenty of rekordbox libraries

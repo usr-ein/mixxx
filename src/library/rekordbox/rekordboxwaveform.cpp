@@ -1,14 +1,9 @@
 #include "library/rekordbox/rekordboxwaveform.h"
 
-#include <rekordbox_anlz.h>
-
-#include <QFile>
 #include <QtDebug>
 
 #include <algorithm>
 #include <cmath>
-#include <fstream>
-#include <vector>
 
 #include "library/dao/analysisdao.h"
 #include "track/track.h"
@@ -43,38 +38,31 @@ constexpr double kMeanAboveRatio = 4.0;
 /// whiting out the whole bar.
 constexpr double kBandContrast = 2.2;
 
-/// One entry of the `PWV5` colour waveform.
+/// One entry of the `PWV5` colour waveform, as `prolink-rekordbox` decodes it.
 ///
-/// A 16-bit big-endian word. The layout below was derived from the files rather
-/// than taken on trust, because the layout in common circulation
-/// (`blue = w >> 2`, `green = w >> 5`, `red = w >> 8`) does not match: its
-/// implied magnitude correlates at 0.13 with the plain `PWV3` waveform of the
-/// same track, where the field at bits 2-6 correlates at **0.99**.
+/// The bit layout it applies was derived from the files rather than taken on
+/// trust, because the layout in common circulation (`blue = w >> 2`,
+/// `green = w >> 5`, `red = w >> 8`) does not match: its implied magnitude
+/// correlates at 0.13 with the plain `PWV3` waveform of the same track, where
+/// the field at bits 2-6 correlates at **0.99**.
 ///
-///     bits 15-13  low      mean level 5.70, relative roughness 0.06
-///     bits 12-10  high     mean level 2.12, relative roughness 0.24
+///     bits 15-13  bass     mean level 5.70, relative roughness 0.06
+///     bits 12-10  treble   mean level 2.12, relative roughness 0.24
 ///     bits  9-7   mid      mean level 3.40, relative roughness 0.21
-///     bits  6-2   overall  0.99 correlation with PWV3's 5-bit height
+///     bits  6-2   height   0.99 correlation with PWV3's 5-bit height
 ///     bits  1-0   always zero across every entry of every file checked
 ///
 /// The band assignment is inferred, from two independent signals that agree:
 /// bass is both the loudest band and the slowest-varying, treble the quietest
-/// and the spikiest. Measured over six tracks off a real stick.
-struct ColourPoint {
-    quint8 low;
-    quint8 mid;
-    quint8 high;
-    quint8 all;
-};
-
-ColourPoint decodePoint(quint16 word) {
-    ColourPoint point;
-    point.low = static_cast<quint8>((word >> 13) & 0x07);
-    point.high = static_cast<quint8>((word >> 10) & 0x07);
-    point.mid = static_cast<quint8>((word >> 7) & 0x07);
-    point.all = static_cast<quint8>((word >> 2) & 0x1F);
-    return point;
-}
+/// and the spikiest. Measured over six tracks off a real stick, and arrived at
+/// independently on the Rust side.
+///
+/// **Band names are not colour names**, and this is where the two orders meet:
+/// Mixxx renders `filtered.low` red, `filtered.mid` green and `filtered.high`
+/// blue, so bass is low, mid is mid, and *treble is high*. Reading the bands in
+/// declaration order into the colour channels swaps green and blue over the
+/// whole waveform, which is a mistake this has already been made once.
+using ColourPoint = mixxx::prolink::AnlzColourColumn;
 
 /// One output sample's worth of each band, already scaled to the 0-255 Mixxx
 /// stores.
@@ -105,8 +93,8 @@ struct Scaled {
 /// at 32 levels instead of 8, and `filtered.all` is filled in too for the
 /// renderers that do use it.
 Scaled scalePoint(const ColourPoint& point) {
-    const double amplitude = point.all * 255.0 / 31.0;
-    const quint8 dominant = std::max({point.low, point.mid, point.high});
+    const double amplitude = point.height * 255.0 / 31.0;
+    const quint8 dominant = std::max({point.bass, point.mid, point.treble});
     if (dominant == 0) {
         return {0.0, 0.0, 0.0, amplitude};
     }
@@ -124,9 +112,9 @@ Scaled scalePoint(const ColourPoint& point) {
     // hue's ordering exactly as rekordbox recorded it. The height is unaffected:
     // that comes from the 5-bit amplitude.
     const double inverse = 1.0 / static_cast<double>(dominant);
-    const double low = std::pow(point.low * inverse, kBandContrast) * amplitude;
+    const double low = std::pow(point.bass * inverse, kBandContrast) * amplitude;
     const double mid = std::pow(point.mid * inverse, kBandContrast) * amplitude;
-    const double high = std::pow(point.high * inverse, kBandContrast) * amplitude;
+    const double high = std::pow(point.treble * inverse, kBandContrast) * amplitude;
     return {low, mid, high, amplitude};
 }
 
@@ -158,9 +146,9 @@ unsigned char toByte(double value) {
 ///    result is a staircase. It also matters vertically: the bands are only three
 ///    bits, eight distinct levels, so without interpolation every edge in the
 ///    picture is quantised twice over.
-void fillWaveform(Waveform* pWaveform, const std::vector<ColourPoint>& points) {
+void fillWaveform(Waveform* pWaveform, const QVector<ColourPoint>& points) {
     const int outputSize = pWaveform->getDataSize();
-    if (outputSize <= 0 || points.empty()) {
+    if (outputSize <= 0 || points.isEmpty()) {
         return;
     }
 
@@ -180,7 +168,7 @@ void fillWaveform(Waveform* pWaveform, const std::vector<ColourPoint>& points) {
     }
     const double pointsPerOutput =
             static_cast<double>(points.size()) / static_cast<double>(frames);
-    const size_t lastPoint = points.size() - 1;
+    const qsizetype lastPoint = points.size() - 1;
 
     for (int i = 0; i < frames; ++i) {
         Scaled value{0, 0, 0, 0};
@@ -188,7 +176,7 @@ void fillWaveform(Waveform* pWaveform, const std::vector<ColourPoint>& points) {
         if (pointsPerOutput <= 1.0) {
             // Upsampling: linear interpolation between neighbours.
             const double position = i * pointsPerOutput;
-            const auto index = static_cast<size_t>(position);
+            const auto index = static_cast<qsizetype>(position);
             const double fraction = position - static_cast<double>(index);
             const Scaled a = scalePoint(points[std::min(index, lastPoint)]);
             const Scaled b = scalePoint(points[std::min(index + 1, lastPoint)]);
@@ -197,13 +185,13 @@ void fillWaveform(Waveform* pWaveform, const std::vector<ColourPoint>& points) {
             value.high = a.high + (b.high - a.high) * fraction;
             value.all = a.all + (b.all - a.all) * fraction;
         } else {
-            const auto begin = static_cast<size_t>(i * pointsPerOutput);
-            auto end = static_cast<size_t>((i + 1) * pointsPerOutput);
+            const auto begin = static_cast<qsizetype>(i * pointsPerOutput);
+            auto end = static_cast<qsizetype>((i + 1) * pointsPerOutput);
             end = std::max(end, begin + 1);
             end = std::min(end, points.size());
             const bool useMean = pointsPerOutput > kMeanAboveRatio;
             double count = 0.0;
-            for (size_t p = begin; p < end; ++p) {
+            for (qsizetype p = begin; p < end; ++p) {
                 const Scaled scaled = scalePoint(points[p]);
                 if (useMean) {
                     value.low += scaled.low;
@@ -239,67 +227,13 @@ void fillWaveform(Waveform* pWaveform, const std::vector<ColourPoint>& points) {
     }
 }
 
-/// The colour waveform's entries, or empty if the file has none.
-std::vector<ColourPoint> readColourWaveform(const QString& anlzPathExt) {
-    std::vector<ColourPoint> points;
-    if (!QFile(anlzPathExt).exists()) {
-        return points;
-    }
-    try {
-        std::ifstream file(anlzPathExt.toStdString(), std::ifstream::binary);
-        if (!file.good()) {
-            return points;
-        }
-        kaitai::kstream stream(&file);
-        rekordbox_anlz_t anlz(&stream);
-
-        for (const auto& pSection : *anlz.sections()) {
-            auto* section = pSection.get();
-            if (section->fourcc() !=
-                    rekordbox_anlz_t::SECTION_TAGS_WAVE_COLOR_SCROLL) {
-                continue;
-            }
-            auto* body = static_cast<rekordbox_anlz_t::wave_color_scroll_tag_t*>(
-                    section->body());
-            if (body->len_entry_bytes() != 2) {
-                // Two bytes per entry is what the format says and what every
-                // file has. Anything else is a variant we cannot read, and
-                // guessing at it would draw a plausible but wrong waveform --
-                // worse than falling back to a real analysis.
-                qWarning() << "rekordbox colour waveform has"
-                           << body->len_entry_bytes()
-                           << "bytes per entry, expected 2; ignoring it";
-                return {};
-            }
-            const std::string& entries = body->entries();
-            const size_t count = std::min(static_cast<size_t>(body->len_entries()),
-                    entries.size() / 2);
-            points.reserve(count);
-            for (size_t i = 0; i < count; ++i) {
-                const auto high = static_cast<quint8>(entries[i * 2]);
-                const auto low = static_cast<quint8>(entries[i * 2 + 1]);
-                points.push_back(decodePoint(
-                        static_cast<quint16>((high << 8) | low)));
-            }
-            return points;
-        }
-    } catch (const std::exception& e) {
-        qWarning() << "could not read" << anlzPathExt << ":" << e.what();
-        return {};
-    } catch (...) {
-        qWarning() << "could not read" << anlzPathExt;
-        return {};
-    }
-    return points;
-}
-
 } // namespace
 
 namespace mixxx {
 namespace rekordbox {
 
 bool importWaveforms(TrackPointer track,
-        const QString& anlzPathExt,
+        const prolink::AnlzContents& ext,
         AnalysisDao* pAnalysisDao,
         mixxx::audio::SampleRate sampleRateOverride) {
     if (!track) {
@@ -310,8 +244,11 @@ bool importWaveforms(TrackPointer track,
         return true;
     }
 
-    const std::vector<ColourPoint> points = readColourWaveform(anlzPathExt);
-    if (points.empty()) {
+    // No colour waveform in this file. Normal rather than an error: a track
+    // analysed by an older rekordbox has no `PWV5` at all, and Mixxx's own
+    // analyzer picks the job up.
+    const QVector<ColourPoint>& points = ext.colourDetail;
+    if (points.isEmpty()) {
         return false;
     }
 

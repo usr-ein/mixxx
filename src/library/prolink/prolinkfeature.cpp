@@ -37,10 +37,11 @@ const QString kViewName = QStringLiteral("PROLINKHOME");
 
 /// Index into a device node's payload list.
 ///
-/// A `QList<QString>` payload follows the convention the Rekordbox feature
-/// established (`rekordboxfeature.cpp:196`), but with an explicit kind tag
-/// rather than that feature's two magic sentinel strings, so adding slot and
-/// playlist nodes later does not mean overloading a boolean.
+/// A `QList<QString>` payload follows the convention the old Rekordbox feature
+/// established — deleted with the Kaitai parser it was the last consumer of —
+/// but with an explicit kind tag rather than that feature's two magic sentinel
+/// strings, so adding slot and playlist nodes later does not mean overloading a
+/// boolean.
 constexpr int kPayloadKind = 0;
 constexpr int kPayloadMac = 1;
 /// Slot number for a slot node; playlist id for a playlist node.

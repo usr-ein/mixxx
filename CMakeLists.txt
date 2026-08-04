@@ -1013,7 +1013,6 @@ add_library(mixxx-lib STATIC EXCLUDE_FROM_ALL
   src/library/deck/ramstore.cpp
   src/library/deck/trackcache.cpp
   src/library/deck/volumelabel.cpp
-  src/library/rekordbox/rekordboxfeature.cpp
   src/library/rhythmbox/rhythmboxfeature.cpp
   src/library/scanner/importfilestask.cpp
   src/library/scanner/libraryscanner.cpp
@@ -1083,6 +1082,7 @@ add_library(mixxx-lib STATIC EXCLUDE_FROM_ALL
   src/network/prolink/prolinkcontrols.cpp
   src/network/prolink/synctempo.cpp
   src/network/prolink/prolinknetworkservice.cpp
+  src/network/prolink/prolinkanlz.cpp
   src/network/prolink/prolinkpdb.cpp
   src/network/webtask.cpp
   src/preferences/colorpaletteeditor.cpp
@@ -2741,28 +2741,6 @@ target_link_libraries(mixxx-lib PRIVATE FpClassify)
 find_package(mp3lame REQUIRED)
 target_link_libraries(mixxx-lib PRIVATE mp3lame::mp3lame)
 
-add_library(rekordbox_metadata STATIC EXCLUDE_FROM_ALL
-  lib/rekordbox-metadata/rekordbox_pdb.cpp
-  lib/rekordbox-metadata/rekordbox_anlz.cpp
-)
-target_include_directories(rekordbox_metadata SYSTEM PUBLIC lib/rekordbox-metadata)
-target_link_libraries(mixxx-lib PRIVATE rekordbox_metadata)
-
-#silence "enumeration values not handled in switch" in generated code
-if(CMAKE_CXX_COMPILER_ID MATCHES "GNU|Clang")
-    target_compile_options(rekordbox_metadata PRIVATE -Wno-switch)
-elseif(CMAKE_CXX_COMPILER_ID MATCHES "MSVC")
-    target_compile_options(rekordbox_metadata PRIVATE /w44063)
-endif()
-
-# Kaitai for reading Rekordbox libraries
-add_library(Kaitai STATIC EXCLUDE_FROM_ALL
-  lib/kaitai/kaitai/kaitaistream.cpp
-)
-target_include_directories(Kaitai SYSTEM PUBLIC lib/kaitai)
-target_compile_definitions(Kaitai PRIVATE KS_STR_ENCODING_NONE)
-target_link_libraries(rekordbox_metadata PRIVATE Kaitai)
-target_link_libraries(mixxx-lib PRIVATE Kaitai)
 
 # For determining MP3 timing offset cases in Rekordbox library feature
 add_library(MP3GuessEnc STATIC EXCLUDE_FROM_ALL

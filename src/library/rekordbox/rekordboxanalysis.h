@@ -8,36 +8,26 @@
 
 class AnalysisDao;
 
-/// Reading rekordbox ANLZ side-files onto a Track: beat grid, hot cues, loops,
+/// Applying rekordbox's ANLZ side-files to a Track: beat grid, hot cues, loops,
 /// memory cues and the track colour.
 ///
-/// Extracted from `rekordboxfeature.cpp`, which had it in an anonymous
-/// namespace, when the ProLink feature needed exactly the same thing for a track
-/// pulled off a CDJ over the network. The two differ only in how the files got
-/// onto local disk; everything from there on is identical, and duplicating a few
-/// hundred lines of beat-grid arithmetic is how two copies drift apart.
+/// Extracted from the old rekordbox library feature, which had it in an
+/// anonymous namespace, when the ProLink feature needed exactly the same thing
+/// for a track pulled off a CDJ over the network. The two differ only in how the
+/// files got onto local disk; everything from there on is identical, and
+/// duplicating a few hundred lines of beat-grid arithmetic is how two copies
+/// drift apart.
 ///
-/// The `rekordbox_anlz` Kaitai types this uses are already vendored at
-/// `lib/rekordbox-metadata/` and shared by both.
+/// **This module applies; it does not parse.** The files are read by
+/// `prolink-rekordbox` through `network/prolink/prolinkanlz.h`, which is also
+/// what the Pro DJ Link serve side reads them with. What lives here is
+/// everything that is Mixxx's rather than rekordbox's: milliseconds into frame
+/// positions, the decoder timing offset, and Mixxx's own cue objects.
 namespace mixxx {
 namespace rekordbox {
 
 /// Rekordbox's eight fixed cue colours, by the id stored in the pdb.
 RgbColor colorFromID(int colorID);
-
-/// Read one ANLZ file and apply what it holds to *track*.
-///
-/// *ignoreCues* reads the beat grid and nothing else, which is how the pair of
-/// files is combined: grids are only correct in the legacy `.DAT`, everything
-/// else is better in the `.EXT`.
-///
-/// A missing or unparseable file is silently nothing — analysis is an
-/// enhancement, and a track with no grid still plays.
-void readAnalyze(TrackPointer track,
-        audio::SampleRate sampleRate,
-        int timingOffset,
-        bool ignoreCues,
-        const QString& anlzPath);
 
 /// The decoder timing offset for a local audio file, in frames.
 ///

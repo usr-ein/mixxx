@@ -53,11 +53,8 @@ constexpr int kDeviceNameLength = 20;
 
 /// Offsets within the 0x24-byte common header shared by every UDP-50000 type.
 ///
-/// Reading is done by the generated Kaitai parser, which carries these in the
-/// schema; they are repeated here for the *builders*, which cannot be generated
-/// because Kaitai emits no C++ serializers. The unit tests round-trip a built
-/// packet back through the generated parser, so the two cannot drift apart
-/// without something going red.
+/// Reading is `prolink-proto`'s, in Rust, which carries its own copy of these;
+/// they are repeated here for the C++ side's *builders*.
 constexpr int kOffsetType = 0x0A;
 constexpr int kOffsetSubtype = 0x0B;
 constexpr int kOffsetName = 0x0C;

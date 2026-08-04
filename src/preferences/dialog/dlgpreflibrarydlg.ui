@@ -477,16 +477,6 @@
         </property>
        </widget>
       </item>
-      <item row="4" column="0">
-       <widget class="QCheckBox" name="checkBox_show_rekordbox">
-        <property name="text">
-         <string>Show Rekordbox Library</string>
-        </property>
-        <property name="checked">
-         <bool>true</bool>
-        </property>
-       </widget>
-      </item>
       <item row="5" column="0">
        <widget class="QCheckBox" name="checkBox_show_serato">
         <property name="text">
@@ -693,7 +683,6 @@
   <tabstop>checkBox_show_banshee</tabstop>
   <tabstop>checkBox_show_itunes</tabstop>
   <tabstop>checkBox_show_traktor</tabstop>
-  <tabstop>checkBox_show_rekordbox</tabstop>
   <tabstop>checkBox_show_serato</tabstop>
   <tabstop>radioButton_cover_art_fetcher_highest</tabstop>
   <tabstop>radioButton_cover_art_fetcher_high</tabstop>

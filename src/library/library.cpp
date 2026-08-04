@@ -21,7 +21,6 @@
 #include "library/mixxxlibraryfeature.h"
 #include "library/recording/recordingfeature.h"
 #include "library/prolink/prolinkfeature.h"
-#include "library/rekordbox/rekordboxfeature.h"
 #include "library/rhythmbox/rhythmboxfeature.h"
 #include "library/serato/seratofeature.h"
 #include "library/sidebarmodel.h"
@@ -90,27 +89,22 @@ Library::Library(
     //
     // ORDER IS THE SIDEBAR ORDER. SidebarModel keeps features in the order they
     // are added and renders row N as the Nth addFeature() call, so the sequence
-    // below is the menu top to bottom. The three that lead are the ones a deck
-    // actually reaches for -- the USBs you turned up with, your own collection,
-    // and the players on the network -- and everything else follows.
-
-    // TODO(XXX) Rekordbox feature added persistently as the only way to enable it to
-    // dynamically appear/disappear when correctly prepared removable devices
-    // are mounted/unmounted would be to have some form of timed thread to check
-    // periodically. Not ideal performance wise.
-    if (m_pConfig->getValue(
-                ConfigKey(kConfigGroup, "ShowRekordboxLibrary"), true)) {
-        addFeature(new RekordboxFeature(this, m_pConfig));
-    }
+    // below is the menu top to bottom. The ones that lead are what a deck
+    // actually reaches for -- your own collection, and the players on the
+    // network -- and everything else follows.
+    //
+    // The rekordbox feature used to lead this list and is gone. The browser
+    // reads sticks now (browser-prd.md 2), and the feature went on parsing every
+    // export.pdb it found into a table nobody read -- with a second Pro DJ Link
+    // session behind it, which is how the deck came to announce that no player
+    // number was free against itself.
 
     m_pMixxxLibraryFeature = new MixxxLibraryFeature(
             this,
             m_pConfig);
     addFeature(m_pMixxxLibraryFeature);
-    // Keep the startup selection on the local collection even though Rekordbox
-    // now sits above it: activating the Rekordbox root instead would greet every
-    // boot with its "plug in a prepared device" page. Derived from the row count
-    // rather than hard-coded, so it survives the next reshuffle.
+    // Derived from the row count rather than hard-coded, so it survives the
+    // next reshuffle of the order above.
     m_pSidebarModel->setDefaultSelection(
             static_cast<unsigned int>(m_pSidebarModel->rowCount() - 1));
 #ifdef __ENGINEPRIME__
