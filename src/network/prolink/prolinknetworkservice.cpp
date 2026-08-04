@@ -589,6 +589,7 @@ void ProLinkNetworkService::publishMaster() {
         m_pControls->masterDevice()->forceSet(0.0);
         m_pControls->masterBpm()->forceSet(0.0);
         m_pControls->masterBarPhase()->forceSet(-1.0);
+        publishMasterTrack(MasterTrack());
         return;
     }
 
@@ -626,6 +627,27 @@ void ProLinkNetworkService::publishMaster() {
     // stopped is an ordinary state whose button must not go dark.
     m_pControls->isMaster()->forceSet(weAreMaster ? 1.0 : 0.0);
 
+    // What the master is playing, for KEY SYNC. Literal, and unrelated to the
+    // deck chosen for the phase meter below: a key is borrowed from whoever
+    // the room is following, and if that is nobody there is no key to borrow.
+    MasterTrack masterTrack;
+    if (!weAreMaster && rivalMaster != 0) {
+        for (const ::prolink::Player& player : players) {
+            if (static_cast<int>(player.number) != rivalMaster) {
+                continue;
+            }
+            masterTrack.masterPlayer = rivalMaster;
+            // The track's home, which is not the same player: on a linked rig
+            // one stick feeds four decks, and the id is a row in *that*
+            // medium's database and means nothing anywhere else.
+            masterTrack.sourcePlayer = static_cast<int>(player.track_source_player);
+            masterTrack.slot = toMixxxSlot(player.track_source_slot);
+            masterTrack.trackId = player.track_id;
+            break;
+        }
+    }
+    publishMasterTrack(masterTrack);
+
     // **Who to draw is "the deck I am mixing against", not literally "the
     // master".** The two are the same until this deck takes mastership, and
     // then they stop being: the master becomes us, the top row would be our own
@@ -661,6 +683,20 @@ void ProLinkNetworkService::publishMaster() {
     m_pControls->masterDevice()->forceSet(0.0);
     m_pControls->masterBpm()->forceSet(0.0);
     m_pControls->masterBarPhase()->forceSet(-1.0);
+}
+
+void ProLinkNetworkService::publishMasterTrack(const MasterTrack& track) {
+    if (track == m_publishedMasterTrack) {
+        return;
+    }
+    m_publishedMasterTrack = track;
+    // On a change and not on a poll: resolving this to a key means a database
+    // lookup, and thirty of those a second for an answer that moves once a
+    // mix would be thirty times a second of nothing.
+    emit masterTrackChanged(track.masterPlayer,
+            track.sourcePlayer,
+            track.slot,
+            track.trackId);
 }
 
 /*static*/ ProLinkNetworkService* ProLinkNetworkService::s_pListening = nullptr;

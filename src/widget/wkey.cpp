@@ -4,10 +4,12 @@
 #include "moc_wkey.cpp"
 #include "skin/legacy/skincontext.h"
 #include "track/keyutils.h"
+#include "util/assert.h"
 
 WKey::WKey(const QString& group, QWidget* pParent)
         : WLabel(pParent),
           m_dOldValue(0),
+          m_notation(KeyUtils::KeyNotation::Custom),
           m_keyNotation(mixxx::library::prefs::kKeyNotationConfigKey, this),
           m_engineKeyDistance(group,
                   "visual_key_distance",
@@ -29,6 +31,21 @@ void WKey::setup(const QDomNode& node, const SkinContext& context) {
     WLabel::setup(node, context);
     m_displayCents = context.selectBool(node, "DisplayCents", false);
     m_displayKey = context.selectBool(node, "DisplayKey", true);
+
+    // Same spellings the preference uses -- Lancelot, OpenKey, Traditional and
+    // the two combined ones -- so there is one vocabulary rather than two. An
+    // unrecognised one is not silently the default: it would leave the widget
+    // showing a notation nobody asked for and no way to tell why.
+    const QString notation = context.selectString(node, "Notation");
+    if (!notation.isEmpty()) {
+        m_notation = KeyUtils::keyNotationFromString(notation);
+        VERIFY_OR_DEBUG_ASSERT(m_notation != KeyUtils::KeyNotation::Invalid) {
+            qWarning() << "WKey: unknown <Notation>" << notation
+                       << "-- falling back to the user's own";
+            m_notation = KeyUtils::KeyNotation::Custom;
+        }
+    }
+    setValue(m_dOldValue);
 }
 
 void WKey::setValue(double dValue) {
@@ -39,7 +56,7 @@ void WKey::setValue(double dValue) {
         // Render this key with the user-provided notation.
         QString keyStr = "";
         if (m_displayKey) {
-            keyStr = KeyUtils::keyToString(key);
+            keyStr = KeyUtils::keyToString(key, m_notation);
         }
         if (m_displayCents) {
             double diff_cents = m_engineKeyDistance.get();

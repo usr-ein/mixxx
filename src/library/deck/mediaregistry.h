@@ -21,7 +21,8 @@
 namespace mixxx {
 namespace prolink {
 class ProLinkNetworkService;
-}
+class ProLinkKeySync;
+} // namespace prolink
 namespace deck {
 
 /// One source row: a rekordbox-prepared volume the deck can play from.
@@ -244,6 +245,33 @@ class MediaRegistry : public QObject {
             quint32 trackId,
             const QByteArray& blob,
             const QString& error);
+    /// The tempo master loaded something else. Remember it, and resolve.
+    void onMasterTrackChanged(int masterPlayer,
+            int sourcePlayer,
+            mixxx::prolink::MediaSlot slot,
+            quint32 trackId);
+
+    /// Work out what key the tempo master is playing in, and tell KEY SYNC.
+    ///
+    /// **This is the only thing that can answer the question**, and it is why
+    /// it is answered here rather than in the network layer: the key is not on
+    /// the wire. A status packet says which player, which slot and which
+    /// rekordbox id, and the key belonging to that triple is in the copy of
+    /// that medium's database this registry ingested when the medium appeared.
+    ///
+    /// **Which is why it runs on every change to the media list as well as on
+    /// every change of master track.** The two halves of the answer arrive
+    /// seconds apart and in either order: a CDJ that was already master when
+    /// this deck booted is announced within a poll, and the database it is
+    /// playing off takes as long as it takes to fetch and ingest. Resolved once
+    /// when the master was announced, the answer was "no key" for ever after —
+    /// and the only way back was to take mastership away from the CDJ and hand
+    /// it back, which is a thing to do to a rig mid-set and not a thing to ask
+    /// anybody to do.
+    ///
+    /// Cheap enough to run on every media change: one lookup on a unique index,
+    /// and it publishes nothing unless the answer moved.
+    void resolveMasterKey();
 #endif
 
   private:
@@ -270,6 +298,12 @@ class MediaRegistry : public QObject {
 #ifdef __PROLINK__
     /// Player number for a MAC, or 0. Linear over a handful of devices.
     int playerNumberFor(const QByteArray& mac) const;
+    /// The medium *player* keeps in *slot*, or an invalid id.
+    ///
+    /// Handles the case a rig makes ordinary and a lone deck never sees: the
+    /// master playing a track off a stick that is in **this** deck, over LINK.
+    /// That medium is one of ours and is not on the network at all.
+    MediumId mediumOf(int player, mixxx::prolink::MediaSlot slot) const;
 #endif
 
     /// What a worker produced. Copyable, because QFuture demands it.
@@ -316,6 +350,21 @@ class MediaRegistry : public QObject {
     /// only thing that shows media now and the old ProLinkFeature no longer has
     /// a UI to hang off.
     std::unique_ptr<mixxx::prolink::ProLinkNetworkService> m_pNetwork;
+    /// KEY SYNC. Owned here for one reason: it needs a key resolved out of the
+    /// medium databases, and this is what holds those.
+    std::unique_ptr<mixxx::prolink::ProLinkKeySync> m_pKeySync;
+    /// What the network last said the tempo master is playing. Kept because the
+    /// key it resolves to can change without any of it changing — see
+    /// resolveMasterKey().
+    int m_masterPlayer = 0;
+    int m_masterSourcePlayer = 0;
+    mixxx::prolink::MediaSlot m_masterSlot = mixxx::prolink::MediaSlot::Empty;
+    quint32 m_masterTrackId = 0;
+    /// What was last handed to KEY SYNC, so a resolution that comes out the
+    /// same is dropped rather than republished. A ChromaticKey, as an int, so
+    /// this header does not have to pull in the key protobuf.
+    int m_publishedMasterKeyId = 0;
+    bool m_publishedOtherIsMaster = false;
     QList<mixxx::prolink::ProLinkDevice> m_devices;
 
     /// Local paths we asked to be streamed. What tells a progress signal for a

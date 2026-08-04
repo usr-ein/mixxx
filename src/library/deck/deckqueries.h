@@ -107,6 +107,16 @@ int categoryCount(QSqlDatabase& db, const MediumId& medium, const QString& colum
 int trackCount(QSqlDatabase& db, const MediumId& medium);
 int playlistCount(QSqlDatabase& db, const MediumId& medium);
 
+/// One track's key, as a ChromaticKey enum value, by its **rekordbox** id.
+///
+/// Zero — `INVALID` — when the medium has not been read, when it holds no such
+/// row, or when rekordbox never wrote a key. All three mean the same thing to a
+/// caller: nothing to say about this track's key.
+///
+/// By `rb_id` rather than by the local row id, because the question comes off
+/// the network, where a rekordbox id is the only identifier anybody shares.
+int keyIdForTrack(QSqlDatabase& db, const MediumId& medium, quint32 rekordboxId);
+
 /// Tempo buckets — the BPM menu (browser-prd.md 7.4).
 namespace bpm {
 

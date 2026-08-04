@@ -1082,6 +1082,8 @@ add_library(mixxx-lib STATIC EXCLUDE_FROM_ALL
   src/network/networktask.cpp
   src/util/posixsignalhandler.cpp
   src/network/prolink/prolinkcontrols.cpp
+  src/network/prolink/keysync.cpp
+  src/network/prolink/prolinkkeysync.cpp
   src/network/prolink/synctempo.cpp
   src/network/prolink/prolinknetworkservice.cpp
   src/network/prolink/prolinkanlz.cpp
@@ -2244,6 +2246,7 @@ if(BUILD_TESTING)
     src/test/skincontext_test.cpp
     src/test/softtakeover_test.cpp
     src/test/streamingfile_test.cpp
+    src/test/keysync_test.cpp
   src/test/synctempo_test.cpp
     src/test/soundproxy_test.cpp
     src/test/soundsourceproviderregistrytest.cpp

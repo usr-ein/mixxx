@@ -47,6 +47,15 @@ ProLinkControls::ProLinkControls() {
     m_pSyncEnabled = std::make_unique<ControlPushButton>(key("sync_enabled"));
     m_pSyncEnabled->setButtonMode(ControlPushButton::TOGGLE);
 
+    // TOGGLE, unlike `take_master`: this one is not a request anybody has to
+    // grant. It latches a key off the network and then holds it, so it has a
+    // state of its own and the button shows exactly that state.
+    m_pKeySyncEnabled = std::make_unique<ControlPushButton>(key("key_sync_enabled"));
+    m_pKeySyncEnabled->setButtonMode(ControlPushButton::TOGGLE);
+    m_pKeySyncAvailable = std::make_unique<ControlObject>(key("key_sync_available"));
+    m_pKeySyncAvailable->setReadOnly();
+    m_pKeySyncAvailable->forceSet(0.0);
+
     VERIFY_OR_DEBUG_ASSERT(s_pInstance == nullptr) {
         return;
     }

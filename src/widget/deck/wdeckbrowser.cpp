@@ -1384,6 +1384,10 @@ void WDeckBrowser::loadSelectedTrack() {
     const QString artist = field(LIBRARYTABLE_ARTIST);
     const QString title = field(LIBRARYTABLE_TITLE);
     const QString album = field(LIBRARYTABLE_ALBUM);
+    // As rekordbox spelled it -- Camelot on one export, classical on another.
+    // Track normalises it on the way in, so which one it is does not matter
+    // here and must not be guessed at.
+    const QString key = field(LIBRARYTABLE_KEY);
     // The two halves of one cover: where the image is (or will be) on this
     // machine, and what it is called on the medium. The second is the one the
     // cache key is derived from, and the pdb writes both or neither.
@@ -1457,6 +1461,17 @@ void WDeckBrowser::loadSelectedTrack() {
         // Genre is deliberately not set: Track has no plain setter for it (only
         // setGenreFromTrackDAO, which is the DAO's business), and the browser
         // reads genre off the pdb row anyway.
+    }
+
+    // The key, and unconditional for the same reason as the cover below.
+    //
+    // **Nothing else supplies it.** Key detection is off on the deck (it costs
+    // minutes per track and rekordbox has already done it), and nothing on this
+    // path reads the file's tags -- deliberately, because the file may still be
+    // arriving. So without this line every rekordbox track loads with no key at
+    // all: the header shows nothing and KEY SYNC has nothing to shift.
+    if (!key.isEmpty()) {
+        pTrack->setKeyText(key, mixxx::track::io::key::FILE_METADATA);
     }
 
     // The cover, from the pdb for the same reason as the metadata above: the

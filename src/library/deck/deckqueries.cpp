@@ -366,6 +366,24 @@ int trackCount(QSqlDatabase& db, const MediumId& medium) {
     return q.value(0).toInt();
 }
 
+int keyIdForTrack(QSqlDatabase& db, const MediumId& medium, quint32 rekordboxId) {
+    QSqlQuery q(db);
+    q.prepare(QStringLiteral("SELECT key_id FROM %1 WHERE medium = :medium AND rb_id = :rbId")
+                      .arg(kLibraryTable));
+    q.bindValue(QStringLiteral(":medium"), medium.key());
+    q.bindValue(QStringLiteral(":rbId"), rekordboxId);
+    if (!q.exec()) {
+        LOG_FAILED_QUERY(q);
+        return 0;
+    }
+    if (!q.next()) {
+        // Not an error and not rare: the medium may still be being read, or the
+        // deck may be playing off a stick this deck has never seen.
+        return 0;
+    }
+    return q.value(0).toInt();
+}
+
 int playlistCount(QSqlDatabase& db, const MediumId& medium) {
     QSqlQuery q(db);
     q.prepare(QStringLiteral(

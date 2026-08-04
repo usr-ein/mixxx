@@ -157,6 +157,23 @@ class ProLinkNetworkService : public QObject {
     void mediaInfoFound(const QByteArray& mac,
             mixxx::prolink::MediaSlot slot,
             const mixxx::prolink::MediaInfo& info);
+    /// What the deck holding tempo master has loaded, whenever it changes.
+    ///
+    /// *masterPlayer* is the player number of the deck holding it, or **0 when
+    /// that deck is us or nobody holds it**. It is not `[ProLink] master_device`
+    /// and must not be confused with it: that one falls back to any playing
+    /// deck, because a phase meter with nothing to draw is worse than one
+    /// drawing the deck you are actually mixing against. This one is literal,
+    /// because KEY SYNC is about the master and only about the master.
+    ///
+    /// The other three name the track: which player's medium it came from,
+    /// which of that player's slots, and its rekordbox id. All zero when the
+    /// master has nothing loaded — a real state, and one nothing can be synced
+    /// to.
+    void masterTrackChanged(int masterPlayer,
+            int sourcePlayer,
+            mixxx::prolink::MediaSlot slot,
+            quint32 trackId);
     /// The result of fetchDatabase(). `error` is empty on success.
     ///
     /// Carries the bytes rather than the path they were written to: the
@@ -199,6 +216,25 @@ class ProLinkNetworkService : public QObject {
     /// what the phase-meter widget reads. Read-only, because nothing in Mixxx
     /// may tell a CDJ what phase it is at.
     void publishMaster();
+
+    /// What `masterTrackChanged` last carried, so it is emitted on a change
+    /// rather than thirty times a second.
+    struct MasterTrack {
+        int masterPlayer = 0;
+        int sourcePlayer = 0;
+        MediaSlot slot = MediaSlot::Empty;
+        quint32 trackId = 0;
+
+        bool operator==(const MasterTrack& other) const {
+            return masterPlayer == other.masterPlayer &&
+                    sourcePlayer == other.sourcePlayer && slot == other.slot &&
+                    trackId == other.trackId;
+        }
+    };
+    MasterTrack m_publishedMasterTrack;
+
+    /// Emit `masterTrackChanged` if *track* is not what was last said.
+    void publishMasterTrack(const MasterTrack& track);
 
     /// Reconcile our claim on tempo master with the network's, and return
     /// whether we really hold it.

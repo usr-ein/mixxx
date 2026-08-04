@@ -22,7 +22,9 @@
 
 #include "library/deck/streamingfile.h"
 #include "library/deck/trackcache.h"
+#include "network/prolink/prolinkkeysync.h"
 #include "network/prolink/prolinknetworkservice.h"
+#include "track/keyutils.h"
 #endif
 #include "util/db/dbconnectionpooled.h"
 #include "util/logger.h"
@@ -170,6 +172,17 @@ MediaRegistry::MediaRegistry(mixxx::DbConnectionPoolPtr dbConnectionPool, QObjec
             &mixxx::prolink::ProLinkNetworkService::previewFetched,
             this,
             &MediaRegistry::onPreviewFetched);
+    m_pKeySync = std::make_unique<mixxx::prolink::ProLinkKeySync>();
+    connect(m_pNetwork.get(),
+            &mixxx::prolink::ProLinkNetworkService::masterTrackChanged,
+            this,
+            &MediaRegistry::onMasterTrackChanged);
+    // The master's key is half a network answer and half a database one, and
+    // the database half lands whenever a medium finishes being read. Hung off
+    // our own signal rather than off the one place that emits it, because
+    // every path that changes the media list emits this one and any of them
+    // can be the moment the answer becomes knowable.
+    connect(this, &MediaRegistry::mediaChanged, this, &MediaRegistry::resolveMasterKey);
     m_pNetwork->start();
 #endif
 
@@ -394,6 +407,69 @@ int MediaRegistry::playerNumberFor(const QByteArray& mac) const {
         }
     }
     return 0;
+}
+
+MediumId MediaRegistry::mediumOf(int player, mixxx::prolink::MediaSlot slot) const {
+    if (player <= 0 || slot == mixxx::prolink::MediaSlot::Empty) {
+        return MediumId();
+    }
+    if (m_pNetwork && player == m_pNetwork->announcedNumber()) {
+        // Ours. The other deck is playing off a stick in this one, which it
+        // reached over LINK, so the medium is a mount point and not a network
+        // address -- and the tracks on it were ingested when the stick went in.
+        for (const auto& served : m_pNetwork->serveStatus().media) {
+            if (served.slot == slot && !served.localPath.isEmpty()) {
+                return MediumId::local(served.localPath);
+            }
+        }
+        return MediumId();
+    }
+    for (const mixxx::prolink::ProLinkDevice& device : m_devices) {
+        if (device.deviceNumber == player && !device.mac.isEmpty()) {
+            return MediumId::proLink(QString::fromLatin1(device.mac.toHex()),
+                    static_cast<int>(slot));
+        }
+    }
+    return MediumId();
+}
+
+void MediaRegistry::onMasterTrackChanged(int masterPlayer,
+        int sourcePlayer,
+        mixxx::prolink::MediaSlot slot,
+        quint32 trackId) {
+    m_masterPlayer = masterPlayer;
+    m_masterSourcePlayer = sourcePlayer;
+    m_masterSlot = slot;
+    m_masterTrackId = trackId;
+    resolveMasterKey();
+}
+
+void MediaRegistry::resolveMasterKey() {
+    if (!m_pKeySync) {
+        return;
+    }
+    int keyId = 0;
+    const MediumId medium = mediumOf(m_masterSourcePlayer, m_masterSlot);
+    if (m_masterTrackId != 0 && medium.isValid()) {
+        const mixxx::DbConnectionPooler pooler(m_dbConnectionPool);
+        QSqlDatabase database = mixxx::DbConnectionPooled(m_dbConnectionPool);
+        if (database.isOpen()) {
+            keyId = keyIdForTrack(database, medium, m_masterTrackId);
+        }
+    }
+    const bool otherIsMaster = m_masterPlayer != 0;
+    if (otherIsMaster == m_publishedOtherIsMaster && keyId == m_publishedMasterKeyId) {
+        // Nothing moved. Worth checking, because this runs on every change to
+        // the media list and most of those have nothing to do with the master.
+        return;
+    }
+    m_publishedOtherIsMaster = otherIsMaster;
+    m_publishedMasterKeyId = keyId;
+    const auto key = KeyUtils::keyFromNumericValue(keyId);
+    kLogger.debug() << "master is player" << m_masterPlayer << "playing"
+                    << medium.key() << m_masterTrackId << "in"
+                    << KeyUtils::keyToString(key, KeyUtils::KeyNotation::Lancelot);
+    m_pKeySync->setLink(otherIsMaster, key);
 }
 
 void MediaRegistry::onMediaInfo(const QByteArray& mac,

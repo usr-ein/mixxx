@@ -72,6 +72,24 @@ class ProLinkControls {
         return m_pSyncEnabled.get();
     }
 
+    /// KEY SYNC: hold this deck at the key the network master was in.
+    ///
+    /// Writable, because it is a button, and a *latch* rather than a follower:
+    /// what it holds is decided once, when it is pressed. See ProLinkKeySync.
+    ControlPushButton* keySyncEnabled() const {
+        return m_pKeySyncEnabled.get();
+    }
+    /// Whether pressing KEY SYNC would do anything: another player holds tempo
+    /// master and we know what key its track is in. Read-only.
+    ///
+    /// **Not the same as "the button is off".** An engaged sync stays engaged
+    /// when this goes back to 0 — it is holding a key it already has, and a
+    /// key does not stop being a key because the deck that named it stopped
+    /// being master.
+    ControlObject* keySyncAvailable() const {
+        return m_pKeySyncAvailable.get();
+    }
+
   private:
     std::unique_ptr<ControlPushButton> m_pPullDb;
     std::unique_ptr<ControlObject> m_pMasterDevice;
@@ -80,6 +98,8 @@ class ProLinkControls {
     std::unique_ptr<ControlPushButton> m_pTakeMaster;
     std::unique_ptr<ControlObject> m_pIsMaster;
     std::unique_ptr<ControlPushButton> m_pSyncEnabled;
+    std::unique_ptr<ControlPushButton> m_pKeySyncEnabled;
+    std::unique_ptr<ControlObject> m_pKeySyncAvailable;
 };
 
 } // namespace prolink
