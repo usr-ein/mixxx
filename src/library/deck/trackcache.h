@@ -4,6 +4,7 @@
 #include <QObject>
 #include <QSet>
 #include <QString>
+#include <QThreadPool>
 
 #include "library/deck/mediumid.h"
 
@@ -119,6 +120,19 @@ class TrackCache : public QObject {
     /// Bring tier 1 back under its cap, dropping what can be re-read and
     /// spilling to tier 2 only what cannot.
     void evictIfNeeded();
+
+    /// Our own pool rather than the global one, for two reasons.
+    ///
+    /// Lifetime: a background copy captures `this` and dereferences it when it
+    /// finishes, so one still running when the cache is destroyed writes into
+    /// freed memory. A pool we own can be drained in the destructor; the global
+    /// one cannot, because other things are using it.
+    ///
+    /// And concurrency: the constraint here is the USB bus, not the CPU, so
+    /// this pool runs exactly one copy at a time. The global pool runs as many
+    /// as there are cores, which is slower for the same work and makes the
+    /// stick seek between files.
+    QThreadPool m_copyPool;
 
     QHash<QString, Entry> m_entries;
     QSet<QString> m_pinned;

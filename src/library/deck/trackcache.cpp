@@ -39,6 +39,11 @@ TrackCache::TrackCache(QObject* pParent)
         : QObject(pParent) {
     s_pInstance = this;
 
+    // One at a time: the bottleneck is the USB bus, and parallel copies just
+    // make the stick seek. See the member's declaration for the other, more
+    // important reason this pool is ours.
+    m_copyPool.setMaxThreadCount(1);
+
     m_tier1Root = RamStore::path(QStringLiteral("cache"));
     m_tier1Cap = RamStore::budget(kTier1Share);
     m_tier2Root = QDir(QStandardPaths::writableLocation(QStandardPaths::CacheLocation))
@@ -53,6 +58,19 @@ TrackCache::TrackCache(QObject* pParent)
 }
 
 TrackCache::~TrackCache() {
+    // Drain before anything else. A queued copy captures `this` and touches it
+    // again when it finishes -- both to invoke back onto this object and, in
+    // the continuation, to update m_entries and m_ramBytes. Destroying the
+    // cache out from under one is a use-after-free on the heap, and it is not
+    // hypothetical: it corrupted the allocator on every shutdown, and glibc
+    // aborted in malloc_consolidate() partway through Mixxx writing its
+    // settings, which is why neither mixxx.cfg nor effects.xml was ever saved.
+    //
+    // clear() drops the ones that have not started; waitForDone() waits out the
+    // one that has. A track copy is a second or two, so this is not a stall.
+    m_copyPool.clear();
+    m_copyPool.waitForDone();
+
     if (s_pInstance == this) {
         s_pInstance = nullptr;
     }
@@ -140,7 +158,7 @@ void TrackCache::prefetch(const MediumId& medium, const QString& sourcePath) {
     // the time it lands the selection has usually moved on anyway -- the point
     // is that the bytes are here, not that anyone is told.
     const QString local = localPathFor(medium, sourcePath);
-    QtConcurrent::run([this, medium, sourcePath, local]() {
+    QtConcurrent::run(&m_copyPool, [this, medium, sourcePath, local]() {
         const qint64 size = copyFile(sourcePath, local);
         QMetaObject::invokeMethod(
                 this,
