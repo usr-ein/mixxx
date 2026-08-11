@@ -99,6 +99,11 @@ class WDeckEffects : public QTextBrowser {
     std::unique_ptr<ControlProxy> m_pUnitEnabled;
     std::unique_ptr<ControlProxy> m_pMixMode;
     std::unique_ptr<ControlProxy> m_pEffectLoaded;
+    /// Separate from `loaded`, and the distinction is not pedantic: of the four
+    /// chain types only StandardEffectChain leaves its slots disabled after
+    /// loading, so an effect can sit in the rack, fully loaded, processing
+    /// nothing -- and under WET that is silence, not bypass.
+    std::unique_ptr<ControlProxy> m_pEffectEnabled;
 };
 
 } // namespace deck

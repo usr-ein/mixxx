@@ -47,6 +47,7 @@ WDeckEffects::WDeckEffects(QWidget* pParent)
     m_pUnitEnabled = std::make_unique<ControlProxy>(kUnit, QStringLiteral("enabled"));
     m_pMixMode = std::make_unique<ControlProxy>(kUnit, QStringLiteral("mix_mode"));
     m_pEffectLoaded = std::make_unique<ControlProxy>(kSlot, QStringLiteral("loaded"));
+    m_pEffectEnabled = std::make_unique<ControlProxy>(kSlot, QStringLiteral("enabled"));
 
     // Wet first because it is the one that gets moved during a set, and the
     // send before the effect's own parameters because that is the order the
@@ -204,6 +205,18 @@ QString WDeckEffects::html() const {
 
     const bool loaded = m_pEffectLoaded->valid() && m_pEffectLoaded->toBool();
     out += statusRow(tr("Effect loaded"), onOff(m_pEffectLoaded.get()), loaded);
+
+    // Loaded and enabled are different failures with the same sound. Only
+    // StandardEffectChain leaves its slots disabled after a load, so the normal
+    // state of a freshly restored chain is an effect sitting in the rack doing
+    // nothing -- and under WET that is silence, not bypass.
+    const bool effectOn = m_pEffectEnabled->valid() && m_pEffectEnabled->toBool();
+    out += statusRow(tr("Effect on"), onOff(m_pEffectEnabled.get()), effectOn);
+
+    // Which control is missing tells you where to look, and a group that does
+    // not exist reads differently from one whose value is zero.
+    out += QStringLiteral("<tr><td class='k'>%1</td><td class='k'>%2</td></tr>")
+                   .arg(tr("Slot group"), kSlot.toHtmlEscaped());
     out += QStringLiteral("</table>");
 
     // ---- the knobs -------------------------------------------------------
