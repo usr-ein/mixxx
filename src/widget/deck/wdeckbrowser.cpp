@@ -33,6 +33,7 @@
 #include "widget/deck/decklistview.h"
 #include "widget/deck/deckmenumodel.h"
 #include "widget/deck/wdeckdiagnostics.h"
+#include "widget/deck/wdeckeffects.h"
 #include "widget/deck/wdeckinfopanel.h"
 #include "widget/deck/wdecksearch.h"
 #include "widget/deck/wdecksortmenu.h"
@@ -319,6 +320,9 @@ WDeckBrowser::WDeckBrowser(QWidget* pParent, Library* pLibrary, UserSettingsPoin
     m_pDiagnostics = new WDeckDiagnostics(m_pStack);
     m_pStack->addWidget(m_pDiagnostics);
 
+    m_pEffects = new WDeckEffects(m_pStack);
+    m_pStack->addWidget(m_pEffects);
+
     connect(m_pKeyboard, &WDeckKeyboard::keyPressed, this, [this](const QString& c) {
         m_searchText += c;
         runSearch();
@@ -464,6 +468,13 @@ WDeckBrowser::WDeckBrowser(QWidget* pParent, Library* pLibrary, UserSettingsPoin
             m_pDiagnostics->scrollBy(steps);
             return;
         }
+        // The effects page is a list, but not one of these lists: the rows are
+        // controls, and the same detents move between them and then change the
+        // one that is picked.
+        if (!m_stack.isEmpty() && m_stack.last().kind == Level::Kind::Effects) {
+            m_pEffects->moveSelection(steps);
+            return;
+        }
         (inTrackList() ? m_pTrackView : m_pMenuView)->moveSelection(steps);
     });
 
@@ -483,6 +494,12 @@ WDeckBrowser::WDeckBrowser(QWidget* pParent, Library* pLibrary, UserSettingsPoin
         if (!m_stack.isEmpty() && m_stack.last().kind == Level::Kind::Diagnostics) {
             return;
         }
+        // On the effects page the press is the adjust toggle, and for the same
+        // reason as above it must not fall through to the menu underneath.
+        if (!m_stack.isEmpty() && m_stack.last().kind == Level::Kind::Effects) {
+            m_pEffects->toggleAdjust();
+            return;
+        }
         DeckListView* pView = inTrackList() ? m_pTrackView : m_pMenuView;
         if (pView->selectedRow() >= 0) {
             onActivated(pView->selectedRow());
@@ -498,6 +515,14 @@ WDeckBrowser::WDeckBrowser(QWidget* pParent, Library* pLibrary, UserSettingsPoin
             // BACK closes the menu without changing anything, rather than
             // popping a level out from under it.
             m_pSortMenu->dismiss();
+            return;
+        }
+        // Adjusting is a mode, and BACK leaves the innermost one first --
+        // otherwise the only way out of a value is to press the encoder, and
+        // BACK would throw away the whole page from under it.
+        if (!m_stack.isEmpty() && m_stack.last().kind == Level::Kind::Effects &&
+                m_pEffects->isAdjusting()) {
+            m_pEffects->toggleAdjust();
             return;
         }
         onBack();
@@ -636,6 +661,10 @@ void WDeckBrowser::rebuildCurrentLevel() {
     case Level::Kind::Search:
         showSearch(level);
         break;
+    case Level::Kind::Effects:
+        m_pStack->setCurrentWidget(m_pEffects);
+        m_pEffects->setFocus();
+        break;
     case Level::Kind::Diagnostics:
         m_pStack->setCurrentWidget(m_pDiagnostics);
         m_pDiagnostics->setFocus();
@@ -644,6 +673,7 @@ void WDeckBrowser::rebuildCurrentLevel() {
     // Sampling follows visibility: a page nobody is looking at has no business
     // reading /proc once a second.
     m_pDiagnostics->setActive(level.kind == Level::Kind::Diagnostics);
+    m_pEffects->setActive(level.kind == Level::Kind::Effects);
     m_pLevelControl->forceSet(m_stack.size() - 1);
     m_pInTrackList->forceSet(inTrackList() ? 1.0 : 0.0);
     updateBreadcrumb();
@@ -760,6 +790,15 @@ void WDeckBrowser::showSources() {
         empty.dimmed = true;
         rows.append(empty);
     }
+
+    // Above Diagnostics because it is reached during a set and Diagnostics is
+    // not, and below the media because a stick is still the reason the browser
+    // is open nine times out of ten.
+    MenuRow effects;
+    effects.mark = MenuRow::Mark::Effects;
+    effects.title = tr("Effects");
+    effects.payload = QStringLiteral("#effects");
+    rows.append(effects);
 
     MenuRow diagnostics;
     diagnostics.mark = MenuRow::Mark::Diagnostics;
@@ -1619,6 +1658,13 @@ void WDeckBrowser::onActivated(int row) {
             // The same overlay the old POWER button raised; the daemon does the
             // actual poweroff, since Mixxx cannot touch the OS.
             ControlObject::set(ConfigKey("[TriMixxx]", "shutdown_confirm"), 1.0);
+            return;
+        }
+        if (payload == QStringLiteral("#effects")) {
+            Level level;
+            level.kind = Level::Kind::Effects;
+            level.title = menuRow.title;
+            pushLevel(level);
             return;
         }
         if (payload == QStringLiteral("#diagnostics")) {

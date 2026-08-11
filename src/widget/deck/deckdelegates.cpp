@@ -153,6 +153,16 @@ void paintMark(QPainter* pPainter,
                 box.center() + QPoint(r + 2, r + 2));
         break;
     }
+    case Mark::Effects: {
+        // A sine through a box: signal, altered. Distinct at a glance from the
+        // gauge next to it, which is the only thing it has to be.
+        const QRect wave = box.adjusted(size / 5, size / 3, -size / 5, -size / 3);
+        pPainter->drawArc(QRect(wave.left(), wave.top(), wave.width() / 2, wave.height()),
+                0 * 16, 180 * 16);
+        pPainter->drawArc(QRect(wave.center().x(), wave.top(), wave.width() / 2, wave.height()),
+                180 * 16, 180 * 16);
+        break;
+    }
     case Mark::Diagnostics: {
         // A gauge: an arc with a needle.
         pPainter->drawArc(box.adjusted(size / 5, size / 5, -size / 5, -size / 5),

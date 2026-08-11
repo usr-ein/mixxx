@@ -35,6 +35,7 @@ class WDeckSortMenu;
 class WDeckKeyboard;
 class WDeckInfoPanel;
 class WDeckDiagnostics;
+class WDeckEffects;
 class TrackRowDelegate;
 
 /// The `▲ Album` in the breadcrumb: what the list is sorted by, and the control
@@ -125,6 +126,7 @@ class WDeckBrowser : public QWidget, public WBaseWidget {
             ArtistAlbums,
             Tracks,
             Search,
+            Effects,
             Diagnostics,
         };
         Kind kind = Kind::Sources;
@@ -224,6 +226,9 @@ class WDeckBrowser : public QWidget, public WBaseWidget {
     QWidget* m_pTracksPage;
     WDeckInfoPanel* m_pInfoPanel;
     WDeckDiagnostics* m_pDiagnostics;
+    /// The effect rack: the pedal bus's state, and the only way to move a value
+    /// in it without editing a file and restarting.
+    WDeckEffects* m_pEffects;
     bool m_infoLayout = false;
     /// Preview waveforms for the info panel, read off the GUI thread.
     std::unique_ptr<PreviewWaveformCache> m_pPreviews;

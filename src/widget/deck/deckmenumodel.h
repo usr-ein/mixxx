@@ -24,6 +24,7 @@ struct MenuRow {
         SdLinked,
         Folder,
         Search,
+        Effects,
         Diagnostics,
         Power,
     };
