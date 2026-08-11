@@ -252,17 +252,20 @@ bool EngineEffectChain::process(const ChannelHandle& inputHandle,
                             groupFeatures)) {
                     if (pEffect->getManifest()->addDryToWet()) {
                         // Skip adding the dry signal to the effect's wet output
-                        // when it is the first addDryToWet type effect in
-                        // a DryPlusWet mode chain. This allows effects after
-                        // it to process only the wet output. For example,
-                        // when chaining Echo then Reverb in DryPlusWet mode,
-                        // the Reverb effect will get only the wet output of
-                        // Echo to process instead of the echoed signal mixed
+                        // when it is the first addDryToWet type effect in a
+                        // chain that is not in DrySlashWet mode. This allows
+                        // effects after it to process only the wet output. For
+                        // example, when chaining Echo then Reverb in DryPlusWet
+                        // mode, the Reverb effect will get only the wet output
+                        // of Echo to process instead of the echoed signal mixed
                         // with the input to Echo. The dry signal that entered
                         // the first effect in the chain will be mixed back in
-                        // below after all effects in the chain have been processed.
+                        // below after all effects in the chain have been
+                        // processed -- except in WetOnly mode, which never
+                        // mixes it back, so skipping it here is what keeps the
+                        // dry out of the output entirely.
                         bool skipAddingDry = !firstAddDryToWetEffectProcessed &&
-                                m_mixMode == EffectChainMixMode::DryPlusWet;
+                                m_mixMode != EffectChainMixMode::DrySlashWet;
 
                         if (!skipAddingDry) {
                             for (SINT i = 0; i <= static_cast<SINT>(numSamples); ++i) {
@@ -299,6 +302,19 @@ bool EngineEffectChain::process(const ChannelHandle& inputHandle,
                         lastCallbackMixKnob,
                         currentMixKnob,
                         numSamples);
+            } else if (m_mixMode == EffectChainMixMode::WetOnly) {
+                // Wet-only mode: output = wet * mix knob. No dry at all.
+                // The dry is expected to reach the listener by some other
+                // route -- typically an external mixer carrying the same
+                // source on its own channel, with this chain fed from an
+                // aux send and returned alongside it. Mixing any dry in here
+                // would put it in that mixer's sum a second time.
+                SampleUtil::copyWithRampingGain(
+                        pOut,
+                        pIntermediateInput,
+                        lastCallbackMixKnob,
+                        currentMixKnob,
+                        numSamples);
             } else {
                 // Dry+Wet mode: output = input + (wet * mix knob)
                 SampleUtil::copy2WithRampingGain(
@@ -312,6 +328,26 @@ bool EngineEffectChain::process(const ChannelHandle& inputHandle,
                         numSamples);
             }
         }
+    }
+
+    if (!processingOccured && m_mixMode == EffectChainMixMode::WetOnly &&
+            channelStatus.enableState != EffectEnableState::Disabled) {
+        // A wet-only chain contributes wet or it contributes nothing, so with
+        // nothing processed -- an empty chain, every effect slot cleared, or
+        // the whole unit switched off -- the honest output is silence.
+        //
+        // Returning false here instead would leave the caller holding the
+        // unprocessed input, and for the send/return case that is the worst
+        // possible failure: the dry lands in the external mixer's sum a second
+        // time, at full level, which is exactly the doubling this mode exists
+        // to prevent. Clearing the last effect slot mid-set should go quiet,
+        // not +6 dB.
+        //
+        // The enableState test is what keeps this from silencing channels the
+        // chain is not routed to: those settle at Disabled, whereas a routed
+        // channel whose unit is merely off settles at Enabling (standby).
+        SampleUtil::clear(pOut, numSamples);
+        processingOccured = true;
     }
 
     channelStatus.oldMixKnob = currentMixKnob;
