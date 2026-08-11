@@ -58,6 +58,15 @@ class EngineEffect final : public EffectsRequestHandler {
         return m_pProcessor->getGroupDelayFrames();
     }
 
+    /// How much of this effect's output replaces its input, 0..1.
+    ///
+    /// Read by EngineEffectChain, which does the blending -- an effect cannot
+    /// do it itself, because "its input" is the previous effect's output and
+    /// only the chain knows what that was.
+    CSAMPLE_GAIN wet() const {
+        return m_wet;
+    }
+
   private:
     QString debugString() const {
         return QString("EngineEffect(%1)").arg(m_pManifest->name());
@@ -66,6 +75,7 @@ class EngineEffect final : public EffectsRequestHandler {
     EffectManifestPointer m_pManifest;
     std::unique_ptr<EffectProcessor> m_pProcessor;
     ChannelHandleMap<ChannelHandleMap<EffectEnableState>> m_effectEnableStateForChannelMatrix;
+    CSAMPLE_GAIN m_wet;
     bool m_effectRampsFromDry;
     // Must not be modified after construction.
     QVector<EngineEffectParameterPointer> m_parameters;

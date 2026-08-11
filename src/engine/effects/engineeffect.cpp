@@ -20,6 +20,9 @@ EngineEffect::EngineEffect(EffectManifestPointer pManifest,
         const QSet<ChannelHandleAndGroup>& registeredOutputChannels)
         : m_pManifest(pManifest),
           m_pProcessor(pBackendManager->createProcessor(pManifest)),
+          // Fully wet until told otherwise, so an effect that never receives a
+          // wet message behaves exactly as it did before this existed.
+          m_wet(1.0f),
           m_parameters(pManifest->parameters().size()) {
     const QList<EffectManifestParameterPointer>& parameters = m_pManifest->parameters();
     for (int i = 0; i < parameters.size(); ++i) {
@@ -79,6 +82,8 @@ bool EngineEffect::processEffectsRequest(const EffectsRequest& message,
             qDebug() << debugString() << "SET_EFFECT_PARAMETERS"
                      << "enabled" << message.SetEffectParameters.enabled;
         }
+
+        m_wet = static_cast<CSAMPLE_GAIN>(message.SetEffectParameters.wet);
 
         for (auto& outputMap : m_effectEnableStateForChannelMatrix) {
             for (auto& enableState : outputMap) {

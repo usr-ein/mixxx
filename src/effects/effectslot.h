@@ -108,6 +108,10 @@ class EffectSlot : public QObject {
             EffectParameterType parameterType, unsigned int slotNumber);
 
     double getMetaParameter() const;
+    /// How much of this effect's output replaces its input, 0..1. Acted on only
+    /// by chains in WetOnly mix mode.
+    double getWet() const;
+    void setWet(double wet);
 
     /// Ensures that Softtakover is bypassed for the following
     /// ChainParameterChange. Uses for testing only
@@ -188,6 +192,12 @@ class EffectSlot : public QObject {
     std::unique_ptr<ControlEncoder> m_pControlEffectSelector;
     std::unique_ptr<ControlObject> m_pControlClear;
     std::unique_ptr<ControlPotmeter> m_pControlMetaParameter;
+    /// How much of this effect's output replaces its input, 0..1.
+    ///
+    /// Honoured only by chains in WetOnly mix mode -- see
+    /// EngineEffectChain::process. Everywhere else it is inert, so adding it
+    /// changes nothing for deck, QuickEffect or Equalizer chains.
+    std::unique_ptr<ControlPotmeter> m_pControlWet;
 
     SoftTakeover m_metaknobSoftTakeover;
 

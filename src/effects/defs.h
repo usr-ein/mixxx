@@ -38,7 +38,14 @@ inline qhash_seed_t qHash(
 };
 
 constexpr int kNumStandardEffectUnits = 4;
-constexpr int kNumEffectsPerUnit = 4;
+/// Slots in a standard effect unit. Six rather than upstream's four because the
+/// deck's effect rack is a chain of modules the DJ builds, and four fills up
+/// immediately: high-pass and low-pass are two separate instances of the same
+/// `filter` effect, so a reverb, a delay and both filters is already four.
+///
+/// This sizes `EffectStatesMapArray`, a std::array of per-slot engine state, so
+/// it costs memory per chain rather than per loaded effect.
+constexpr int kNumEffectsPerUnit = 6;
 
 const QString kNoEffectString = QStringLiteral("---");
 

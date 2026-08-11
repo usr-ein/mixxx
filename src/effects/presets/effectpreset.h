@@ -33,6 +33,12 @@ class EffectPreset {
         return m_dMetaParameter;
     }
 
+    /// How much of the effect's output replaces its input, 0..1. Only chains in
+    /// WetOnly mix mode act on it; elsewhere it stays at 1 and is inert.
+    double wet() const {
+        return m_dWet;
+    }
+
     const QList<EffectParameterPreset>& getParameterPresets() const {
         return m_effectParameterPresets;
     }
@@ -50,6 +56,7 @@ class EffectPreset {
     QString m_id;
     EffectBackendType m_backendType;
     double m_dMetaParameter;
+    double m_dWet;
 
     QList<EffectParameterPreset> m_effectParameterPresets;
 };

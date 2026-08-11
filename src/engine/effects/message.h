@@ -92,6 +92,10 @@ struct EffectsRequest {
         } SetEffectChainParameters;
         struct {
             bool enabled;
+            /// How much of this effect's output replaces its input, 0..1.
+            /// Only honoured by chains in WetOnly mix mode; see
+            /// EngineEffectChain::process.
+            double wet;
         } SetEffectParameters;
         struct {
             int iParameter;

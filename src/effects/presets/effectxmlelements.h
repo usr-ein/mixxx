@@ -33,6 +33,7 @@ const QString kChainMixMode(QStringLiteral("MixMode"));
 const QString kEffectsRoot(QStringLiteral("Effects"));
 const QString kEffect(QStringLiteral("Effect"));
 const QString kEffectMetaParameter(QStringLiteral("MetaParameterValue"));
+const QString kEffectWet(QStringLiteral("Wet"));
 const QString kEffectId(QStringLiteral("Id"));
 const QString kEffectBackendType(QStringLiteral("BackendType"));
 

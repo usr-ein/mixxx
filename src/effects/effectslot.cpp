@@ -119,6 +119,17 @@ EffectSlot::EffectSlot(const QString& group,
         addEffectParameterSlot(EffectParameterType::Button);
     }
 
+    m_pControlWet = std::make_unique<ControlPotmeter>(
+            ConfigKey(m_group, "wet"), 0.0, 1.0);
+    // Fully wet by default, which is what every chain did before this control
+    // existed, so nothing outside a WetOnly chain notices it.
+    m_pControlWet->setDefaultValue(1.0);
+    m_pControlWet->set(1.0);
+    connect(m_pControlWet.get(),
+            &ControlObject::valueChanged,
+            this,
+            &EffectSlot::updateEngineState);
+
     m_pControlMetaParameter = std::make_unique<ControlPotmeter>(
             ConfigKey(m_group, "meta"), 0.0, 1.0);
     // QObject::connect cannot connect to slots with optional parameters using function
@@ -187,6 +198,7 @@ void EffectSlot::updateEngineState() {
     pRequest->type = EffectsRequest::SET_EFFECT_PARAMETERS;
     pRequest->pTargetEffect = m_pEngineEffect;
     pRequest->SetEffectParameters.enabled = m_pControlEnabled->toBool();
+    pRequest->SetEffectParameters.wet = m_pControlWet->get();
     m_pMessenger->writeRequest(pRequest);
 
     for (const auto& parameterList : std::as_const(m_allParameters)) {
@@ -348,6 +360,11 @@ void EffectSlot::loadEffectInner(const EffectManifestPointer pManifest,
     m_pControlMetaParameter->setDefaultValue(pManifest->metaknobDefault());
 
     m_pControlLoaded->forceSet(1.0);
+
+    // Restore the slot's blend from the preset. Presets written before per-slot
+    // wet existed carry no <Wet> element and read back as 1, so an old rack
+    // loads exactly as it used to rather than arriving silent.
+    m_pControlWet->set(pEffectPreset->wet());
 
     if (m_pEffectsManager->isAdoptMetaknobSettingEnabled()) {
         if (adoptMetaknobFromPreset) {
@@ -556,6 +573,14 @@ void EffectSlot::syncSofttakeover() {
 
 double EffectSlot::getMetaParameter() const {
     return m_pControlMetaParameter->get();
+}
+
+double EffectSlot::getWet() const {
+    return m_pControlWet->get();
+}
+
+void EffectSlot::setWet(double wet) {
+    m_pControlWet->set(wet);
 }
 
 // This function is for the superknob to update individual effects' meta knobs

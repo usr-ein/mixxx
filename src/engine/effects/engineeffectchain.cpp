@@ -233,7 +233,8 @@ bool EngineEffectChain::process(const ChannelHandle& inputHandle,
         SINT effectChainGroupDelayFrames = 0;
         bool firstAddDryToWetEffectProcessed = false;
 
-        for (EngineEffect* pEffect : std::as_const(m_effects)) {
+        for (int slotIndex = 0; slotIndex < m_effects.size(); ++slotIndex) {
+            EngineEffect* pEffect = m_effects.at(slotIndex);
             if (pEffect != nullptr) {
                 // Select an unused intermediate buffer for the next output
                 if (pIntermediateInput == m_buffer1.data()) {
@@ -274,6 +275,52 @@ bool EngineEffectChain::process(const ChannelHandle& inputHandle,
                         }
 
                         firstAddDryToWetEffectProcessed = true;
+                    }
+
+                    // Per-slot wet: how much of this effect's output replaces
+                    // what went into it. WetOnly chains only -- this is what
+                    // makes the deck's effect rack a chain of modules each with
+                    // its own blend, and applying it anywhere else would change
+                    // deck, QuickEffect and EQ chains for no reason.
+                    //
+                    // The dry a downstream slot blends back in is the previous
+                    // slot's output, never the chain's input, so blending here
+                    // cannot resurrect the original dry once some upstream
+                    // effect has destroyed it. Which is exactly the guarantee
+                    // the rack is built on: the first effect that generates new
+                    // material runs at a wet of 1, and after that there is no
+                    // dry left to leak.
+                    if (m_mixMode == EffectChainMixMode::WetOnly &&
+                            slotIndex < static_cast<int>(channelStatus.oldWet.size())) {
+                        const CSAMPLE_GAIN wet = pEffect->wet();
+                        const CSAMPLE_GAIN oldWet = channelStatus.oldWet[slotIndex];
+                        channelStatus.oldWet[slotIndex] = wet;
+                        const SINT frames = static_cast<SINT>(numSamples) / 2;
+                        if ((wet < 1.0f || oldWet < 1.0f) && frames > 0) {
+                            // Written out rather than handed to SampleUtil
+                            // because this blend is in place: the destination
+                            // is also one of the sources. SampleUtil's pointers
+                            // are M_RESTRICT, which promises the compiler they
+                            // do not alias, and breaking that promise in the
+                            // audio thread is undefined behaviour rather than a
+                            // wrong number. The dry-add above is a plain loop
+                            // for the same reason.
+                            //
+                            // Ramped per frame, not per sample, so left and
+                            // right always get the same gain.
+                            const CSAMPLE_GAIN delta =
+                                    (wet - oldWet) / static_cast<CSAMPLE_GAIN>(frames);
+                            for (SINT frame = 0; frame < frames; ++frame) {
+                                const CSAMPLE_GAIN w =
+                                        oldWet + delta * static_cast<CSAMPLE_GAIN>(frame);
+                                const CSAMPLE_GAIN d = 1.0f - w;
+                                const SINT i = frame * 2;
+                                pIntermediateOutput[i] = pIntermediateOutput[i] * w +
+                                        pIntermediateInput[i] * d;
+                                pIntermediateOutput[i + 1] = pIntermediateOutput[i + 1] * w +
+                                        pIntermediateInput[i + 1] * d;
+                            }
+                        }
                     }
 
                     processingOccured = true;

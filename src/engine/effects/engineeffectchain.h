@@ -2,8 +2,10 @@
 
 #include <QList>
 #include <QString>
+#include <array>
 
 #include "audio/types.h"
+#include "effects/defs.h"
 #include "engine/channelhandle.h"
 #include "engine/effects/engineeffectsdelay.h"
 #include "engine/effects/message.h"
@@ -50,8 +52,14 @@ class EngineEffectChain final : public EffectsRequestHandler {
         ChannelStatus()
                 : oldMixKnob(0),
                   enableState(EffectEnableState::Disabled) {
+            oldWet.fill(1.0f);
         }
         CSAMPLE oldMixKnob;
+        /// Each slot's wet as of the previous callback, so the per-slot blend
+        /// can ramp across the buffer instead of stepping. Per channel rather
+        /// than on the effect, because one effect can be processing several
+        /// channels and each has its own history.
+        std::array<CSAMPLE, kNumEffectsPerUnit> oldWet;
         EffectEnableState enableState;
     };
 

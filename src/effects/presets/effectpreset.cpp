@@ -10,7 +10,8 @@
 
 EffectPreset::EffectPreset()
         : m_backendType(EffectBackendType::Unknown),
-          m_dMetaParameter(0.0) {
+          m_dMetaParameter(0.0),
+          m_dWet(1.0) {
 }
 
 EffectPreset::EffectPreset(const QDomElement& effectElement)
@@ -28,6 +29,13 @@ EffectPreset::EffectPreset(const QDomElement& effectElement)
             XmlParse::selectNodeQString(effectElement,
                     EffectXml::kEffectBackendType));
     m_dMetaParameter = XmlParse::selectNodeDouble(effectElement, EffectXml::kEffectMetaParameter);
+    // Absent in presets written before per-slot wet existed, and
+    // selectNodeDouble gives 0 for a missing node -- which would silently mute
+    // every effect in an old rack. Treat missing as fully wet.
+    const QDomElement wetElement = XmlParse::selectElement(effectElement, EffectXml::kEffectWet);
+    m_dWet = wetElement.isNull()
+            ? 1.0
+            : XmlParse::selectNodeDouble(effectElement, EffectXml::kEffectWet);
 
     QDomElement parametersElement =
             XmlParse::selectElement(effectElement, EffectXml::kParametersRoot);
@@ -46,7 +54,8 @@ EffectPreset::EffectPreset(const QDomElement& effectElement)
 EffectPreset::EffectPreset(const EffectSlotPointer pEffectSlot)
         : m_id(pEffectSlot->id()),
           m_backendType(pEffectSlot->backendType()),
-          m_dMetaParameter(pEffectSlot->getMetaParameter()) {
+          m_dMetaParameter(pEffectSlot->getMetaParameter()),
+          m_dWet(pEffectSlot->getWet()) {
     // Parameters are reloaded in the order they are saved, so the order of
     // loaded effects must be preserved.
     int numTypes = static_cast<int>(EffectParameterType::NumTypes);
@@ -67,7 +76,8 @@ EffectPreset::EffectPreset(const EffectSlotPointer pEffectSlot)
 EffectPreset::EffectPreset(const EffectManifestPointer pManifest)
         : m_id(pManifest->id()),
           m_backendType(pManifest->backendType()),
-          m_dMetaParameter(pManifest->metaknobDefault()) {
+          m_dMetaParameter(pManifest->metaknobDefault()),
+          m_dWet(1.0) {
     for (const auto& pParameterManifest : pManifest->parameters()) {
         m_effectParameterPresets.append(EffectParameterPreset(pParameterManifest));
     }
@@ -84,6 +94,11 @@ const QDomElement EffectPreset::toXml(QDomDocument* doc) const {
             effectElement,
             EffectXml::kEffectMetaParameter,
             QString::number(m_dMetaParameter));
+    XmlParse::addElement(
+            *doc,
+            effectElement,
+            EffectXml::kEffectWet,
+            QString::number(m_dWet));
     XmlParse::addElement(
             *doc,
             effectElement,
