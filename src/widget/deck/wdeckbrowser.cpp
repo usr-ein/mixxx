@@ -34,7 +34,7 @@
 #include "widget/deck/deckmenumodel.h"
 #include "widget/deck/deckpage.h"
 #include "widget/deck/wdeckdiagnostics.h"
-#include "widget/deck/wdeckeffects.h"
+#include "widget/deck/wdeckrack.h"
 #include "widget/deck/wdeckinfopanel.h"
 #include "widget/deck/wdecksearch.h"
 #include "widget/deck/wdecksortmenu.h"
@@ -321,8 +321,8 @@ WDeckBrowser::WDeckBrowser(QWidget* pParent, Library* pLibrary, UserSettingsPoin
     m_pDiagnostics = new WDeckDiagnostics(m_pStack);
     m_pStack->addWidget(m_pDiagnostics);
 
-    m_pEffects = new WDeckEffects(m_pStack);
-    m_pStack->addWidget(m_pEffects);
+    m_pRack = new WDeckRack(m_pStack);
+    m_pStack->addWidget(m_pRack);
 
     connect(m_pKeyboard, &WDeckKeyboard::keyPressed, this, [this](const QString& c) {
         m_searchText += c;
@@ -648,8 +648,8 @@ void WDeckBrowser::rebuildCurrentLevel() {
         showSearch(level);
         break;
     case Level::Kind::Effects:
-        m_pStack->setCurrentWidget(m_pEffects);
-        m_pEffects->setFocus();
+        m_pStack->setCurrentWidget(m_pRack);
+        m_pRack->setFocus();
         break;
     case Level::Kind::Diagnostics:
         m_pStack->setCurrentWidget(m_pDiagnostics);
@@ -659,7 +659,7 @@ void WDeckBrowser::rebuildCurrentLevel() {
     // Sampling follows visibility: a page nobody is looking at has no business
     // reading /proc once a second.
     m_pDiagnostics->setActive(level.kind == Level::Kind::Diagnostics);
-    m_pEffects->setActive(level.kind == Level::Kind::Effects);
+    m_pRack->setActive(level.kind == Level::Kind::Effects);
     m_pLevelControl->forceSet(m_stack.size() - 1);
     m_pInTrackList->forceSet(inTrackList() ? 1.0 : 0.0);
     updateBreadcrumb();
