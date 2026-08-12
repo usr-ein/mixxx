@@ -6,6 +6,8 @@
 #include <QTimer>
 #include <memory>
 
+#include "widget/deck/deckpage.h"
+
 class ControlProxy;
 
 namespace mixxx {
@@ -30,7 +32,7 @@ namespace deck {
 ///
 /// Deliberately a scaffold. The real effects UI goes here later; this exists to
 /// make the signal path legible while it is being built.
-class WDeckEffects : public QTextBrowser {
+class WDeckEffects : public QTextBrowser, public DeckPage {
     Q_OBJECT
 
   public:
@@ -48,11 +50,24 @@ class WDeckEffects : public QTextBrowser {
     /// Encoder press: start adjusting the selected row, or stop.
     void toggleAdjust();
 
-    /// True while a value is being adjusted, so the browser knows the press
-    /// belongs to this page and BACK should leave adjust mode before it pops
-    /// the level.
-    bool isAdjusting() const {
-        return m_adjusting;
+    // DeckPage. Turn to pick a row, press to adjust it, press again to stop.
+    bool handleMove(int steps) override {
+        moveSelection(steps);
+        return true;
+    }
+    bool handleSelect() override {
+        toggleAdjust();
+        return true;
+    }
+    /// BACK leaves adjust mode first, and only then the page -- otherwise the
+    /// only way out of a value would be the encoder, and BACK would take the
+    /// page with it.
+    bool handleBack() override {
+        if (!m_adjusting) {
+            return false;
+        }
+        toggleAdjust();
+        return true;
     }
 
   private:

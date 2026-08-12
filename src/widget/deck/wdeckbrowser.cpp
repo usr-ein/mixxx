@@ -32,6 +32,7 @@
 #include "widget/deck/deckdelegates.h"
 #include "widget/deck/decklistview.h"
 #include "widget/deck/deckmenumodel.h"
+#include "widget/deck/deckpage.h"
 #include "widget/deck/wdeckdiagnostics.h"
 #include "widget/deck/wdeckeffects.h"
 #include "widget/deck/wdeckinfopanel.h"
@@ -460,19 +461,11 @@ WDeckBrowser::WDeckBrowser(QWidget* pParent, Library* pLibrary, UserSettingsPoin
             m_pSortMenu->moveSelection(steps);
             return;
         }
-        // The diagnostics page is not a list, and the encoder still has to
-        // reach it: it is one long page and the deck has no other way down it
-        // (browser-prd.md 14). Without this the detents moved the selection of
-        // the menu view underneath, which is not even on screen.
-        if (!m_stack.isEmpty() && m_stack.last().kind == Level::Kind::Diagnostics) {
-            m_pDiagnostics->scrollBy(steps);
-            return;
-        }
-        // The effects page is a list, but not one of these lists: the rows are
-        // controls, and the same detents move between them and then change the
-        // one that is picked.
-        if (!m_stack.isEmpty() && m_stack.last().kind == Level::Kind::Effects) {
-            m_pEffects->moveSelection(steps);
+        // Whatever page is on screen gets first refusal. Most levels are lists
+        // and take the default; the ones that are not -- diagnostics scrolls,
+        // the effects page moves between controls and then changes one -- say
+        // so themselves rather than being named here.
+        if (DeckPage* pPage = currentPage(); pPage && pPage->handleMove(steps)) {
             return;
         }
         (inTrackList() ? m_pTrackView : m_pMenuView)->moveSelection(steps);
@@ -487,17 +480,12 @@ WDeckBrowser::WDeckBrowser(QWidget* pParent, Library* pLibrary, UserSettingsPoin
             m_pSortMenu->activateSelection();
             return;
         }
-        // Nothing to activate on the diagnostics page, and it is not harmless
-        // to try: the menu view underneath still holds the level we came from,
-        // with a row selected, so a press activated *that* -- entering a medium
-        // or raising the shutdown overlay from a page showing neither.
-        if (!m_stack.isEmpty() && m_stack.last().kind == Level::Kind::Diagnostics) {
-            return;
-        }
-        // On the effects page the press is the adjust toggle, and for the same
-        // reason as above it must not fall through to the menu underneath.
-        if (!m_stack.isEmpty() && m_stack.last().kind == Level::Kind::Effects) {
-            m_pEffects->toggleAdjust();
+        // A page that claims the press stops it here. That matters even for
+        // pages with nothing to activate: the menu view underneath still holds
+        // the level we came from with a row selected, so a press falling
+        // through activates *that* -- entering a medium, or raising the
+        // shutdown overlay, from a page showing neither.
+        if (DeckPage* pPage = currentPage(); pPage && pPage->handleSelect()) {
             return;
         }
         DeckListView* pView = inTrackList() ? m_pTrackView : m_pMenuView;
@@ -517,12 +505,10 @@ WDeckBrowser::WDeckBrowser(QWidget* pParent, Library* pLibrary, UserSettingsPoin
             m_pSortMenu->dismiss();
             return;
         }
-        // Adjusting is a mode, and BACK leaves the innermost one first --
-        // otherwise the only way out of a value is to press the encoder, and
-        // BACK would throw away the whole page from under it.
-        if (!m_stack.isEmpty() && m_stack.last().kind == Level::Kind::Effects &&
-                m_pEffects->isAdjusting()) {
-            m_pEffects->toggleAdjust();
+        // BACK leaves the innermost mode first. A page with one -- a value
+        // being adjusted, a module being dragged -- takes this and leaves that
+        // mode; only when there is none does the level pop.
+        if (DeckPage* pPage = currentPage(); pPage && pPage->handleBack()) {
             return;
         }
         onBack();
@@ -677,6 +663,14 @@ void WDeckBrowser::rebuildCurrentLevel() {
     m_pLevelControl->forceSet(m_stack.size() - 1);
     m_pInTrackList->forceSet(inTrackList() ? 1.0 : 0.0);
     updateBreadcrumb();
+}
+
+mixxx::deck::DeckPage* WDeckBrowser::currentPage() const {
+    // Asked of the stack rather than of Level::Kind, so adding a page needs no
+    // entry in a list of kinds that three separate control handlers would then
+    // have to keep in step. A page that does not implement DeckPage -- the menu
+    // view, the track view -- casts to nullptr and the default applies.
+    return dynamic_cast<mixxx::deck::DeckPage*>(m_pStack->currentWidget());
 }
 
 void WDeckBrowser::updateBreadcrumb() {

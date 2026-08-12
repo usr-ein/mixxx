@@ -12,6 +12,7 @@
 
 #include "control/controlobject.h"
 #include "control/controlproxy.h"
+#include "control/controlproxy.h"
 #include "library/deck/mediaregistry.h"
 #include "library/deck/ramstore.h"
 #include "library/deck/streamingfile.h"
@@ -36,6 +37,33 @@ QString row(const QString& label, const QString& value) {
     return QStringLiteral("<tr><td class='k'>%1</td><td>%2</td></tr>")
             .arg(label.toHtmlEscaped(), value);
 }
+
+/// A row that is orange when the answer is the wrong one. Used only by the
+/// pedal bus, where every wrong answer sounds the same as every other.
+QString checkRow(const QString& label, const QString& value, bool ok) {
+    return row(label,
+            ok ? value
+               : QStringLiteral("<span class='warn'>%1</span>").arg(value));
+}
+
+QString onOff(const ControlProxy* pControl) {
+    if (pControl == nullptr || !pControl->valid()) {
+        return QStringLiteral("&mdash;");
+    }
+    return pControl->toBool() ? QStringLiteral("yes") : QStringLiteral("NO");
+}
+
+/// A 0..1 fraction as block characters. Same reasoning as the sparklines: Qt
+/// rich text has no canvas, and blocks read fine at arm's length.
+QString bar(double fraction) {
+    constexpr int kWidth = 16;
+    const int filled = qBound(0, static_cast<int>(fraction * kWidth + 0.5), kWidth);
+    QString out;
+    for (int i = 0; i < kWidth; ++i) {
+        out += i < filled ? QChar(0x2588) : QChar(0x2591);
+    }
+    return out;
+}
 } // namespace
 
 namespace mixxx {
@@ -58,6 +86,19 @@ WDeckDiagnostics::WDeckDiagnostics(QWidget* pParent)
     properties.setScrollMetric(QScrollerProperties::HorizontalOvershootPolicy,
             QVariant::fromValue(QScrollerProperties::OvershootAlwaysOff));
     QScroller::scroller(viewport())->setScrollerProperties(properties);
+    const QString kUnit = QStringLiteral("[EffectRack1_EffectUnit2]");
+    const QString kSlot = QStringLiteral("[EffectRack1_EffectUnit2_Effect1]");
+    const QString kAux = QStringLiteral("[Auxiliary1]");
+    m_pAuxConfigured = std::make_unique<ControlProxy>(kAux, QStringLiteral("input_configured"));
+    m_pAuxMainMix = std::make_unique<ControlProxy>(kAux, QStringLiteral("main_mix"));
+    m_pAuxVu = std::make_unique<ControlProxy>(kAux, QStringLiteral("vu_meter"));
+    m_pUnitRouted = std::make_unique<ControlProxy>(
+            kUnit, QStringLiteral("group_[Auxiliary1]_enable"));
+    m_pUnitEnabled = std::make_unique<ControlProxy>(kUnit, QStringLiteral("enabled"));
+    m_pMixMode = std::make_unique<ControlProxy>(kUnit, QStringLiteral("mix_mode"));
+    m_pEffectLoaded = std::make_unique<ControlProxy>(kSlot, QStringLiteral("loaded"));
+    m_pEffectOn = std::make_unique<ControlProxy>(kSlot, QStringLiteral("enabled"));
+
     m_timer.setInterval(1000);
     connect(&m_timer, &QTimer::timeout, this, &WDeckDiagnostics::sample);
 }
@@ -357,6 +398,61 @@ QString WDeckDiagnostics::html() const {
                         : QStringLiteral("<span class='warn'>%1</span>")
                                   .arg(bytes(pCache->bytesWrittenToDisk())));
     }
+    out += QStringLiteral("</table>");
+
+    // ---- the effect-pedal bus ----------------------------------------------
+    //
+    // The Xone's aux send arrives at [Auxiliary1]; EffectUnit2 processes it in
+    // WET mix mode and the result leaves on the deck's only output. Six things
+    // have to be true for that to make a sound, none of which Mixxx does on its
+    // own, and each one fails to exactly the same symptom: silence. So each is
+    // stated separately, and goes orange on its own.
+    out += QStringLiteral("<h2>%1</h2><table>").arg(tr("Effect pedal bus"));
+
+    const bool configured = m_pAuxConfigured->valid() && m_pAuxConfigured->toBool();
+    out += checkRow(tr("Aux input"),
+            configured ? tr("open") : tr("NOT CONFIGURED"),
+            configured);
+    out += checkRow(tr("Aux to main"),
+            onOff(m_pAuxMainMix.get()),
+            m_pAuxMainMix->valid() && m_pAuxMainMix->toBool());
+    out += row(tr("Aux level"),
+            QStringLiteral("<span style='color:#88ff00'>%1</span>")
+                    .arg(bar(m_pAuxVu->valid() ? m_pAuxVu->get() : 0.0)));
+    out += checkRow(tr("Unit 2 routed"),
+            onOff(m_pUnitRouted.get()),
+            m_pUnitRouted->valid() && m_pUnitRouted->toBool());
+    out += checkRow(tr("Unit 2 enabled"),
+            onOff(m_pUnitEnabled.get()),
+            m_pUnitEnabled->valid() && m_pUnitEnabled->toBool());
+
+    // Anything but WET means the dry is coming back with the effect, and the
+    // mixer already has a dry. The way that happens without anyone touching it:
+    // a stock Mixxx opens effects.xml, does not recognise the string, falls
+    // back to DRY/WET and writes the file back that way.
+    const int mode = m_pMixMode->valid() ? static_cast<int>(m_pMixMode->get()) : -1;
+    out += checkRow(tr("Mix mode"),
+            mode == 0 ? QStringLiteral("DRY/WET")
+                      : mode == 1 ? QStringLiteral("DRY+WET")
+                                  : mode == 2 ? QStringLiteral("WET")
+                                              : QStringLiteral("&mdash;"),
+            mode == 2);
+
+    // Loaded and on are different failures with the same sound.
+    // StandardEffectChain is the only chain type that leaves its slots disabled
+    // after a load, so an effect can sit in the rack, listed, processing
+    // nothing -- and under WET that is silence, not bypass.
+    out += checkRow(tr("Effect loaded"),
+            onOff(m_pEffectLoaded.get()),
+            m_pEffectLoaded->valid() && m_pEffectLoaded->toBool());
+    out += checkRow(tr("Effect on"),
+            onOff(m_pEffectOn.get()),
+            m_pEffectOn->valid() && m_pEffectOn->toBool());
+
+    // Measured, not assumed: alsabat --roundtriplatency at the deck's own
+    // buffer settings. It is why a beat-synced delay on this bus cannot use a
+    // division shorter than itself.
+    out += row(tr("Round trip"), QStringLiteral("32 ms (measured)"));
     out += QStringLiteral("</table>");
 
     return out;

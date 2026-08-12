@@ -36,6 +36,7 @@ class WDeckKeyboard;
 class WDeckInfoPanel;
 class WDeckDiagnostics;
 class WDeckEffects;
+class DeckPage;
 class TrackRowDelegate;
 
 /// The `▲ Album` in the breadcrumb: what the list is sorted by, and the control
@@ -154,6 +155,8 @@ class WDeckBrowser : public QWidget, public WBaseWidget {
     void setInfoLayout(bool on);
     /// Resolve the track delegate's column indices for the current model.
     void refreshTrackColumns();
+    /// The page currently on the stack, if it wants the deck's controls.
+    mixxx::deck::DeckPage* currentPage() const;
     void updateBreadcrumb();
     void loadSelectedTrack();
     /// Point a Track at the cover its medium carries, so the deck's header
