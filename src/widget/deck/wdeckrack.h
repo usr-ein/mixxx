@@ -93,7 +93,9 @@ class WDeckRack : public QWidget, public DeckPage {
             double parameter,
             const QString& caption,
             Material material,
-            bool locked);
+            bool locked,
+            /// Drawn in grey, still showing its value: the master while muted.
+            bool greyed = false);
     /// A bevel is two lines: light on top and left, dark on bottom and right.
     /// Swap them and the same shape reads as recessed, which is how knob
     /// troughs and screw holes are drawn.
@@ -104,7 +106,11 @@ class WDeckRack : public QWidget, public DeckPage {
             int flags,
             const QString& text,
             const QColor& ink);
-    void paintModule(QPainter* pPainter, int index);
+    /// Where knob *index* sits on a module of this size. Everything is derived
+    /// from the module rect rather than from constants, because the rack's
+    /// height depends on the browser's breadcrumb and is not knowable here.
+    static QRect knobGeometry(const QRect& moduleRect, int count, int index);
+    void paintModule(QPainter* pPainter, int index, const QPoint& offset = QPoint());
     void paintMaster(QPainter* pPainter);
     void paintNameBar(QPainter* pPainter);
     void paintChooser(QPainter* pPainter);

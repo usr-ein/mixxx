@@ -35,6 +35,41 @@ struct MaterialColors {
     QColor shadow;
 };
 
+/// The caption/accent colour a material carries. Winamp's metal panels label
+/// themselves in gold, which is most of why they read as equipment rather than
+/// as grey boxes; the plastics take ink, the gloss takes cyan.
+QColor accentFor(int material) {
+    switch (material) {
+    case 0:
+        return QColor(0xF0, 0xC8, 0x60); // gold on steel
+    case 1:
+        return QColor(0x3A, 0x2E, 0x00); // dark ink on yellow
+    case 2:
+        return QColor(0x06, 0x2A, 0x0C); // dark ink on green
+    default:
+        return QColor(0x6C, 0xD8, 0xFF); // cyan on gloss black
+    }
+}
+
+/// The knob cap, which is deliberately NOT the panel's colour.
+///
+/// Caps matching their panel is what the first pass did and it made the black
+/// module's knobs invisible and the yellow one's gold-on-gold. Real equipment
+/// goes the other way -- dark knobs on light panels, light knobs on dark -- for
+/// exactly this reason, so the cap contrasts and the pointer can be read at a
+/// glance from across the booth.
+MaterialColors capColorsFor(int material) {
+    switch (material) {
+    case 0: // steel panel, graphite cap
+        return {QColor(0x4A, 0x4E, 0x57), QColor(0x81, 0x86, 0x92), QColor(0x22, 0x24, 0x2A)};
+    case 1: // yellow panel, near-black cap
+    case 2: // green panel, near-black cap
+        return {QColor(0x2A, 0x2A, 0x2C), QColor(0x60, 0x60, 0x64), QColor(0x0A, 0x0A, 0x0B)};
+    default: // gloss black panel, bright silver cap
+        return {QColor(0xB6, 0xBC, 0xC6), QColor(0xEC, 0xEF, 0xF4), QColor(0x6E, 0x74, 0x7E)};
+    }
+}
+
 MaterialColors colorsFor(int material) {
     switch (material) {
     case 0: // BrushedSteel
@@ -374,57 +409,98 @@ void WDeckRack::paintEngraved(QPainter* pPainter,
 }
 
 void WDeckRack::paintChrome(QPainter* pPainter, const QRect& rect, Material material) {
-    const MaterialColors colors = colorsFor(static_cast<int>(material));
+    const int index = static_cast<int>(material);
+    const MaterialColors colors = colorsFor(index);
+    const QColor accent = accentFor(index);
 
-    // Every panel gets a vertical gradient. Without it a large flat area reads
-    // as a rectangle of colour rather than an object.
-    QLinearGradient gradient(rect.topLeft(), rect.bottomLeft());
+    // A frame within a frame, which is most of what makes the reference skins
+    // read as equipment: a dark outer edge, a raised face inside it, and the
+    // working area recessed into that again. One bevel alone looks like a
+    // button; three depths look like a panel.
+    pPainter->fillRect(rect, QColor(0x14, 0x14, 0x16));
+    const QRect face = rect.adjusted(3, 3, -3, -3);
+
+    QLinearGradient gradient(face.topLeft(), face.bottomLeft());
     gradient.setColorAt(0.0, colors.highlight);
     gradient.setColorAt(0.45, colors.base);
     gradient.setColorAt(1.0, colors.shadow);
-    pPainter->fillRect(rect, gradient);
+    pPainter->fillRect(face, gradient);
 
     if (material == Material::BrushedSteel) {
-        // The grain is the whole trick: without it this is just grey. One-pixel
-        // horizontal streaks, a few percent of lightness either way.
-        for (int y = rect.top(); y < rect.bottom(); ++y) {
+        // The grain is the whole trick: without it this is just grey.
+        for (int y = face.top(); y < face.bottom(); y += 2) {
             const int jitter = grainAt(0, y) - 3;
             pPainter->setPen(QColor(255, 255, 255, qMax(0, 10 + jitter * 3)));
-            pPainter->drawLine(rect.left() + 2, y, rect.right() - 2, y);
-            y += 1;
+            pPainter->drawLine(face.left() + 1, y, face.right() - 1, y);
         }
     } else if (material == Material::PianoBlack) {
-        // Gloss is one specular streak down the upper left, and a bevel bright
-        // enough to catch the eye against the black.
-        QLinearGradient sheen(rect.topLeft(), rect.bottomRight());
-        sheen.setColorAt(0.0, QColor(255, 255, 255, 60));
-        sheen.setColorAt(0.25, QColor(255, 255, 255, 12));
-        sheen.setColorAt(0.5, QColor(255, 255, 255, 0));
-        pPainter->fillRect(rect.adjusted(0, 0, -rect.width() / 2, 0), sheen);
+        QLinearGradient sheen(face.topLeft(), face.bottomRight());
+        sheen.setColorAt(0.0, QColor(255, 255, 255, 70));
+        sheen.setColorAt(0.30, QColor(255, 255, 255, 10));
+        sheen.setColorAt(0.55, QColor(255, 255, 255, 0));
+        pPainter->fillRect(face.adjusted(0, 0, -face.width() / 2, 0), sheen);
     } else {
-        // Moulded plastic: a soft gloss band across the top third, no grain.
-        QLinearGradient band(rect.topLeft(), QPoint(rect.left(), rect.top() + rect.height() / 3));
-        band.setColorAt(0.0, QColor(255, 255, 255, 70));
+        QLinearGradient band(face.topLeft(),
+                QPoint(face.left(), face.top() + face.height() / 3));
+        band.setColorAt(0.0, QColor(255, 255, 255, 80));
         band.setColorAt(1.0, QColor(255, 255, 255, 0));
-        pPainter->fillRect(QRect(rect.left(), rect.top(), rect.width(), rect.height() / 3), band);
+        pPainter->fillRect(QRect(face.left(), face.top(), face.width(), face.height() / 3), band);
     }
 
-    paintBevel(pPainter, rect.adjusted(0, 0, -1, -1), true);
-    paintBevel(pPainter, rect.adjusted(3, 3, -4, -4), false);
+    paintBevel(pPainter, rect, false);
+    paintBevel(pPainter, face, true);
 
-    // Four screws, drawn rather than an asset.
-    const int inset = 12;
-    for (const QPoint& centre : {QPoint(rect.left() + inset, rect.top() + inset),
-                 QPoint(rect.right() - inset, rect.top() + inset),
-                 QPoint(rect.left() + inset, rect.bottom() - inset),
-                 QPoint(rect.right() - inset, rect.bottom() - inset)}) {
+    // ---- title strip, at the top -------------------------------------------
+    // Hatched, like the ribbed bands in the reference skins, with the name
+    // engraved into it. The strip is where the eye lands, so the name belongs
+    // here rather than at the foot of the module.
+    const QRect strip(face.left() + 5, face.top() + 5, face.width() - 10, 30);
+    pPainter->fillRect(strip, QColor(0, 0, 0, 70));
+    pPainter->setClipRect(strip);
+    pPainter->setPen(QPen(QColor(255, 255, 255, 26), 1));
+    for (int x = strip.left() - strip.height(); x < strip.right(); x += 4) {
+        pPainter->drawLine(x, strip.bottom(), x + strip.height(), strip.top());
+    }
+    pPainter->setClipping(false);
+    paintBevel(pPainter, strip, false);
+
+    // A lit pilot at the left of the strip: the module is in circuit.
+    const QRect lamp(strip.left() + 7, strip.center().y() - 4, 8, 8);
+    pPainter->setPen(Qt::NoPen);
+    pPainter->setBrush(accent);
+    pPainter->drawEllipse(lamp);
+    pPainter->setBrush(QColor(255, 255, 255, 150));
+    pPainter->drawEllipse(lamp.adjusted(2, 2, -4, -4));
+
+    // ---- the well the knobs sit in -----------------------------------------
+    const QRect well(face.left() + 5, strip.bottom() + 6, face.width() - 10,
+            face.bottom() - strip.bottom() - 28);
+    pPainter->fillRect(well, QColor(0, 0, 0, 46));
+    paintBevel(pPainter, well, false);
+
+    // ---- screws, and a corner grip -----------------------------------------
+    const int inset = 11;
+    for (const QPoint& centre : {QPoint(face.left() + inset, face.top() + inset),
+                 QPoint(face.right() - inset, face.top() + inset),
+                 QPoint(face.left() + inset, face.bottom() - inset),
+                 QPoint(face.right() - inset, face.bottom() - inset)}) {
         const QRect head(centre.x() - 5, centre.y() - 5, 10, 10);
         pPainter->setPen(Qt::NoPen);
-        pPainter->setBrush(colors.shadow.darker(115));
+        pPainter->setBrush(colors.shadow.darker(118));
         pPainter->drawEllipse(head);
         paintBevel(pPainter, head, false);
-        pPainter->setPen(QPen(colors.shadow.darker(150), 1));
+        pPainter->setPen(QPen(colors.shadow.darker(155), 1));
         pPainter->drawLine(head.left() + 2, centre.y(), head.right() - 2, centre.y());
+    }
+
+    // Diagonal hatch in the bottom right, straight out of the reference skins'
+    // resize grip. Pure decoration, and it is the kind of decoration that makes
+    // a flat panel look manufactured.
+    pPainter->setPen(QPen(QColor(255, 255, 255, 40), 1));
+    for (int i = 0; i < 4; ++i) {
+        const int off = 6 + i * 4;
+        pPainter->drawLine(face.right() - off - 14, face.bottom() - 6,
+                face.right() - 6, face.bottom() - off - 14);
     }
 }
 
@@ -448,74 +524,149 @@ void WDeckRack::paintKnob(QPainter* pPainter,
         double parameter,
         const QString& caption,
         Material material,
-        bool locked) {
-    const MaterialColors colors = colorsFor(static_cast<int>(material));
+        bool locked,
+        bool greyed) {
+    const int index = static_cast<int>(material);
+    const MaterialColors colors = capColorsFor(index);
+    const bool paleCap = index == 0 ? false : index == 3;
     const QPoint centre = rect.center();
     const int radius = rect.width() / 2 - 2;
+    const QColor live = greyed ? QColor(0x77, 0x7D, 0x86) : QColor(0x88, 0xFF, 0x00);
 
-    // Recessed trough, then the value arc riding in it. 270 degrees of travel,
-    // starting bottom-left, which is where a knob's travel is expected to be.
+    // Tick marks around the travel, like the scale printed round a real pot.
+    // Cheap, and it is most of what tells you where the middle is.
+    pPainter->setPen(QPen(QColor(0, 0, 0, 90), 1));
+    for (int i = 0; i <= 10; ++i) {
+        const double angle = qDegreesToRadians(225.0 - 27.0 * i);
+        const QPointF outer(centre.x() + qCos(angle) * (radius + 9),
+                centre.y() - qSin(angle) * (radius + 9));
+        const QPointF inner(centre.x() + qCos(angle) * (radius + 5),
+                centre.y() - qSin(angle) * (radius + 5));
+        pPainter->drawLine(inner, outer);
+    }
+
+    // Recessed trough, then the value arc riding in it. 270 degrees starting
+    // bottom-left, which is where a knob's travel is expected to be.
     const int startAngle = 225 * 16;
     const int span = -270 * 16;
     pPainter->setBrush(Qt::NoBrush);
-    pPainter->setPen(QPen(QColor(0, 0, 0, 110), 4));
+    pPainter->setPen(QPen(QColor(0, 0, 0, 120), 4));
     pPainter->drawArc(rect.adjusted(-4, -4, 4, 4), startAngle, span);
-    pPainter->setPen(QPen(QColor(0x88, 0xFF, 0x00), 3));
-    pPainter->drawArc(rect.adjusted(-4, -4, 4, 4),
-            startAngle,
-            static_cast<int>(span * parameter));
+    pPainter->setPen(QPen(live, 3));
+    pPainter->drawArc(rect.adjusted(-4, -4, 4, 4), startAngle, static_cast<int>(span * parameter));
 
-    // The cap.
-    QRadialGradient cap(QPointF(centre) - QPointF(radius / 3.0, radius / 3.0), radius * 1.6);
+    // The cap: a lit rim, then the body, then a knurled edge.
+    QRadialGradient cap(QPointF(centre) - QPointF(radius / 3.0, radius / 3.0), radius * 1.7);
     cap.setColorAt(0.0, colors.highlight);
+    cap.setColorAt(0.75, colors.base);
     cap.setColorAt(1.0, colors.shadow);
     pPainter->setPen(Qt::NoPen);
     pPainter->setBrush(cap);
     pPainter->drawEllipse(centre, radius, radius);
-    pPainter->setPen(QPen(QColor(0, 0, 0, 120), 1));
+
     pPainter->setBrush(Qt::NoBrush);
-    pPainter->drawEllipse(centre, radius, radius);
+    pPainter->setPen(QPen(QColor(255, 255, 255, 70), 1));
+    pPainter->drawArc(QRect(centre.x() - radius, centre.y() - radius, radius * 2, radius * 2),
+            30 * 16,
+            140 * 16);
+    pPainter->setPen(QPen(QColor(0, 0, 0, 140), 1));
+    pPainter->drawArc(QRect(centre.x() - radius, centre.y() - radius, radius * 2, radius * 2),
+            210 * 16,
+            140 * 16);
+
+    // Knurling: short radial nicks around the cap, the detail that stops a
+    // circle reading as a circle.
+    pPainter->setPen(QPen(paleCap ? QColor(0, 0, 0, 70) : QColor(255, 255, 255, 45), 1));
+    for (int i = 0; i < 24; ++i) {
+        const double angle = qDegreesToRadians(i * 15.0);
+        pPainter->drawLine(
+                QPointF(centre.x() + qCos(angle) * (radius - 4),
+                        centre.y() - qSin(angle) * (radius - 4)),
+                QPointF(centre.x() + qCos(angle) * (radius - 1),
+                        centre.y() - qSin(angle) * (radius - 1)));
+    }
 
     if (locked) {
         // A knob that silently refuses to move is a fault report; one that is
         // visibly bolted down is a design. So: a slotted screw head instead of
-        // a grip (PRD §6).
-        pPainter->setPen(QPen(colors.shadow.darker(160), 3));
+        // a pointer (PRD §6).
+        pPainter->setPen(QPen(paleCap ? colors.shadow.darker(150) : colors.highlight.lighter(130), 3));
         pPainter->drawLine(centre.x() - radius / 2, centre.y(), centre.x() + radius / 2, centre.y());
     } else {
         const double angle = qDegreesToRadians(225.0 - 270.0 * parameter);
-        pPainter->setPen(QPen(QColor(0x11, 0x11, 0x11), 3));
-        pPainter->drawLine(centre,
-                centre + QPoint(static_cast<int>(qCos(angle) * radius * 0.75),
-                                static_cast<int>(-qSin(angle) * radius * 0.75)));
+        const QPoint tip(centre.x() + static_cast<int>(qCos(angle) * radius * 0.78),
+                centre.y() - static_cast<int>(qSin(angle) * radius * 0.78));
+        // Dark halo then a bright core, so the pointer reads on any cap.
+        pPainter->setPen(QPen(QColor(0, 0, 0, 190), 4));
+        pPainter->drawLine(centre, tip);
+        const QColor pointer = greyed ? QColor(0xBB, 0xBB, 0xBB)
+                                      : (paleCap ? QColor(0x1A, 0x1A, 0x1A) : QColor(0xF4, 0xF4, 0xF4));
+        pPainter->setPen(QPen(pointer, 2));
+        pPainter->drawLine(centre, tip);
     }
 
     QFont font = pPainter->font();
-    font.setPixelSize(13);
+    font.setPixelSize(12);
     font.setBold(true);
     pPainter->setFont(font);
-    const QRect captionRect(rect.left() - 20, rect.bottom() + 4, rect.width() + 40, 18);
-    const bool dark = material == Material::PianoBlack;
+    const QRect captionRect(rect.left() - 26, rect.bottom() + 3, rect.width() + 52, 16);
     paintEngraved(pPainter,
             captionRect,
             Qt::AlignCenter,
-            locked ? caption + QStringLiteral(" · LOCKED") : caption,
-            dark ? kPanelInkLight : kPanelInk);
+            locked ? caption + QStringLiteral(" ·LOCK") : caption,
+            accentFor(index));
 }
 
-void WDeckRack::paintModule(QPainter* pPainter, int index) {
+QRect WDeckRack::knobGeometry(const QRect& moduleRect, int count, int index) {
+    const QRect face = moduleRect.adjusted(3, 3, -3, -3);
+    const int wellTop = face.top() + 5 + 30 + 6;
+    const int wellBottom = face.bottom() - 28;
+
+    // The headline knob keeps the centre line and its own row. It is the one
+    // reached for mid-transition, so it stays big and stays where the thumb
+    // expects it.
+    constexpr int kHeadSize = 62;
+    const int headTop = wellTop + 6;
+    if (index == 0) {
+        return QRect(moduleRect.center().x() - kHeadSize / 2, headTop, kHeadSize, kHeadSize);
+    }
+
+    // The rest go in two columns, the right one dropped half a row. Staggering
+    // buys vertical room -- the captions of one column sit beside the knobs of
+    // the other instead of under them -- and 204 px will not take two knobs
+    // side by side at the same height with captions that read at arm's length.
+    constexpr int kSize = 44;
+    constexpr int kCaption = 15;
+    const int params = count - 1;
+    const int rows = (params + 1) / 2;
+    const int top = headTop + kHeadSize + kCaption + 8;
+    const int span = wellBottom - top - kSize - kCaption;
+    // Solved so the lowest knob -- the last of the dropped column -- still
+    // clears the well: top + (rows - 0.5) * step + size + caption <= bottom.
+    const int step = rows > 0
+            ? qBound(kSize + 10, static_cast<int>(span / qMax(0.5, rows - 0.5)), 78)
+            : kSize;
+    const int p = index - 1;
+    const int column = p % 2;
+    const int row = p / 2;
+    const int x = column == 0 ? face.left() + face.width() / 4
+                              : face.left() + face.width() * 3 / 4;
+    const int y = top + row * step + (column == 1 ? step / 2 : 0);
+    return QRect(x - kSize / 2, y, kSize, kSize);
+}
+
+void WDeckRack::paintModule(QPainter* pPainter, int index, const QPoint& offset) {
     const Module& module = m_modules.at(index);
     const auto& type = catalogue().at(module.type);
-    const QRect rect = moduleRect(index);
-    if (!rect.intersects(QRect(0, 0, width() - kModuleWidth, height()))) {
+    const QRect rect = moduleRect(index).translated(offset);
+    if (offset.isNull() && !rect.intersects(QRect(0, 0, width() - kModuleWidth, height()))) {
         return; // scrolled off; nothing to draw
     }
 
-    pPainter->drawPixmap(rect.topLeft(),
-            chromeFor(static_cast<Material>(type.material)));
+    pPainter->drawPixmap(rect.topLeft(), chromeFor(static_cast<Material>(type.material)));
 
-    // The dry-killer lock is a property of position, so it is recomputed here
-    // rather than stored: the first module that generates new material.
+    // The dry-killer lock is a property of position, so it is recomputed rather
+    // than stored: the first module that generates new material.
     bool locked = false;
     for (int i = 0; i <= index; ++i) {
         if (catalogue().at(m_modules.at(i).type).generatesNewMaterial) {
@@ -524,40 +675,32 @@ void WDeckRack::paintModule(QPainter* pPainter, int index) {
         }
     }
 
-    // The big knob first, then the rest in a column. 204 px is not wide enough
-    // for two side by side with captions that can be read at arm's length, so
-    // they stack.
-    const int top = rect.top() + 46;
+    // The name, engraved into the title strip at the top.
+    const QRect face = rect.adjusted(3, 3, -3, -3);
+    const QRect strip(face.left() + 5, face.top() + 5, face.width() - 10, 30);
+    QFont font = pPainter->font();
+    font.setPixelSize(17);
+    font.setBold(true);
+    font.setLetterSpacing(QFont::AbsoluteSpacing, 2.0);
+    pPainter->setFont(font);
+    paintEngraved(pPainter,
+            strip.adjusted(22, 0, -6, 0),
+            Qt::AlignVCenter | Qt::AlignLeft,
+            type.name,
+            accentFor(type.material));
+    font.setLetterSpacing(QFont::PercentageSpacing, 100.0);
+    pPainter->setFont(font);
+
     for (int k = 0; k < type.knobs.size(); ++k) {
-        const int size = k == 0 ? 78 : 58;
-        const int y = top + (k == 0 ? 0 : 104 + (k - 1) * 82);
-        const QRect knobRect(rect.center().x() - size / 2, y, size, size);
         paintKnob(pPainter,
-                knobRect,
+                knobGeometry(rect, type.knobs.size(), k),
                 knobValue(index, k),
                 type.knobs.at(k).first,
                 static_cast<Material>(type.material),
                 k == 0 && locked);
     }
 
-    // Name plate, bottom left (PRD §6).
-    QFont font = pPainter->font();
-    font.setPixelSize(20);
-    font.setBold(true);
-    pPainter->setFont(font);
-    const QRect plate(rect.left() + 14, rect.bottom() - 52, rect.width() - 28, 28);
-    pPainter->setPen(Qt::NoPen);
-    pPainter->setBrush(QColor(0, 0, 0, 40));
-    pPainter->drawRoundedRect(plate, 3, 3);
-    paintBevel(pPainter, plate, false);
-    paintEngraved(pPainter,
-            plate,
-            Qt::AlignCenter,
-            type.name,
-            type.material == 3 ? kPanelInkLight : kPanelInk);
-
     if (m_heldModule == index) {
-        // Held: dashed outline, and it follows the finger.
         pPainter->setBrush(Qt::NoBrush);
         pPainter->setPen(QPen(QColor(0x88, 0xFF, 0x00), 3, Qt::DashLine));
         pPainter->drawRect(rect.adjusted(2, 2, -2, -2));
@@ -568,34 +711,55 @@ void WDeckRack::paintMaster(QPainter* pPainter) {
     const QRect rect = masterRect();
     pPainter->drawPixmap(rect.topLeft(), chromeFor(Material::BrushedSteel));
 
-    const double level = m_pMasterMix->valid() ? m_pMasterMix->getParameter() : 0.0;
+    const QRect face = rect.adjusted(3, 3, -3, -3);
+    const QRect strip(face.left() + 5, face.top() + 5, face.width() - 10, 30);
+    QFont font = pPainter->font();
+    font.setPixelSize(17);
+    font.setBold(true);
+    font.setLetterSpacing(QFont::AbsoluteSpacing, 2.0);
+    pPainter->setFont(font);
+    paintEngraved(pPainter,
+            strip.adjusted(22, 0, -6, 0),
+            Qt::AlignVCenter | Qt::AlignLeft,
+            tr("MASTER"),
+            accentFor(0));
+    font.setLetterSpacing(QFont::PercentageSpacing, 100.0);
+
+    // While muted the knob keeps showing the level it will come back to, drawn
+    // grey. Snapping to zero would lose the one thing worth knowing -- how loud
+    // unmuting is about to be.
     const bool muted = m_mutedLevel >= 0.0;
-    const QRect knobRect(rect.center().x() - 55, rect.top() + 70, 110, 110);
+    const double level = muted
+            ? m_mutedLevel
+            : (m_pMasterMix->valid() ? m_pMasterMix->getParameter() : 0.0);
+    const QRect knobRect(rect.center().x() - 52, strip.bottom() + 26, 104, 104);
     paintKnob(pPainter,
             knobRect,
-            muted ? 0.0 : level,
-            muted ? tr("MUTED") : tr("MASTER"),
+            level,
+            muted ? tr("MUTED") : tr("OUT"),
             Material::BrushedSteel,
-            false);
+            false,
+            muted);
 
-    QFont font = pPainter->font();
-    font.setPixelSize(20);
+    // The number, because a knob pointer is not a reading. Big enough to catch
+    // from across the booth, which is the whole job of a master.
+    font.setPixelSize(34);
     font.setBold(true);
     pPainter->setFont(font);
-    const QRect plate(rect.left() + 14, rect.bottom() - 52, rect.width() - 28, 28);
-    pPainter->setPen(Qt::NoPen);
-    pPainter->setBrush(muted ? QColor(0x60, 0x00, 0x00, 90) : QColor(0, 0, 0, 40));
-    pPainter->drawRoundedRect(plate, 3, 3);
-    paintBevel(pPainter, plate, false);
-    paintEngraved(pPainter, plate, Qt::AlignCenter, tr("OUT"), kPanelInk);
+    const QRect readout(face.left(), knobRect.bottom() + 26, face.width(), 40);
+    paintEngraved(pPainter,
+            readout,
+            Qt::AlignCenter,
+            QStringLiteral("%1").arg(qRound(level * 100)),
+            muted ? QColor(0x8A, 0x90, 0x9B) : accentFor(0));
 
-    font.setPixelSize(13);
+    font.setPixelSize(12);
     font.setBold(false);
     pPainter->setFont(font);
-    pPainter->setPen(QColor(0x55, 0x55, 0x55));
-    pPainter->drawText(QRect(rect.left(), rect.bottom() - 96, rect.width(), 20),
+    pPainter->setPen(QColor(0x5A, 0x5F, 0x68));
+    pPainter->drawText(QRect(face.left(), face.bottom() - 34, face.width(), 18),
             Qt::AlignCenter,
-            tr("encoder · press to mute"));
+            muted ? tr("press to unmute") : tr("press to mute"));
 }
 
 void WDeckRack::paintNameBar(QPainter* pPainter) {
@@ -652,7 +816,9 @@ void WDeckRack::paintEvent(QPaintEvent*) {
     painter.fillRect(rect(), QColor(0x0C, 0x0C, 0x0C));
 
     for (int i = 0; i < m_modules.size(); ++i) {
-        paintModule(&painter, i);
+        if (i != m_heldModule) {
+            paintModule(&painter, i);
+        }
     }
 
     const QRect plus = plusRect();
@@ -695,6 +861,17 @@ void WDeckRack::paintEvent(QPaintEvent*) {
         painter.drawText(bin.adjusted(0, bin.height() - 18, 0, 0), Qt::AlignHCenter | Qt::AlignTop, tr("remove"));
     }
 
+    if (m_heldModule >= 0) {
+        // Last, and under the finger. Dragging something you cannot see is the
+        // difference between a reorder that works and one that is believed.
+        const QRect home = moduleRect(m_heldModule);
+        const QPoint offset(m_heldPos.x() - home.center().x(),
+                m_heldPos.y() - home.center().y());
+        painter.setOpacity(0.92);
+        paintModule(&painter, m_heldModule, offset);
+        painter.setOpacity(1.0);
+    }
+
     if (m_chooserOpen) {
         paintChooser(&painter);
     }
@@ -723,13 +900,10 @@ bool WDeckRack::knobAt(const QPoint& point, int* pModule, int* pKnob) const {
     }
     const QRect rect = moduleRect(index);
     const auto& type = catalogue().at(m_modules.at(index).type);
-    const int top = rect.top() + 46;
     for (int k = 0; k < type.knobs.size(); ++k) {
-        const int size = k == 0 ? 78 : 58;
-        const int y = top + (k == 0 ? 0 : 104 + (k - 1) * 82);
-        // Generous: a finger is wider than a knob, and the captions below are
+        // Generous: a finger is wider than a knob, and the caption below it is
         // dead space anyway.
-        const QRect hit(rect.center().x() - size / 2 - 12, y - 8, size + 24, size + 26);
+        const QRect hit = knobGeometry(rect, type.knobs.size(), k).adjusted(-10, -8, 10, 22);
         if (hit.contains(point)) {
             *pModule = index;
             *pKnob = k;
@@ -885,7 +1059,9 @@ bool WDeckRack::handleMove(int steps) {
     // The encoder is the master, and only the master. Unmuting by turning would
     // be a surprise, so a turn while muted sets the level it will come back to.
     const double base = m_mutedLevel >= 0.0 ? m_mutedLevel : m_pMasterMix->getParameter();
-    const double next = qBound(0.0, base + steps * 0.02, 1.0);
+    // 0.028 per detent: 40% faster than it was, which is the difference
+    // between riding the master and winding it.
+    const double next = qBound(0.0, base + steps * 0.028, 1.0);
     if (m_mutedLevel >= 0.0) {
         m_mutedLevel = next;
     } else {
