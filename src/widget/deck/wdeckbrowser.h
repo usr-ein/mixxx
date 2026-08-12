@@ -23,6 +23,7 @@ class ControlPushButton;
 class Library;
 class BaseTrackCache;
 class QStackedWidget;
+class EffectsManager;
 
 namespace mixxx {
 namespace deck {
@@ -84,7 +85,10 @@ class WDeckBrowser : public QWidget, public WBaseWidget {
     Q_OBJECT
 
   public:
-    WDeckBrowser(QWidget* pParent, Library* pLibrary, UserSettingsPointer pConfig);
+    WDeckBrowser(QWidget* pParent,
+            Library* pLibrary,
+            UserSettingsPointer pConfig,
+            EffectsManager* pEffectsManager);
     ~WDeckBrowser() override;
 
     void setup(const QDomNode& node, const SkinContext& context);

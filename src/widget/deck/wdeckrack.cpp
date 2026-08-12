@@ -9,6 +9,10 @@
 
 #include "control/controlproxy.h"
 #include "effects/defs.h"
+#include "effects/effectchain.h"
+#include "effects/effectsmanager.h"
+#include "effects/presets/effectchainpreset.h"
+#include "effects/presets/effectchainpresetmanager.h"
 #include "moc_wdeckrack.cpp"
 
 namespace {
@@ -16,6 +20,9 @@ namespace {
 /// The pedal bus. Unit 2 rather than 1 because unit 1 is the deck's own, wired
 /// to [Channel1]; this one is routed to [Auxiliary1] and to nothing else.
 const QString kUnit = QStringLiteral("[EffectRack1_EffectUnit2]");
+/// The same unit, as the index EffectsManager takes: units are 1-based in the
+/// control group and 0-based in the list.
+constexpr int kUnitNumber = 1;
 
 QString slotGroup(int slot) {
     return QStringLiteral("[EffectRack1_EffectUnit2_Effect%1]").arg(slot + 1);
@@ -181,8 +188,9 @@ const QVector<CatalogueEntry>& catalogue() {
 
 } // namespace
 
-WDeckRack::WDeckRack(QWidget* pParent)
-        : QWidget(pParent) {
+WDeckRack::WDeckRack(EffectsManager* pEffectsManager, QWidget* pParent)
+        : QWidget(pParent),
+          m_pEffectsManager(pEffectsManager) {
     setObjectName(QStringLiteral("DeckRack"));
     setAutoFillBackground(true);
     setMouseTracking(false);
@@ -224,6 +232,7 @@ void WDeckRack::setActive(bool active) {
     } else {
         m_refresh.stop();
         m_chooserOpen = false;
+        m_browserOpen = false;
         m_heldModule = -1;
     }
     update();
@@ -345,6 +354,83 @@ QString WDeckRack::generatedName() const {
         }
     }
     return parts.isEmpty() ? tr("EMPTY RACK") : parts.join(QStringLiteral("  →  "));
+}
+
+// ---------------------------------------------------------------------------
+// Saved racks
+//
+// Stock Mixxx chain presets, which is why there is so little here: they are
+// already XML files under ~/.mixxx/effects/chains -- the SD card on this deck
+// -- already loaded at startup, already listed, already deletable. A rack is a
+// chain, so saving one is saving a chain preset and nothing needed inventing.
+// ---------------------------------------------------------------------------
+
+QStringList WDeckRack::savedRacks() const {
+    QStringList names;
+    if (!m_pEffectsManager) {
+        return names;
+    }
+    const auto pManager = m_pEffectsManager->getChainPresetManager();
+    if (!pManager) {
+        return names;
+    }
+    for (const auto& pPreset : pManager->getPresetsSorted()) {
+        // The nameless placeholder Mixxx keeps for "no effects" is not a rack.
+        if (pPreset && !pPreset->name().isEmpty()) {
+            names << pPreset->name();
+        }
+    }
+    return names;
+}
+
+void WDeckRack::saveCurrentRack() {
+    if (!m_pEffectsManager) {
+        return;
+    }
+    const auto pManager = m_pEffectsManager->getChainPresetManager();
+    EffectChainPointer pChain = m_pEffectsManager->getStandardEffectChain(kUnitNumber);
+    if (!pManager || !pChain) {
+        return;
+    }
+    auto pPreset = EffectChainPresetPointer::create(pChain.data());
+    // Generated, never typed. A deck with no keyboard should not ask for one,
+    // and a rack's identity really is its contents -- the date is what
+    // separates two racks built from the same modules.
+    pPreset->setName(QStringLiteral("%1  %2")
+                             .arg(generatedName().replace(QStringLiteral("  →  "),
+                                     QStringLiteral("-")))
+                             .arg(QDate::currentDate().toString(QStringLiteral("yyyy-MM-dd"))));
+    pManager->savePreset(pPreset);
+}
+
+void WDeckRack::loadRack(const QString& name) {
+    if (!m_pEffectsManager) {
+        return;
+    }
+    const auto pManager = m_pEffectsManager->getChainPresetManager();
+    EffectChainPointer pChain = m_pEffectsManager->getStandardEffectChain(kUnitNumber);
+    if (!pManager || !pChain) {
+        return;
+    }
+    const auto pPreset = pManager->getPreset(name);
+    if (!pPreset) {
+        return;
+    }
+    pChain->loadChainPreset(pPreset);
+    // A loaded preset carries its own mix mode, and a rack that came back as
+    // DRY/WET would put the dry into a mixer that already has it.
+    pChain->setMixMode(EffectChainMixMode::WetOnly);
+    syncFromEngine();
+}
+
+void WDeckRack::deleteRack(const QString& name) {
+    if (!m_pEffectsManager) {
+        return;
+    }
+    const auto pManager = m_pEffectsManager->getChainPresetManager();
+    if (pManager) {
+        pManager->deletePreset(name);
+    }
 }
 
 // ---------------------------------------------------------------------------
@@ -777,7 +863,9 @@ void WDeckRack::paintNameBar(QPainter* pPainter) {
     font.setBold(true);
     pPainter->setFont(font);
     pPainter->setPen(kLcdInk);
-    pPainter->drawText(rect.adjusted(20, 0, -20, 0), Qt::AlignVCenter | Qt::AlignLeft, generatedName());
+    pPainter->drawText(rect.adjusted(20, 0, -20, 0),
+            Qt::AlignVCenter | Qt::AlignLeft,
+            generatedName() + QStringLiteral("   ▾"));
 
     font.setPixelSize(15);
     font.setBold(false);
@@ -805,6 +893,44 @@ void WDeckRack::paintNameBar(QPainter* pPainter) {
     pPainter->setFont(font);
     pPainter->setPen(source == 0 ? kLcdEdge.lighter(140) : kLcdInk);
     pPainter->drawText(rect.adjusted(0, 0, -140, 0), Qt::AlignVCenter | Qt::AlignRight, tempo);
+}
+
+QRect WDeckRack::rackBrowserRowRect(int index) const {
+    const int rowHeight = 58;
+    const int top = kNameBarHeight + 24 + index * (rowHeight + 6);
+    return QRect(60, top, width() - 120, rowHeight);
+}
+
+void WDeckRack::paintRackBrowser(QPainter* pPainter) {
+    pPainter->fillRect(rect(), QColor(0, 0, 0, 216));
+
+    QFont font = pPainter->font();
+    font.setPixelSize(16);
+    font.setBold(true);
+    pPainter->setFont(font);
+    pPainter->setPen(kLcdInk);
+    pPainter->drawText(QRect(60, kNameBarHeight - 6, width() - 120, 24),
+            Qt::AlignVCenter | Qt::AlignLeft,
+            tr("SAVED RACKS   ·   hold a row to delete"));
+
+    const QStringList names = savedRacks();
+    // Row 0 is always "save this one", so an empty list is still a usable
+    // screen rather than a dead end.
+    for (int i = 0; i <= names.size(); ++i) {
+        const QRect row = rackBrowserRowRect(i);
+        if (row.bottom() > height() - kBezelHeight) {
+            break;
+        }
+        const bool isSave = i == 0;
+        pPainter->fillRect(row, isSave ? QColor(0x18, 0x2C, 0x10) : QColor(0x16, 0x18, 0x1C));
+        paintBevel(pPainter, row, true);
+        font.setPixelSize(20);
+        pPainter->setFont(font);
+        pPainter->setPen(isSave ? QColor(0x88, 0xFF, 0x00) : QColor(0xDD, 0xDD, 0xDD));
+        pPainter->drawText(row.adjusted(20, 0, -20, 0),
+                Qt::AlignVCenter | Qt::AlignLeft,
+                isSave ? tr("+  Save this rack") : names.at(i - 1));
+    }
 }
 
 void WDeckRack::paintChooser(QPainter* pPainter) {
@@ -898,6 +1024,9 @@ void WDeckRack::paintEvent(QPaintEvent*) {
     if (m_chooserOpen) {
         paintChooser(&painter);
     }
+    if (m_browserOpen) {
+        paintRackBrowser(&painter);
+    }
 }
 
 // ---------------------------------------------------------------------------
@@ -938,6 +1067,32 @@ bool WDeckRack::knobAt(const QPoint& point, int* pModule, int* pKnob) const {
 
 void WDeckRack::mousePressEvent(QMouseEvent* pEvent) {
     const QPoint point = pEvent->pos();
+
+    if (m_browserOpen) {
+        const QStringList names = savedRacks();
+        for (int i = 0; i <= names.size(); ++i) {
+            if (!rackBrowserRowRect(i).contains(point)) {
+                continue;
+            }
+            if (i == 0) {
+                saveCurrentRack();
+            } else {
+                loadRack(names.at(i - 1));
+            }
+            break;
+        }
+        m_browserOpen = false;
+        update();
+        return;
+    }
+
+    // The name bar is the handle for the saved racks: it already names the one
+    // on screen, so it is where a DJ looks for the others.
+    if (point.y() < kNameBarHeight) {
+        m_browserOpen = true;
+        update();
+        return;
+    }
 
     if (m_chooserOpen) {
         const int columns = catalogue().size();
@@ -1112,6 +1267,11 @@ bool WDeckRack::handleSelect() {
 bool WDeckRack::handleBack() {
     // BACK leaves the innermost mode first: the chooser, then a held module,
     // and only then the page.
+    if (m_browserOpen) {
+        m_browserOpen = false;
+        update();
+        return true;
+    }
     if (m_chooserOpen) {
         m_chooserOpen = false;
         update();

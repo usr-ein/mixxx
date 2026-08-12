@@ -11,6 +11,7 @@
 #include "widget/deck/deckpage.h"
 
 class ControlProxy;
+class EffectsManager;
 
 namespace mixxx {
 namespace deck {
@@ -37,7 +38,10 @@ class WDeckRack : public QWidget, public DeckPage {
     Q_OBJECT
 
   public:
-    explicit WDeckRack(QWidget* pParent = nullptr);
+    /// *pEffectsManager* may be null in a build with no effects; the rack then
+    /// still draws and still drives the chain through controls, and only the
+    /// saving and loading of whole racks is unavailable.
+    explicit WDeckRack(EffectsManager* pEffectsManager, QWidget* pParent = nullptr);
     ~WDeckRack() override;
 
     /// Refresh only while on screen; values are read from controls rather than
@@ -128,6 +132,16 @@ class WDeckRack : public QWidget, public DeckPage {
     void applyWetLock();
     QString generatedName() const;
 
+    // ---- saved racks -------------------------------------------------------
+    /// The saved racks, newest first. Stock Mixxx chain presets, which live as
+    /// XML under `~/.mixxx/effects/chains` -- the SD card, on this deck.
+    QStringList savedRacks() const;
+    void saveCurrentRack();
+    void loadRack(const QString& name);
+    void deleteRack(const QString& name);
+    void paintRackBrowser(QPainter* pPainter);
+    QRect rackBrowserRowRect(int index) const;
+
     // ---- hit testing -------------------------------------------------------
     /// Which module and knob is under a point, or -1.
     bool knobAt(const QPoint& point, int* pModule, int* pKnob) const;
@@ -153,6 +167,9 @@ class WDeckRack : public QWidget, public DeckPage {
     QPoint m_heldPos;
 
     bool m_chooserOpen = false;
+    /// The saved-rack list, opened by tapping the name bar.
+    bool m_browserOpen = false;
+    EffectsManager* m_pEffectsManager = nullptr;
     /// Last tap, for the double-tap reset.
     QElapsedTimer m_tapTimer;
     QPoint m_lastTapPos;

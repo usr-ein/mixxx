@@ -1082,7 +1082,7 @@ QWidget* LegacySkinParser::parseVisual(const QDomElement& node) {
 }
 
 QWidget* LegacySkinParser::parseDeckBrowser(const QDomElement& node) {
-    auto* pBrowser = new mixxx::deck::WDeckBrowser(m_pParent, m_pLibrary, m_pConfig);
+    auto* pBrowser = new mixxx::deck::WDeckBrowser(m_pParent, m_pLibrary, m_pConfig, m_pEffectsManager);
     commonWidgetSetup(node, pBrowser);
     pBrowser->setup(node, *m_pContext);
     pBrowser->installEventFilter(m_pKeyboard);

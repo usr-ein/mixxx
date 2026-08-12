@@ -115,7 +115,10 @@ void DeckSortChip::mouseReleaseEvent(QMouseEvent* pEvent) {
     pEvent->accept();
 }
 
-WDeckBrowser::WDeckBrowser(QWidget* pParent, Library* pLibrary, UserSettingsPointer pConfig)
+WDeckBrowser::WDeckBrowser(QWidget* pParent,
+        Library* pLibrary,
+        UserSettingsPointer pConfig,
+        EffectsManager* pEffectsManager)
         : QWidget(pParent),
           WBaseWidget(this),
           m_pLibrary(pLibrary),
@@ -321,7 +324,7 @@ WDeckBrowser::WDeckBrowser(QWidget* pParent, Library* pLibrary, UserSettingsPoin
     m_pDiagnostics = new WDeckDiagnostics(m_pStack);
     m_pStack->addWidget(m_pDiagnostics);
 
-    m_pRack = new WDeckRack(m_pStack);
+    m_pRack = new WDeckRack(pEffectsManager, m_pStack);
     m_pStack->addWidget(m_pRack);
 
     connect(m_pKeyboard, &WDeckKeyboard::keyPressed, this, [this](const QString& c) {
