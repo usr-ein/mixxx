@@ -210,6 +210,24 @@ class ProLinkNetworkService : public QObject {
     /// Drain the library's events and re-read its tables. On a timer.
     void poll();
 
+    /// Publish the tempo the effect rack should run at, and which deck it is.
+    ///
+    /// The rack processes the mixer's aux send -- several decks at once -- so
+    /// "the" tempo is a choice rather than a fact. It is made by **age**: of
+    /// everything playing, the one that has been playing longest wins, and it
+    /// keeps winning until it stops. A deck that has just been started is the
+    /// one least likely to be the tempo the room is on; it is far more often
+    /// the next record being cued in at a tempo that has not been matched yet,
+    /// and letting that snatch the delay time mid-transition is exactly the
+    /// wrong moment for it.
+    ///
+    /// Candidates are the Pro DJ Link players worth following and this deck's
+    /// own player, judged the same way.
+    /// Takes no arguments and reads the player table itself: the cxx bridge's
+    /// types are only visible inside the .cpp, and a header that named them
+    /// would drag the generated bindings into everything that includes it.
+    void publishEffectTempo();
+
     /// Publish the tempo master's number, tempo and bar phase as controls.
     ///
     /// `[ProLink] master_device`, `master_bpm` and `master_bar_phase`, which is
@@ -357,6 +375,11 @@ class ProLinkNetworkService : public QObject {
     std::unique_ptr<ControlProxy> m_pDeckPlayPosition;
     std::unique_ptr<ControlProxy> m_pDeckBeatDistance;
     QList<ProLinkDevice> m_devices;
+    /// When each candidate started playing, keyed by the source code
+    /// `[EffectTempo] source` uses: 1-4 a player, 5 this deck. Entries are
+    /// dropped the moment a deck stops, so a deck that pauses and restarts is
+    /// correctly the youngest again.
+    QHash<int, qint64> m_playingSince;
     QHash<quint32, Pending> m_pending;
     bool m_listening = false;
     int m_announcedNumber = 0;

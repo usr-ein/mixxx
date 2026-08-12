@@ -10,6 +10,12 @@ const QString kGroup = QStringLiteral("[ProLink]");
 ConfigKey key(const char* item) {
     return ConfigKey(kGroup, QString::fromLatin1(item));
 }
+
+const QString kFxGroup = QStringLiteral("[EffectTempo]");
+
+ConfigKey fxKey(const char* item) {
+    return ConfigKey(kFxGroup, QString::fromLatin1(item));
+}
 } // namespace
 
 namespace mixxx {
@@ -21,6 +27,11 @@ namespace prolink {
 
 ProLinkControls::ProLinkControls() {
     m_pPullDb = std::make_unique<ControlPushButton>(key("pull_db"));
+
+    m_pFxBpm = std::make_unique<ControlObject>(fxKey("bpm"));
+    m_pFxBpmSource = std::make_unique<ControlObject>(fxKey("source"));
+    m_pFxBpm->setReadOnly();
+    m_pFxBpmSource->setReadOnly();
 
     m_pMasterDevice = std::make_unique<ControlObject>(key("master_device"));
     m_pMasterBpm = std::make_unique<ControlObject>(key("master_bpm"));

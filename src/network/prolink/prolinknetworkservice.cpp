@@ -1,5 +1,8 @@
 #include "network/prolink/prolinknetworkservice.h"
 
+#include <QDateTime>
+#include <limits>
+
 #include <QDir>
 #include <QFile>
 #include <QHostAddress>
@@ -584,6 +587,10 @@ void ProLinkNetworkService::publishMaster() {
         return;
     }
 
+    // Before the early return below: this deck's own tempo is a candidate even
+    // when there is no Pro DJ Link network at all.
+    publishEffectTempo();
+
     if (!m_pImpl->pSession) {
         m_pControls->isMaster()->forceSet(0.0);
         m_pControls->masterDevice()->forceSet(0.0);
@@ -683,6 +690,78 @@ void ProLinkNetworkService::publishMaster() {
     m_pControls->masterDevice()->forceSet(0.0);
     m_pControls->masterBpm()->forceSet(0.0);
     m_pControls->masterBarPhase()->forceSet(-1.0);
+}
+
+void ProLinkNetworkService::publishEffectTempo() {
+    if (!m_pControls) {
+        return;
+    }
+    if (!m_pImpl->pSession) {
+        // No network at all. This deck can still be playing, so fall through
+        // with an empty player list rather than returning: its own tempo is a
+        // perfectly good one to run the rack at.
+        m_playingSince.remove(1);
+        m_playingSince.remove(2);
+        m_playingSince.remove(3);
+        m_playingSince.remove(4);
+    }
+    const ::rust::Vec<::prolink::Player> players = m_pImpl->pSession
+            ? (*m_pImpl->pSession)->players()
+            : ::rust::Vec<::prolink::Player>();
+
+    // Source codes are the ones [EffectTempo] source documents: 1-4 a Pro DJ
+    // Link player, 5 this deck.
+    constexpr int kOwnDeck = 5;
+    const qint64 now = QDateTime::currentMSecsSinceEpoch();
+
+    QHash<int, double> playing;
+    for (const ::prolink::Player& player : players) {
+        // The same test the phase meter follows, so the rack and the meter
+        // never disagree about who is playing. Cued, paused, searching and
+        // spun-down decks are excluded by it -- which is the whole point here,
+        // since a deck sitting on its cue point is the one whose tempo must
+        // not be taken.
+        if (!isWorthFollowing(player) || player.effective_bpm <= 0.0) {
+            continue;
+        }
+        const int number = static_cast<int>(player.number);
+        if (number >= 1 && number <= 4) {
+            playing.insert(number, player.effective_bpm);
+        }
+    }
+    // This deck counts as a candidate on the same terms as any other.
+    if (m_pDeckPlay && m_pDeckPlay->toBool() && m_pDeckBpm && m_pDeckBpm->get() > 0.0) {
+        playing.insert(kOwnDeck, m_pDeckBpm->get());
+    }
+
+    // Forget anything that stopped. Done before the pick rather than after, so
+    // a deck that pauses and restarts is correctly the youngest again rather
+    // than keeping the seniority it had before it stopped.
+    for (auto it = m_playingSince.begin(); it != m_playingSince.end();) {
+        if (playing.contains(it.key())) {
+            ++it;
+        } else {
+            it = m_playingSince.erase(it);
+        }
+    }
+    for (auto it = playing.constBegin(); it != playing.constEnd(); ++it) {
+        if (!m_playingSince.contains(it.key())) {
+            m_playingSince.insert(it.key(), now);
+        }
+    }
+
+    // Oldest wins, and keeps winning until it stops.
+    int chosen = 0;
+    qint64 oldest = std::numeric_limits<qint64>::max();
+    for (auto it = m_playingSince.constBegin(); it != m_playingSince.constEnd(); ++it) {
+        if (it.value() < oldest || (it.value() == oldest && it.key() < chosen)) {
+            oldest = it.value();
+            chosen = it.key();
+        }
+    }
+
+    m_pControls->fxBpmSource()->forceSet(chosen);
+    m_pControls->fxBpm()->forceSet(chosen == 0 ? 0.0 : playing.value(chosen));
 }
 
 void ProLinkNetworkService::publishMasterTrack(const MasterTrack& track) {

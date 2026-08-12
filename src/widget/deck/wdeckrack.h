@@ -158,6 +158,11 @@ class WDeckRack : public QWidget, public DeckPage {
     QPoint m_lastTapPos;
 
     std::unique_ptr<ControlProxy> m_pMasterMix;
+    /// The tempo the rack is running at and which deck it came from, shown in
+    /// the name bar. A beat-synced delay that is following the wrong deck looks
+    /// identical to one that is broken, so it says which.
+    std::unique_ptr<ControlProxy> m_pFxBpm;
+    std::unique_ptr<ControlProxy> m_pFxBpmSource;
     double m_mutedLevel = -1.0; ///< >= 0 while muted: what to restore
 };
 

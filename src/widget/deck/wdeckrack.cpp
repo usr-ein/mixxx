@@ -188,6 +188,10 @@ WDeckRack::WDeckRack(QWidget* pParent)
     setMouseTracking(false);
 
     m_pMasterMix = std::make_unique<ControlProxy>(kUnit, QStringLiteral("mix"));
+    m_pFxBpm = std::make_unique<ControlProxy>(
+            QStringLiteral("[EffectTempo]"), QStringLiteral("bpm"));
+    m_pFxBpmSource = std::make_unique<ControlProxy>(
+            QStringLiteral("[EffectTempo]"), QStringLiteral("source"));
 
     // Long enough not to fire on a firm tap, short enough that it does not feel
     // like the deck ignored you.
@@ -782,6 +786,25 @@ void WDeckRack::paintNameBar(QPainter* pPainter) {
     pPainter->drawText(rect.adjusted(20, 0, -20, 0),
             Qt::AlignVCenter | Qt::AlignRight,
             QDate::currentDate().toString(QStringLiteral("yyyy-MM-dd")));
+
+    // Which deck the beat-aware effects are following, and at what tempo. A
+    // delay quantised to the wrong deck sounds exactly like a broken one, so
+    // this is not a nicety: it is the difference between "the sync is on the
+    // other CDJ" and "the sync is broken".
+    const double bpm = m_pFxBpm->valid() ? m_pFxBpm->get() : 0.0;
+    const int source = m_pFxBpmSource->valid() ? static_cast<int>(m_pFxBpmSource->get()) : 0;
+    QString tempo;
+    if (source == 5) {
+        tempo = tr("♪ THIS DECK  %1").arg(bpm, 0, 'f', 1);
+    } else if (source >= 1 && source <= 4) {
+        tempo = tr("♪ CDJ %1  %2").arg(source).arg(bpm, 0, 'f', 1);
+    } else {
+        tempo = tr("♪ no deck playing");
+    }
+    font.setBold(source != 0);
+    pPainter->setFont(font);
+    pPainter->setPen(source == 0 ? kLcdEdge.lighter(140) : kLcdInk);
+    pPainter->drawText(rect.adjusted(0, 0, -140, 0), Qt::AlignVCenter | Qt::AlignRight, tempo);
 }
 
 void WDeckRack::paintChooser(QPainter* pPainter) {

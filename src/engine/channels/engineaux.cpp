@@ -3,8 +3,10 @@
 #include <QtDebug>
 
 #include "control/controlaudiotaperpot.h"
+#include "control/controlproxy.h"
 #include "effects/effectsmanager.h"
 #include "engine/effects/engineeffectsmanager.h"
+#include "engine/effects/groupfeaturestate.h"
 #include "moc_engineaux.cpp"
 #include "util/sample.h"
 
@@ -17,6 +19,9 @@ EngineAux::EngineAux(const ChannelHandleAndGroup& handleGroup, EffectsManager* p
     // Make input_configured read-only.
     m_pInputConfigured->setReadOnly();
     m_pInputConfigured->addAlias(ConfigKey(getGroup(), QStringLiteral("enabled")));
+
+    m_pFxBpm = std::make_unique<ControlProxy>(
+            QStringLiteral("[EffectTempo]"), QStringLiteral("bpm"));
 
     // by default Aux is disabled on the main and disabled on PFL. User
     // can over-ride by setting the "pfl" or "main_mix" controls.
@@ -93,4 +98,20 @@ void EngineAux::process(CSAMPLE* pOut, const int iBufferSize) {
 
 void EngineAux::collectFeatures(GroupFeatureState* pGroupFeatures) const {
     m_vuMeter.collectFeatures(pGroupFeatures);
+
+    // Lend the aux a beatgrid it cannot have of its own. What arrives here is
+    // several decks summed by a mixer; there is no track, no analysis and no
+    // playposition, so the only honest tempo is the one some deck reports it is
+    // playing at.
+    //
+    // Only the length, not the phase: `beat_fraction_buffer_end` is left unset
+    // deliberately. Knowing how long a beat is makes Echo's Quantize snap the
+    // delay to a musical division, which is the useful part. Knowing *where*
+    // the beat is would need the phase of a signal that is a mix of several
+    // decks, arriving 32 ms late -- and there is no single right answer to
+    // give, so none is given.
+    const double bpm = m_pFxBpm ? m_pFxBpm->get() : 0.0;
+    if (bpm > 0.0) {
+        pGroupFeatures->beat_length = {60.0 / bpm, 1.0};
+    }
 }

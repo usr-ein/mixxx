@@ -79,6 +79,22 @@ class ProLinkControls {
     ControlPushButton* keySyncEnabled() const {
         return m_pKeySyncEnabled.get();
     }
+    /// The tempo the effect rack should run at, in BPM, or `0` for none.
+    ///
+    /// Group `[EffectTempo]` rather than `[ProLink]`, because one of the decks
+    /// it can name is this one and calling that a Pro DJ Link tempo would be a
+    /// lie. It is created here anyway, and only because of the ordering this
+    /// class exists for: the rack and the aux channel both read it, and both
+    /// are built after the skin.
+    ControlObject* fxBpm() const {
+        return m_pFxBpm.get();
+    }
+    /// Which deck that tempo came from: `0` none, `1`–`4` a Pro DJ Link player,
+    /// `5` this deck's own player.
+    ControlObject* fxBpmSource() const {
+        return m_pFxBpmSource.get();
+    }
+
     /// Whether pressing KEY SYNC would do anything: another player holds tempo
     /// master and we know what key its track is in. Read-only.
     ///
@@ -100,6 +116,8 @@ class ProLinkControls {
     std::unique_ptr<ControlPushButton> m_pSyncEnabled;
     std::unique_ptr<ControlPushButton> m_pKeySyncEnabled;
     std::unique_ptr<ControlObject> m_pKeySyncAvailable;
+    std::unique_ptr<ControlObject> m_pFxBpm;
+    std::unique_ptr<ControlObject> m_pFxBpmSource;
 };
 
 } // namespace prolink
