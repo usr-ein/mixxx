@@ -760,8 +760,28 @@ void ProLinkNetworkService::publishEffectTempo() {
         }
     }
 
+    const double bpm = chosen == 0 ? 0.0 : playing.value(chosen);
     m_pControls->fxBpmSource()->forceSet(chosen);
-    m_pControls->fxBpm()->forceSet(chosen == 0 ? 0.0 : playing.value(chosen));
+    m_pControls->fxBpm()->forceSet(bpm);
+
+    // Announced on a change, not on a poll. Which deck the effects are
+    // quantised to is invisible from the audio -- a delay following the wrong
+    // deck sounds like a broken delay, not like a delay following the wrong
+    // deck -- so the one place it can be checked after the fact is here.
+    // Half a BPM, because a pitch fader being nudged is not an event.
+    if (chosen != m_loggedTempoSource || std::abs(bpm - m_loggedTempoBpm) > 0.5) {
+        m_loggedTempoSource = chosen;
+        m_loggedTempoBpm = bpm;
+        if (chosen == 0) {
+            kLogger.info() << "effect tempo: no deck playing";
+        } else {
+            kLogger.info() << "effect tempo:"
+                           << (chosen == 5 ? QStringLiteral("this deck")
+                                           : QStringLiteral("player %1").arg(chosen))
+                           << "at" << bpm << "BPM"
+                           << "(oldest of" << m_playingSince.size() << "playing)";
+        }
+    }
 }
 
 void ProLinkNetworkService::publishMasterTrack(const MasterTrack& track) {

@@ -380,6 +380,10 @@ class ProLinkNetworkService : public QObject {
     /// dropped the moment a deck stops, so a deck that pauses and restarts is
     /// correctly the youngest again.
     QHash<int, qint64> m_playingSince;
+    /// What was last announced, so the tempo source is logged when it moves
+    /// rather than thirty times a second.
+    int m_loggedTempoSource = -1;
+    double m_loggedTempoBpm = 0.0;
     QHash<quint32, Pending> m_pending;
     bool m_listening = false;
     int m_announcedNumber = 0;
