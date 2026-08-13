@@ -172,6 +172,10 @@ class WDeckRack : public QWidget, public DeckPage {
     int m_scrollStart = 0;
     int m_heldModule = -1; ///< long-pressed, being reordered
     QPoint m_heldPos;
+    /// Where in the module the finger landed, so the drag holds that point
+    /// rather than snapping the module's centre to the finger. Picking
+    /// something up should not move it.
+    QPoint m_heldGrab;
 
     bool m_chooserOpen = false;
     /// The saved-rack list, opened by tapping the name bar.

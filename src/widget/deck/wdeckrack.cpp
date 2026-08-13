@@ -250,6 +250,9 @@ WDeckRack::WDeckRack(EffectsManager* pEffectsManager, QWidget* pParent)
             return;
         }
         m_heldModule = moduleAt(m_heldPos);
+        if (m_heldModule >= 0) {
+            m_heldGrab = m_heldPos - moduleRect(m_heldModule).topLeft();
+        }
         // A held module cancels whatever else the finger might have started.
         m_dragKnobModule = -1;
         m_scrolling = false;
@@ -1252,9 +1255,11 @@ void WDeckRack::paintEvent(QPaintEvent*) {
     if (m_heldModule >= 0) {
         // Last, and under the finger. Dragging something you cannot see is the
         // difference between a reorder that works and one that is believed.
+        // Held at the point it was grabbed by, not by its centre. Snapping the
+        // centre to the finger made the module jump the moment it was picked
+        // up, which reads as having grabbed the wrong one.
         const QRect home = moduleRect(m_heldModule);
-        const QPoint offset(m_heldPos.x() - home.center().x(),
-                m_heldPos.y() - home.center().y());
+        const QPoint offset = m_heldPos - (home.topLeft() + m_heldGrab);
         painter.setOpacity(0.92);
         paintModule(&painter, m_heldModule, offset);
         painter.setOpacity(1.0);
