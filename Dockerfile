@@ -34,6 +34,20 @@ FROM ${BASE} AS build
 # keyed on it, because they hold compiler output and two Debian releases must
 # not share them. See the RUN that builds mixxx.
 ARG BASE
+# Off by default: the unstripped binary is 526 MB against a 23 MB one, and a
+# routine build should not carry it. Turned on only to read a backtrace; see
+# the `debug` stage.
+ARG WITH_DEBUG=0
+# Capped rather than $(nproc), for the same reason the unittest stage below is:
+# several of Mixxx's translation units are large enough that a full-width build
+# exhausts the Docker VM's memory and the OOM killer takes cc1plus with it. The
+# failure reads "fatal error: Killed signal terminated program cc1plus", which
+# does not obviously say "out of memory".
+#
+# It only bites on a COLD build -- an incremental one compiles a handful of
+# files and never gets wide enough to matter -- which is why this went unnoticed
+# until the first build after the ccache was pruned.
+ARG MIXXX_BUILD_JOBS=4
 
 # Mixxx's build dependencies, from packaging/debian/control.in. Only the mixxx
 # target is built here, so libbenchmark-dev and xvfb are left out -- but not
@@ -110,9 +124,9 @@ RUN --mount=type=cache,target=/build,sharing=locked,id=mixxx-build-${BASE} \
         -DINSTALL_USER_UDEV_RULES=OFF \
         -DCMAKE_C_COMPILER_LAUNCHER=ccache \
         -DCMAKE_CXX_COMPILER_LAUNCHER=ccache \
-    && cmake --build /build --target mixxx --parallel "$(nproc)" \
+    && cmake --build /build --target mixxx --parallel "${MIXXX_BUILD_JOBS}" \
     && strip -o /mixxx /build/mixxx \
-    && cp /build/mixxx /mixxx.debug
+    && if [ "$WITH_DEBUG" = "1" ]; then cp /build/mixxx /mixxx.debug; else : > /mixxx.debug; fi
 
 # Export stage: `--output` copies just the binary out to the host.
 FROM scratch AS export
@@ -124,7 +138,8 @@ COPY --from=build /mixxx /mixxx
 # The two have identical layout, so an address from a stripped run resolves
 # against this one:
 #
-#   docker build --target debug --output type=local,dest=dist .
+#   docker build --target debug --build-arg WITH_DEBUG=1 \
+#       --output type=local,dest=dist .
 #   # on the deck: gdb -p $(pgrep -x mixxx) ... bt ; info proc mappings
 #   # here: addr2line -fCe dist/mixxx.debug <addr - loadbase>
 FROM scratch AS debug

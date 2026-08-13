@@ -102,7 +102,11 @@ class WDeckRack : public QWidget, public DeckPage {
             Material material,
             bool locked,
             /// Drawn in grey, still showing its value: the master while muted.
-            bool greyed = false);
+            bool greyed = false,
+            /// The encoder is pointed at this one, and says so with a ring.
+            /// A wheel that drives a different knob depending on history is
+            /// worse than one that only ever drove the master.
+            bool focused = false);
     /// A recessed slot with a segmented ladder in it, green through amber to
     /// red, the way the reference skins draw theirs. *level* is a linear
     /// amplitude, 0..1, as the engine publishes it; the scale is dB, because a
@@ -157,6 +161,27 @@ class WDeckRack : public QWidget, public DeckPage {
     /// Which row is under a point, or -1. Row 0 is "save this one".
     int rackBrowserRowAt(const QPoint& point) const;
     int rackBrowserScrollSpan() const;
+
+    // ---- encoder focus (PRD §17.4) -----------------------------------------
+    /// The knob the encoder is currently turning: a module index and a knob
+    /// index, or {-1, -1} for the master.
+    ///
+    /// A filter sweep wants the detented wheel, not a fingertip dragged 200 px
+    /// up a 204 px module -- so touching a knob claims the encoder. The press
+    /// never moves: it is the master's mute whatever the rotation is pointed
+    /// at, because that is the panic button.
+    int m_focusModule = -1;
+    int m_focusKnob = -1;
+    /// Take focus if this knob can use it. A locked wet knob refuses, because
+    /// claiming the encoder with a knob that cannot turn would silently
+    /// disable the wheel.
+    void focusKnob(int moduleIndex, int knobIndex);
+    /// True while *knobIndex* on *moduleIndex* is the first dry-killer's wet
+    /// knob, which §3.2 pins at 100%.
+    bool knobIsLocked(int moduleIndex, int knobIndex) const;
+    /// Move the focused knob by *steps* detents. Snapped knobs move one stop
+    /// per detent; everything else moves by a fixed fraction of its travel.
+    void turnFocusedKnob(int steps);
 
     // ---- hit testing -------------------------------------------------------
     /// Which module and knob is under a point, or -1.

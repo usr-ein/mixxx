@@ -473,6 +473,10 @@ void WDeckRack::syncFromEngine() {
         }
     }
     m_modules = found;
+    if (m_focusModule >= m_modules.size()) {
+        m_focusModule = -1;
+        m_focusKnob = -1;
+    }
     m_slide.fill(0.0, m_modules.size());
     applyWetLock();
 }
@@ -573,6 +577,56 @@ void WDeckRack::persistSoon() {
         return;
     }
     m_persist.start();
+}
+
+bool WDeckRack::knobIsLocked(int moduleIndex, int knobIndex) const {
+    // PRD §3.2: the first module that generates new material runs fully wet,
+    // and its wet knob is knob 0.
+    if (knobIndex != 0 || moduleIndex < 0 || moduleIndex >= m_modules.size()) {
+        return false;
+    }
+    for (int i = 0; i <= moduleIndex; ++i) {
+        if (catalogue().at(m_modules.at(i).type).generatesNewMaterial) {
+            return i == moduleIndex;
+        }
+    }
+    return false;
+}
+
+void WDeckRack::focusKnob(int moduleIndex, int knobIndex) {
+    // A locked knob refuses focus rather than taking it and doing nothing: an
+    // encoder that silently stops working is worse than one that never moved.
+    if (knobIsLocked(moduleIndex, knobIndex)) {
+        return;
+    }
+    m_focusModule = moduleIndex;
+    m_focusKnob = knobIndex;
+}
+
+void WDeckRack::turnFocusedKnob(int steps) {
+    if (m_focusModule < 0 || m_focusModule >= m_modules.size()) {
+        return;
+    }
+    const Module& module = m_modules.at(m_focusModule);
+    const auto& type = catalogue().at(module.type);
+    if (m_focusKnob < 0 || m_focusKnob >= type.knobs.size() || module.slot < 0) {
+        return;
+    }
+    const auto& spec = type.knobs.at(m_focusKnob);
+    if (spec.readout == Readout::Beats) {
+        // One detent, one division. The step size is a property of the knob
+        // and not a constant: these are stops, and a wheel that moved a
+        // fraction of the way to the next one would be a wheel that sometimes
+        // did nothing.
+        auto* pControl = slotControl(module.slot, spec.item);
+        const int index = qBound(0,
+                beatDivisionIndex(pControl->get()) + steps,
+                static_cast<int>(kBeatDivisions.size()) - 1);
+        pControl->set(kBeatDivisions.at(index));
+    } else {
+        setKnobValue(m_focusModule, m_focusKnob, knobValue(m_focusModule, m_focusKnob) + steps * 0.02);
+    }
+    persistSoon();
 }
 
 ControlProxy* WDeckRack::masterControl() const {
@@ -1018,13 +1072,23 @@ void WDeckRack::paintKnob(QPainter* pPainter,
         const QString& caption,
         Material material,
         bool locked,
-        bool greyed) {
+        bool greyed,
+        bool focused) {
     const int index = static_cast<int>(material);
     const MaterialColors colors = capColorsFor(index);
     const bool paleCap = index == 0 ? false : index == 3;
     const QPoint centre = rect.center();
     const int radius = rect.width() / 2 - 2;
     const QColor live = greyed ? QColor(0x77, 0x7D, 0x86) : QColor(0x88, 0xFF, 0x00);
+
+    if (focused) {
+        // A lit collar, outside the ticks so it never obscures the value. This
+        // is the whole of what makes rotation-follows-touch safe to use: the
+        // knob the wheel will move is the one wearing the ring.
+        pPainter->setBrush(Qt::NoBrush);
+        pPainter->setPen(QPen(QColor(0x88, 0xFF, 0x00), 2));
+        pPainter->drawEllipse(rect.adjusted(-13, -13, 13, 13));
+    }
 
     // Tick marks around the travel, like the scale printed round a real pot.
     // Cheap, and it is most of what tells you where the middle is.
@@ -1265,7 +1329,9 @@ void WDeckRack::paintModule(QPainter* pPainter, int index, const QPoint& offset)
                 knobValue(index, k),
                 caption,
                 static_cast<Material>(type.material),
-                k == 0 && locked);
+                k == 0 && locked,
+                false,
+                index == m_focusModule && k == m_focusKnob);
     }
 
     if (m_heldModule == index) {
@@ -1308,7 +1374,8 @@ void WDeckRack::paintMaster(QPainter* pPainter) {
             muted ? tr("MUTED") : (m_ringOut ? tr("SEND") : tr("RETURN")),
             Material::BrushedSteel,
             false,
-            muted);
+            muted,
+            m_focusModule < 0);
 
     // The number, because a knob pointer is not a reading. Big enough to catch
     // from across the booth, which is the whole job of a master. In dB, since
@@ -1683,6 +1750,14 @@ void WDeckRack::mousePressEvent(QMouseEvent* pEvent) {
         return;
     }
 
+    if (point.x() >= width() - kModuleWidth && point.y() >= kNameBarHeight) {
+        // The master module takes the encoder back, which is how a DJ returns
+        // the wheel to the level without hunting for a gesture.
+        m_focusModule = -1;
+        m_focusKnob = -1;
+        update();
+    }
+
     if (masterRockerRect().contains(point)) {
         // Which half was tapped, so tapping the side already lit does nothing
         // rather than toggling away from it.
@@ -1718,6 +1793,7 @@ void WDeckRack::mousePressEvent(QMouseEvent* pEvent) {
         }
         m_tapTimer.restart();
         m_lastTapPos = point;
+        focusKnob(moduleIndex, knobIndex);
         m_dragKnobModule = moduleIndex;
         m_dragKnobIndex = knobIndex;
         m_dragStartValue = knobValue(moduleIndex, knobIndex);
@@ -1781,17 +1857,7 @@ void WDeckRack::mouseMoveEvent(QMouseEvent* pEvent) {
         // Vertical only, so a sloppy diagonal still turns cleanly. Full travel
         // over ~200 px: fine control in one movement.
         const double delta = (m_dragStart.y() - point.y()) / 200.0;
-        const bool locked = m_dragKnobIndex == 0 &&
-                catalogue().at(module.type).generatesNewMaterial &&
-                [&] {
-                    for (const Module& other : m_modules) {
-                        if (catalogue().at(other.type).generatesNewMaterial) {
-                            return other.slot == module.slot;
-                        }
-                    }
-                    return false;
-                }();
-        if (!locked) {
+        if (!knobIsLocked(m_dragKnobModule, m_dragKnobIndex)) {
             setKnobValue(m_dragKnobModule, m_dragKnobIndex, m_dragStartValue + delta);
             persistSoon();
             update();
@@ -1826,6 +1892,14 @@ void WDeckRack::mouseMoveEvent(QMouseEvent* pEvent) {
                 if (i != target) {
                     startSlide(i, moduleRect(i - step).x());
                 }
+            }
+            // The encoder is pointed at a module, not at a slot, so its focus
+            // travels with the module rather than staying where it was.
+            if (m_focusModule == m_heldModule) {
+                m_focusModule = target;
+            } else if (m_focusModule >= qMin(m_heldModule, target) &&
+                    m_focusModule <= qMax(m_heldModule, target)) {
+                m_focusModule += step;
             }
             m_heldModule = target;
         }
@@ -1879,6 +1953,13 @@ void WDeckRack::mouseReleaseEvent(QMouseEvent* pEvent) {
         const QPoint point = pEvent->pos();
         if (binRect().contains(point)) {
             m_modules.removeAt(m_heldModule);
+            // The encoder cannot stay pointed at a module that is in the bin.
+            if (m_focusModule == m_heldModule) {
+                m_focusModule = -1;
+                m_focusKnob = -1;
+            } else if (m_focusModule > m_heldModule) {
+                --m_focusModule;
+            }
             m_slide.fill(0.0, m_modules.size());
         } else {
             // Nothing to decide here any more: the rack has been showing the
@@ -1902,6 +1983,13 @@ void WDeckRack::mouseReleaseEvent(QMouseEvent* pEvent) {
 // ---------------------------------------------------------------------------
 
 bool WDeckRack::handleMove(int steps) {
+    // Rotation follows the last knob touched (PRD §17.4). Nothing touched yet
+    // -- the state the page opens in -- and it is the master, as it always was.
+    if (m_focusModule >= 0) {
+        turnFocusedKnob(steps);
+        update();
+        return true;
+    }
     ControlProxy* pMaster = masterControl();
     if (!pMaster || !pMaster->valid()) {
         return true;
