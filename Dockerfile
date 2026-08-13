@@ -111,11 +111,24 @@ RUN --mount=type=cache,target=/build,sharing=locked,id=mixxx-build-${BASE} \
         -DCMAKE_C_COMPILER_LAUNCHER=ccache \
         -DCMAKE_CXX_COMPILER_LAUNCHER=ccache \
     && cmake --build /build --target mixxx --parallel "$(nproc)" \
-    && strip -o /mixxx /build/mixxx
+    && strip -o /mixxx /build/mixxx \
+    && cp /build/mixxx /mixxx.debug
 
 # Export stage: `--output` copies just the binary out to the host.
 FROM scratch AS export
 COPY --from=build /mixxx /mixxx
+
+# The same binary with its symbols still on, for reading a backtrace off the
+# deck. It is NOT installed there -- RelWithDebInfo debug info is an order of
+# magnitude larger than the binary and the deck gains nothing from carrying it.
+# The two have identical layout, so an address from a stripped run resolves
+# against this one:
+#
+#   docker build --target debug --output type=local,dest=dist .
+#   # on the deck: gdb -p $(pgrep -x mixxx) ... bt ; info proc mappings
+#   # here: addr2line -fCe dist/mixxx.debug <addr - loadbase>
+FROM scratch AS debug
+COPY --from=build /mixxx.debug /mixxx.debug
 
 # Unit tests, for the parts of the tree that can be checked without hardware.
 #

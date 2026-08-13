@@ -801,6 +801,17 @@ void ProLinkNetworkService::publishMasterTrack(const MasterTrack& track) {
 /*static*/ ProLinkNetworkService* ProLinkNetworkService::s_pListening = nullptr;
 
 ProLinkNetworkService::~ProLinkNetworkService() {
+    // Signals blocked for the whole teardown. shutdown() reports every device
+    // as lost and the serve status as gone, which is right when the network is
+    // being stopped and wrong when the object is being destroyed: whoever is
+    // listening is either already dead or, worse, dying -- a listener that is
+    // itself mid-destruction will happily run the handler against members it
+    // has already destroyed.
+    //
+    // This is the general form of the fix; MediaRegistry also disconnects
+    // itself explicitly, because relying on one object to remember what
+    // another one's destructor emits is how this went unnoticed for a day.
+    blockSignals(true);
     shutdown();
 }
 

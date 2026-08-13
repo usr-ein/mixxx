@@ -169,6 +169,21 @@ class WDeckRack : public QWidget, public DeckPage {
 
     QTimer m_refresh;
     QTimer m_longPress;
+    /// Writes effects.xml a moment after the rack stops changing.
+    ///
+    /// Mixxx only persists the effect state from ~EffectsManager, at the end
+    /// of a teardown -- and this deck's teardown crashes before it gets there,
+    /// so for a day and a half the rack silently did not persist at all. Even
+    /// with that fixed it would be the wrong place to rely on: a booth deck
+    /// gets switched off at the wall, and no destructor runs then either.
+    ///
+    /// Debounced rather than written on every change, because dragging a knob
+    /// is hundreds of changes and this serialises every chain in the session.
+    QTimer m_persist;
+    void persistSoon();
+    /// False until the constructor has finished reading the rack back, so the
+    /// initial write is not mistaken for a change worth saving.
+    bool m_ready = false;
     /// Runs only while something is sliding into its new place, and stops
     /// itself when everything has arrived.
     QTimer m_slideTimer;

@@ -79,6 +79,14 @@ class EffectsManager {
 
     bool isAdoptMetaknobSettingEnabled() const;
 
+    /// Write effects.xml now, rather than waiting for the destructor.
+    ///
+    /// Public because state that only reaches disk at the end of a teardown is
+    /// state that is lost whenever the teardown does not finish -- and on this
+    /// deck it does not (see worklog/effect-pedal/TODO.md). A booth appliance
+    /// is also power-cycled at the wall, which no destructor survives either.
+    void saveEffectsXml();
+
   private:
     void addStandardEffectChains();
     void addOutputEffectChain();
@@ -88,7 +96,6 @@ class EffectsManager {
 
     void readEffectsXml();
     void readEffectsXmlSingleDeck(const QString& deckGroup);
-    void saveEffectsXml();
 
     QSet<ChannelHandleAndGroup> m_registeredInputChannels;
     QSet<ChannelHandleAndGroup> m_registeredOutputChannels;

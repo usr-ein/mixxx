@@ -351,6 +351,17 @@ WDeckRack::WDeckRack(EffectsManager* pEffectsManager,
     m_slideTimer.setInterval(25);
     connect(&m_slideTimer, &QTimer::timeout, this, [this] { stepSlide(); });
 
+    // Two seconds after the last change. Long enough that a knob sweep writes
+    // once, short enough that the rack is on disk before a DJ has moved on to
+    // the next thing.
+    m_persist.setSingleShot(true);
+    m_persist.setInterval(2000);
+    connect(&m_persist, &QTimer::timeout, this, [this] {
+        if (m_pEffectsManager) {
+            m_pEffectsManager->saveEffectsXml();
+        }
+    });
+
     m_tapTimer.start();
     // Read back the rack the deck was left with -- EffectsManager restores the
     // standard chains from effects.xml before the skin is parsed -- and then
@@ -364,6 +375,7 @@ WDeckRack::WDeckRack(EffectsManager* pEffectsManager,
     // they were using last night.
     syncFromEngine();
     writeChainToEngine();
+    m_ready = true;
 }
 
 WDeckRack::~WDeckRack() = default;
@@ -548,6 +560,19 @@ void WDeckRack::writeChainToEngine() {
         m_pMasterMix->set(1.0);
     }
     applyWetLock();
+    persistSoon();
+}
+
+void WDeckRack::persistSoon() {
+    // Not during construction. The first writeChainToEngine() happens before
+    // anyone has touched anything, so persisting it would rewrite the file
+    // from whatever was just read -- and a single bad read would then be
+    // permanent, having overwritten the good copy two seconds into the boot
+    // that misread it. Only changes a DJ actually made are worth saving.
+    if (!m_ready) {
+        return;
+    }
+    m_persist.start();
 }
 
 ControlProxy* WDeckRack::masterControl() const {
@@ -1749,6 +1774,7 @@ void WDeckRack::mouseMoveEvent(QMouseEvent* pEvent) {
                     m_dragStartIndex + steps,
                     static_cast<int>(kBeatDivisions.size()) - 1);
             slotControl(module.slot, spec.item)->set(kBeatDivisions.at(index));
+            persistSoon();
             update();
             return;
         }
@@ -1767,6 +1793,7 @@ void WDeckRack::mouseMoveEvent(QMouseEvent* pEvent) {
                 }();
         if (!locked) {
             setKnobValue(m_dragKnobModule, m_dragKnobIndex, m_dragStartValue + delta);
+            persistSoon();
             update();
         }
         return;

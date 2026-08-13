@@ -202,6 +202,24 @@ MediaRegistry::~MediaRegistry() {
     if (s_pInstance == this) {
         s_pInstance = nullptr;
     }
+    // Stop listening to the ProLink service before it is torn down, because
+    // tearing it down is not silent.
+    //
+    // ~ProLinkNetworkService calls shutdown(), which reports every device it
+    // still had as lost -- and this object is what listens for that. The
+    // service is a member, so by the time it is destroyed this destructor's
+    // body has already run and member destruction is under way: onDeviceLost()
+    // would then run a database query against a half-destroyed registry.
+    //
+    // That is exactly what it did. glibc aborted inside malloc during
+    // clearMedium()'s QSqlResult::savePrepare, part-way through
+    // QObjectPrivate::deleteChildren -- so Mixxx segfaulted on every shutdown,
+    // never reached ~EffectsManager, and effects.xml silently stopped being
+    // written. The effect rack appeared not to persist for a day and a half
+    // because of a signal emitted from a destructor.
+    if (m_pNetwork) {
+        m_pNetwork->disconnect(this);
+    }
     // The worker holds a pool pointer and writes to the database; letting it
     // finish is cheaper than making every step of it cancellable.
     if (m_readWatcher.isRunning()) {
