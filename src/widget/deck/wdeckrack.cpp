@@ -222,13 +222,23 @@ const QVector<CatalogueEntry>& catalogue() {
                     // an echo: one repeat, not a train. Send wide open, as above.
                     //
                     // quantize off, and that one is not optional: it defaults
-                    // ON and rounds the time to the nearest 1/4 beat, which
-                    // would silently turn every 1/16 and 1/8 the rack offers
-                    // into a 1/4.
+                    // ON and rounds the time to the nearest 1/4 beat, so a 1/16
+                    // and a 1/8 both come out as a 1/4 -- exactly double -- and
+                    // the knob goes on reading what you asked for.
+                    //
+                    // It is `button_parameter1`, NOT `parameter5`. The two
+                    // toggles are numbered in their own sequence: a Toggle
+                    // value scaler forces ParameterType::Button
+                    // (effectmanifestparameter.h), and button slots are named
+                    // `button_parameterN` from their own list. Writing
+                    // `parameter5` hits a knob slot with nothing loaded in it,
+                    // which is a silent no-op -- and reads back as 0.0, so even
+                    // syncFromEngine's check passed vacuously.
                     {{QStringLiteral("parameter2"), 0.0},
                             {QStringLiteral("parameter3"), 0.0},
                             {QStringLiteral("parameter4"), 1.0},
-                            {QStringLiteral("parameter5"), 0.0}},
+                            {QStringLiteral("button_parameter1"), 0.0},
+                            {QStringLiteral("button_parameter2"), 0.0}},
                     {}},
             {QStringLiteral("ECHO"),
                     QStringLiteral("ECH"),
@@ -241,9 +251,10 @@ const QVector<CatalogueEntry>& catalogue() {
                                     Readout::Beats},
                             {QStringLiteral("FDBK"), QStringLiteral("parameter2")},
                             {QStringLiteral("P-PONG"), QStringLiteral("parameter3")}},
-                    // quantize off, as for Delay above.
+                    // quantize and triplets off, as for Delay above.
                     {{QStringLiteral("parameter4"), 1.0},
-                            {QStringLiteral("parameter5"), 0.0}},
+                            {QStringLiteral("button_parameter1"), 0.0},
+                            {QStringLiteral("button_parameter2"), 0.0}},
                     {}},
             // The filters have no WET knob, and that is not an omission: see
             // PRD §15.6. Blending a filter against its own input puts

@@ -312,6 +312,10 @@ ProLinkNetworkService::ProLinkNetworkService(QObject* parent)
             m_alignWhenTempoMatches = true;
         }
     });
+
+    // Poll from the start, network or not: the effect rack needs a beat length
+    // whether or not there is a CDJ to take it from.
+    startPolling();
 }
 
 /*static*/ const char* ProLinkNetworkService::kDeckGroup = "[Channel1]";
@@ -586,10 +590,6 @@ void ProLinkNetworkService::publishMaster() {
     if (!m_pControls) {
         return;
     }
-
-    // Before the early return below: this deck's own tempo is a candidate even
-    // when there is no Pro DJ Link network at all.
-    publishEffectTempo();
 
     if (!m_pImpl->pSession) {
         m_pControls->isMaster()->forceSet(0.0);
@@ -881,11 +881,7 @@ void ProLinkNetworkService::start() {
     emit listeningChanged(true, QString());
     emit announceChanged(m_announcedNumber, m_announceDetail);
 
-    if (m_pTimer == nullptr) {
-        m_pTimer = new QTimer(this);
-        connect(m_pTimer, &QTimer::timeout, this, &ProLinkNetworkService::poll);
-    }
-    m_pTimer->start(kPollIntervalMs);
+    startPolling();
 }
 
 void ProLinkNetworkService::shutdown() {
@@ -1153,7 +1149,30 @@ void ProLinkNetworkService::fetchArtwork(const QByteArray& mac,
     }
 }
 
+void ProLinkNetworkService::startPolling() {
+    // Independent of whether a session ever opened. poll() publishes the
+    // effect tempo before it looks at the session, and this deck's own tempo
+    // is worth publishing with no network present at all.
+    if (m_pTimer == nullptr) {
+        m_pTimer = new QTimer(this);
+        connect(m_pTimer, &QTimer::timeout, this, &ProLinkNetworkService::poll);
+    }
+    if (!m_pTimer->isActive()) {
+        m_pTimer->start(kPollIntervalMs);
+    }
+}
+
 void ProLinkNetworkService::poll() {
+    // Before the session check, because it does not need one. This deck can be
+    // playing with no Pro DJ Link network at all -- nothing plugged into the
+    // ethernet port, or open() lost the race for UDP 50000 -- and its own
+    // tempo is a perfectly good one to run the rack at. publishEffectTempo()
+    // was written to handle exactly that and could never be reached to do it:
+    // the early return below skipped it, and the timer that calls poll() is
+    // only started after a successful open(). So with no network the rack got
+    // no beat length and every delay division was read as that many SECONDS.
+    publishEffectTempo();
+
     if (!m_pImpl->pSession) {
         return;
     }

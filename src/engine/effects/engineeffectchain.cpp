@@ -295,7 +295,16 @@ bool EngineEffectChain::process(const ChannelHandle& inputHandle,
                                 m_mixMode != EffectChainMixMode::DrySlashWet;
 
                         if (!skipAddingDry) {
-                            for (SINT i = 0; i <= static_cast<SINT>(numSamples); ++i) {
+                            // `<`, not `<=`. Upstream reads and writes one
+                            // sample past the end of BOTH buffers here. It is
+                            // usually harmless because the buffers are sized
+                            // for the largest callback the engine allows, but
+                            // at that size it is a genuine heap overflow -- and
+                            // this deck has been chasing shutdown heap
+                            // corruption, so a known out-of-bounds write in the
+                            // audio thread is not something to leave lying
+                            // around. Worth offering upstream.
+                            for (SINT i = 0; i < static_cast<SINT>(numSamples); ++i) {
                                 pIntermediateOutput[i] += pIntermediateInput[i];
                             }
                         }

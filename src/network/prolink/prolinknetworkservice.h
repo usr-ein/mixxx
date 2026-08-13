@@ -208,6 +208,8 @@ class ProLinkNetworkService : public QObject {
 
   private:
     /// Drain the library's events and re-read its tables. On a timer.
+    /// Start the poll timer, whether or not a session opened.
+    void startPolling();
     void poll();
 
     /// Publish the tempo the effect rack should run at, and which deck it is.

@@ -96,12 +96,10 @@ void EngineEffectsManager::processPreFaderInPlace(const ChannelHandle& inputHand
         const ChannelHandle& outputHandle,
         CSAMPLE* pInOut,
         unsigned int numSamples,
-        mixxx::audio::SampleRate sampleRate,
-        const GroupFeatureState& groupFeatures) {
-    // Upstream gathers feature state only after prefader processing, on the
-    // grounds that the equalizer effects do not use it. That holds for the
-    // decks; it does not hold for a channel whose prefader chain is a rack of
-    // beat-aware effects, so the caller may hand its own in.
+        mixxx::audio::SampleRate sampleRate) {
+    // Feature state is gathered after prefader effects processing.
+    // This is okay because the equalizer effects do not make use of it.
+    GroupFeatureState groupFeatures;
     processInner(SignalProcessingStage::Prefader,
             inputHandle,
             outputHandle,
