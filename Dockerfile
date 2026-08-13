@@ -4,9 +4,13 @@
 # binary has to link against exactly the libraries already on the device. Two
 # things follow from that:
 #
-#   - BASE must be the same Debian release the Pi runs. upload.sh reads that off
-#     the device and passes it in; a newer release links against a newer glibc
-#     and the binary then refuses to start on the Pi.
+#   - BASE must be the same Debian release the Pi runs, which is trixie. It is
+#     pinned here and in upload.sh rather than read off the device, so a build
+#     does not need the deck switched on and cannot quietly change release;
+#     upload.sh checks the deck against the pin and stops if they disagree. A
+#     newer release links against a newer glibc and the binary then refuses to
+#     start on the Pi; an older one fails at the link step, described further
+#     down beside the build tree's cache key.
 #   - Anything this build links dynamically has to already be on the Pi. The
 #     dependencies below are Mixxx's own Debian build-deps, so that holds by
 #     construction; upload.sh re-checks with ldd before installing anyway.
@@ -26,6 +30,10 @@
 
 ARG BASE=debian:trixie
 FROM ${BASE} AS build
+# Re-declared so it can be read inside the stage: the cache mounts below are
+# keyed on it, because they hold compiler output and two Debian releases must
+# not share them. See the RUN that builds mixxx.
+ARG BASE
 
 # Mixxx's build dependencies, from packaging/debian/control.in. Only the mixxx
 # target is built here, so libbenchmark-dev and xvfb are left out -- but not
@@ -82,7 +90,17 @@ COPY . /src
 # here, configures the mixxx-test target, and then fails to generate because
 # GTest::gmock is a separate Debian package that only the unittest stage below
 # installs. The failure is a configure error about a target nobody asked for.
-RUN --mount=type=cache,target=/build,sharing=locked \
+#
+# The build tree is keyed on BASE, and that is not tidiness. It holds
+# prolink-rust/release/libprolink_cxx.a -- the C++ shim the cxx crate generates,
+# compiled by the *container's* g++ and not by rustc. Shared across releases, a
+# copy built by trixie's g++ survives into a bookworm build and the link fails
+# with `undefined reference to __cxa_call_terminate`, which reads as a problem
+# with the Rust library and is nothing of the sort.
+#
+# ccache does not need this -- it hashes the compiler into its keys -- and the
+# cargo registry is source only. This is the one that matters.
+RUN --mount=type=cache,target=/build,sharing=locked,id=mixxx-build-${BASE} \
     --mount=type=cache,target=/ccache,sharing=locked \
     --mount=type=cache,target=/opt/cargo/registry,sharing=locked \
     export CCACHE_DIR=/ccache \
@@ -119,6 +137,10 @@ COPY --from=build /mixxx /mixxx
 # being checked.
 FROM build AS unittest
 ARG GTEST_FILTER=*
+# ARG scope is per stage, so this has to be repeated to key the test build tree
+# on it below -- an unset BASE would silently collapse every release onto one
+# cache again.
+ARG BASE
 # Parallelism is capped rather than $(nproc): the test tree is ~700 translation
 # units and several of Mixxx's are large enough that a full-width build exhausts
 # the Docker VM's memory and the OOM killer takes cc1plus with it. The failure
@@ -134,7 +156,7 @@ RUN apt-get update && apt-get install -y --no-install-recommends libgmock-dev \
 # off, and flipping that setting back and forth in a shared tree would make
 # every alternate build a near-full rebuild. The ccache is shared, so most
 # object files are hits anyway.
-RUN --mount=type=cache,target=/build-test,sharing=locked \
+RUN --mount=type=cache,target=/build-test,sharing=locked,id=mixxx-build-test-${BASE} \
     --mount=type=cache,target=/ccache,sharing=locked \
     --mount=type=cache,target=/opt/cargo/registry,sharing=locked \
     export CCACHE_DIR=/ccache \
