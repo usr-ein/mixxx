@@ -14,9 +14,24 @@ DIST="${DIST:-dist}"
 cd "$(dirname "$0")"
 
 # The binary is only swappable if it was built against the same Debian release
-# the deck runs, so read that off the deck rather than guessing. Set CODENAME=
-# to build while the deck is switched off.
-CODENAME="${CODENAME:-$(ssh "$HOST" '. /etc/os-release && printf %s "$VERSION_CODENAME"')}"
+# the deck runs. That is trixie, and it is pinned here rather than derived, so
+# a build does not need the deck switched on and cannot quietly become a
+# different release. The deck is checked against it below instead.
+#
+# Building against the wrong release does not fail obviously: an older one
+# links a libstdc++ missing symbols the Rust cxx bridge emits and dies at the
+# link step with `undefined reference to __cxa_call_terminate`, a newer one
+# links fine and then refuses to start on the Pi against an older glibc.
+CODENAME="${CODENAME:-trixie}"
+
+# Loud rather than silent when they disagree -- that is the whole reason this
+# is pinned. Skipped if the deck is off, which is a supported way to build.
+DECK_CODENAME="$(ssh -o ConnectTimeout=5 "$HOST" '. /etc/os-release && printf %s "$VERSION_CODENAME"' 2>/dev/null || true)"
+if [ -n "$DECK_CODENAME" ] && [ "$DECK_CODENAME" != "$CODENAME" ]; then
+	echo "==> $HOST runs $DECK_CODENAME, this builds for $CODENAME" >&2
+	echo "==> re-run with CODENAME=$DECK_CODENAME, or fix the pin in this script" >&2
+	exit 1
+fi
 
 docker buildx build --platform linux/arm64 --target export \
 	--build-arg BASE="debian:${CODENAME}" \
