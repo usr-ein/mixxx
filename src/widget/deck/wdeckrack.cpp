@@ -205,7 +205,8 @@ const QVector<CatalogueEntry>& catalogue() {
                     // send_amount wide open: the module's own WET knob is the
                     // level control, and feeding the tank less as well would
                     // make one gesture do two things.
-                    {{QStringLiteral("parameter4"), 1.0}}},
+                    {{QStringLiteral("parameter4"), 1.0}},
+                    {}},
             {QStringLiteral("DELAY"),
                     QStringLiteral("DLY"),
                     1,
@@ -225,7 +226,8 @@ const QVector<CatalogueEntry>& catalogue() {
                     {{QStringLiteral("parameter2"), 0.0},
                             {QStringLiteral("parameter3"), 0.0},
                             {QStringLiteral("parameter4"), 1.0},
-                            {QStringLiteral("parameter5"), 0.0}}},
+                            {QStringLiteral("parameter5"), 0.0}},
+                    {}},
             {QStringLiteral("ECHO"),
                     QStringLiteral("ECH"),
                     2,
@@ -239,7 +241,8 @@ const QVector<CatalogueEntry>& catalogue() {
                             {QStringLiteral("P-PONG"), QStringLiteral("parameter3")}},
                     // quantize off, as for Delay above.
                     {{QStringLiteral("parameter4"), 1.0},
-                            {QStringLiteral("parameter5"), 0.0}}},
+                            {QStringLiteral("parameter5"), 0.0}},
+                    {}},
             // The filters have no WET knob, and that is not an omission: see
             // PRD §15.6. Blending a filter against its own input puts
             // everything in the passband through twice, once filtered and once
@@ -278,14 +281,32 @@ const QVector<CatalogueEntry>& catalogue() {
 
 } // namespace
 
-WDeckRack::WDeckRack(EffectsManager* pEffectsManager, QWidget* pParent)
+WDeckRack::WDeckRack(EffectsManager* pEffectsManager,
+        UserSettingsPointer pConfig,
+        QWidget* pParent)
         : QWidget(pParent),
-          m_pEffectsManager(pEffectsManager) {
+          m_pEffectsManager(pEffectsManager),
+          m_pConfig(pConfig) {
     setObjectName(QStringLiteral("DeckRack"));
     setAutoFillBackground(true);
     setMouseTracking(false);
 
     m_pMasterMix = std::make_unique<ControlProxy>(kUnit, QStringLiteral("mix"));
+    m_pMakeup = std::make_unique<ControlProxy>(kUnit, QStringLiteral("makeup"));
+    m_pAuxPregain = std::make_unique<ControlProxy>(
+            QStringLiteral("[Auxiliary1]"), QStringLiteral("pregain"));
+    if (m_pConfig) {
+        m_ringOut = m_pConfig->getValue(
+                ConfigKey(QStringLiteral("[TriMixxx]"), QStringLiteral("fx_master_ring_out")),
+                true);
+    }
+    // The chain's own mix is not a gain the rack uses: with a makeup control
+    // on the output there is one gain stage, and two would be two things to
+    // find when it comes back quiet. Held wide open.
+    if (m_pMasterMix->valid()) {
+        m_pMasterMix->set(1.0);
+    }
+    setRingOut(m_ringOut);
     m_pFxBpm = std::make_unique<ControlProxy>(
             QStringLiteral("[EffectTempo]"), QStringLiteral("bpm"));
     m_pFxBpmSource = std::make_unique<ControlProxy>(
@@ -516,7 +537,43 @@ void WDeckRack::writeChainToEngine() {
     for (int slot = m_modules.size(); slot < kNumEffectsPerUnit; ++slot) {
         slotControl(slot, QStringLiteral("clear"))->set(1.0);
     }
+    // The chain's mix defaults to 0 -- a fresh or freshly-loaded chain is
+    // silent until something opens it -- and the rack's gain is the makeup
+    // control, not this. Held wide open, here as well as at construction,
+    // because loading a saved rack brings the preset's own value with it.
+    if (m_pMasterMix->valid()) {
+        m_pMasterMix->set(1.0);
+    }
     applyWetLock();
+}
+
+ControlProxy* WDeckRack::masterControl() const {
+    return m_ringOut ? m_pAuxPregain.get() : m_pMakeup.get();
+}
+
+void WDeckRack::setRingOut(bool ringOut) {
+    // Carry the level across rather than leaving it on the control being
+    // abandoned: flipping the rocker changes *where* the gain is applied, not
+    // how loud the rack is, and a jump would make it useless mid-transition.
+    ControlProxy* pWas = masterControl();
+    const double level = pWas && pWas->valid() ? pWas->getParameter() : 0.5;
+    m_ringOut = ringOut;
+    // The one not in use is parked at unity, which on a ±12 dB taper is half
+    // travel and not zero -- parking it at zero would silence the rack through
+    // the stage nothing is driving.
+    ControlProxy* pIdle = m_ringOut ? m_pMakeup.get() : m_pAuxPregain.get();
+    if (pIdle && pIdle->valid()) {
+        pIdle->setParameter(0.5);
+    }
+    ControlProxy* pNow = masterControl();
+    if (pNow && pNow->valid()) {
+        pNow->setParameter(level);
+    }
+    if (m_pConfig) {
+        m_pConfig->setValue(
+                ConfigKey(QStringLiteral("[TriMixxx]"), QStringLiteral("fx_master_ring_out")),
+                m_ringOut);
+    }
 }
 
 void WDeckRack::applyWetLock() {
@@ -1135,29 +1192,57 @@ void WDeckRack::paintMaster(QPainter* pPainter) {
     // grey. Snapping to zero would lose the one thing worth knowing -- how loud
     // unmuting is about to be.
     const bool muted = m_mutedLevel >= 0.0;
+    ControlProxy* pMaster = masterControl();
     const double level = muted
             ? m_mutedLevel
-            : (m_pMasterMix->valid() ? m_pMasterMix->getParameter() : 0.0);
+            : (pMaster && pMaster->valid() ? pMaster->getParameter() : 0.5);
     const QRect knobRect(rect.center().x() - 52, strip.bottom() + 26, 104, 104);
     paintKnob(pPainter,
             knobRect,
             level,
-            muted ? tr("MUTED") : tr("OUT"),
+            muted ? tr("MUTED") : (m_ringOut ? tr("SEND") : tr("RETURN")),
             Material::BrushedSteel,
             false,
             muted);
 
     // The number, because a knob pointer is not a reading. Big enough to catch
-    // from across the booth, which is the whole job of a master.
-    font.setPixelSize(34);
+    // from across the booth, which is the whole job of a master. In dB, since
+    // the knob has gain above unity now and "112" would not say which side of
+    // it you were on.
+    font.setPixelSize(30);
     font.setBold(true);
     pPainter->setFont(font);
-    const QRect readout(face.left(), knobRect.bottom() + 26, face.width(), 40);
+    // Read off the dial position rather than the control, so a muted master
+    // shows the level it will come back to instead of the silence it is at.
+    // Both stages are ±12 dB audio tapers with unity at half travel, so the
+    // position is the scale printed round the knob.
+    const QString reading = level <= 0.0
+            ? QStringLiteral("−∞")
+            : QStringLiteral("%1 dB").arg(level * 24.0 - 12.0, 0, 'f', 1);
+    const QRect readout(face.left(), knobRect.bottom() + 20, face.width(), 36);
     paintEngraved(pPainter,
             readout,
             Qt::AlignCenter,
-            QStringLiteral("%1").arg(qRound(level * 100)),
+            reading,
             muted ? QColor(0x8A, 0x90, 0x9B) : accentFor(0));
+
+    // The rocker: which end of the chain the knob is on.
+    const QRect rocker = masterRockerRect();
+    pPainter->fillRect(rocker, QColor(0, 0, 0, 90));
+    paintBevel(pPainter, rocker, false);
+    const QRect ring(rocker.left() + 2, rocker.top() + 2, rocker.width() / 2 - 3, rocker.height() - 4);
+    const QRect cut(rocker.center().x() + 1, rocker.top() + 2, rocker.width() / 2 - 3, rocker.height() - 4);
+    font.setPixelSize(13);
+    font.setBold(true);
+    pPainter->setFont(font);
+    for (int i = 0; i < 2; ++i) {
+        const QRect half = i == 0 ? ring : cut;
+        const bool on = (i == 0) == m_ringOut;
+        pPainter->fillRect(half, on ? QColor(0x3A, 0x4A, 0x22) : QColor(0x1A, 0x1C, 0x1F));
+        paintBevel(pPainter, half, on);
+        pPainter->setPen(on ? QColor(0xAE, 0xE8, 0x4A) : QColor(0x77, 0x7D, 0x86));
+        pPainter->drawText(half, Qt::AlignCenter, i == 0 ? tr("RING OUT") : tr("CUT"));
+    }
 
     font.setPixelSize(12);
     font.setBold(false);
@@ -1166,6 +1251,15 @@ void WDeckRack::paintMaster(QPainter* pPainter) {
     pPainter->drawText(QRect(face.left(), face.bottom() - 34, face.width(), 18),
             Qt::AlignCenter,
             muted ? tr("press to unmute") : tr("press to mute"));
+}
+
+QRect WDeckRack::masterRockerRect() const {
+    const QRect rect = masterRect();
+    const QRect face = rect.adjusted(3, 3, -3, -3);
+    // Between the readout and the mute hint, both of which are placed off the
+    // module rather than off constants -- the rack's height depends on the
+    // browser's breadcrumb.
+    return QRect(face.left() + 14, face.bottom() - 78, face.width() - 28, 30);
 }
 
 void WDeckRack::paintNameBar(QPainter* pPainter) {
@@ -1476,6 +1570,14 @@ void WDeckRack::mousePressEvent(QMouseEvent* pEvent) {
         return;
     }
 
+    if (masterRockerRect().contains(point)) {
+        // Which half was tapped, so tapping the side already lit does nothing
+        // rather than toggling away from it.
+        setRingOut(point.x() < masterRockerRect().center().x());
+        update();
+        return;
+    }
+
     if (plusRect().isValid() && plusRect().contains(point)) {
         m_chooserOpen = true;
         update();
@@ -1685,34 +1787,38 @@ void WDeckRack::mouseReleaseEvent(QMouseEvent* pEvent) {
 // ---------------------------------------------------------------------------
 
 bool WDeckRack::handleMove(int steps) {
-    if (!m_pMasterMix->valid()) {
+    ControlProxy* pMaster = masterControl();
+    if (!pMaster || !pMaster->valid()) {
         return true;
     }
     // The encoder is the master, and only the master. Unmuting by turning would
     // be a surprise, so a turn while muted sets the level it will come back to.
-    const double base = m_mutedLevel >= 0.0 ? m_mutedLevel : m_pMasterMix->getParameter();
+    const double base = m_mutedLevel >= 0.0 ? m_mutedLevel : pMaster->getParameter();
     // 0.028 per detent: 40% faster than it was, which is the difference
     // between riding the master and winding it.
     const double next = qBound(0.0, base + steps * 0.028, 1.0);
     if (m_mutedLevel >= 0.0) {
         m_mutedLevel = next;
     } else {
-        m_pMasterMix->setParameter(next);
+        pMaster->setParameter(next);
     }
     update();
     return true;
 }
 
 bool WDeckRack::handleSelect() {
-    if (!m_pMasterMix->valid()) {
+    ControlProxy* pMaster = masterControl();
+    if (!pMaster || !pMaster->valid()) {
         return true;
     }
+    // Which of the two this mutes is the rocker's whole point: in ring-out it
+    // is the send, so the tail decays; in cut it is the return, so it stops.
     if (m_mutedLevel >= 0.0) {
-        m_pMasterMix->setParameter(m_mutedLevel);
+        pMaster->setParameter(m_mutedLevel);
         m_mutedLevel = -1.0;
     } else {
-        m_mutedLevel = m_pMasterMix->getParameter();
-        m_pMasterMix->setParameter(0.0);
+        m_mutedLevel = pMaster->getParameter();
+        pMaster->setParameter(0.0);
     }
     update();
     return true;

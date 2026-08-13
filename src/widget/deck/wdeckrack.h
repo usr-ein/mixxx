@@ -8,6 +8,7 @@
 #include <QWidget>
 #include <memory>
 
+#include "preferences/usersettings.h"
 #include "widget/deck/deckpage.h"
 
 class ControlProxy;
@@ -41,7 +42,9 @@ class WDeckRack : public QWidget, public DeckPage {
     /// *pEffectsManager* may be null in a build with no effects; the rack then
     /// still draws and still drives the chain through controls, and only the
     /// saving and loading of whole racks is unavailable.
-    explicit WDeckRack(EffectsManager* pEffectsManager, QWidget* pParent = nullptr);
+    WDeckRack(EffectsManager* pEffectsManager,
+            UserSettingsPointer pConfig,
+            QWidget* pParent = nullptr);
     ~WDeckRack() override;
 
     /// Refresh only while on screen; values are read from controls rather than
@@ -208,7 +211,29 @@ class WDeckRack : public QWidget, public DeckPage {
     QElapsedTimer m_tapTimer;
     QPoint m_lastTapPos;
 
+    /// Which gain the master knob and its mute drive.
+    ///
+    /// **Ring out** scales what goes *into* the chain -- the aux send -- so
+    /// pulling it stops feeding the tank and whatever is in it decays on its
+    /// own. **Cut** scales what comes *out*, so the tail stops dead. That is
+    /// the send/return distinction from `docs/xone92-send-return.md` arriving
+    /// inside the deck; both are musical and they are different gestures.
+    ///
+    /// Default ring out, because it is the one that cannot be got any other
+    /// way. Kept in mixxx.cfg: it is a preference about how the deck plays,
+    /// not a property of a rack.
+    bool m_ringOut = true;
+    /// The gain in force, whichever of the two it is.
+    ControlProxy* masterControl() const;
+    void setRingOut(bool ringOut);
+    QRect masterRockerRect() const;
+
+    UserSettingsPointer m_pConfig;
     std::unique_ptr<ControlProxy> m_pMasterMix;
+    /// The send: [Auxiliary1] pregain, pre-effect, ±12 dB.
+    std::unique_ptr<ControlProxy> m_pAuxPregain;
+    /// The return: the chain's own output gain, the same ±12 dB.
+    std::unique_ptr<ControlProxy> m_pMakeup;
     /// The tempo the rack is running at and which deck it came from, shown in
     /// the name bar. A beat-synced delay that is following the wrong deck looks
     /// identical to one that is broken, so it says which.

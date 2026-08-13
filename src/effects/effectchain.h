@@ -107,6 +107,8 @@ class EffectChain : public QObject {
     EffectChainPresetManagerPointer m_pChainPresetManager;
     EffectsMessengerPointer m_pMessenger;
     std::unique_ptr<ControlObject> m_pControlChainMix;
+    /// Gain on the chain's output, applied in WetOnly mode only.
+    std::unique_ptr<ControlObject> m_pControlChainMakeup;
     std::unique_ptr<ControlObject> m_pControlChainSuperParameter;
     std::unique_ptr<ControlObject> m_pControlNumChainPresets;
     QList<EffectSlotPointer> m_effectSlots;

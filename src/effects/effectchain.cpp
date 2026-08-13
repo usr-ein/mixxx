@@ -1,6 +1,7 @@
 #include "effects/effectchain.h"
 
 #include "control/controlencoder.h"
+#include "control/controlaudiotaperpot.h"
 #include "control/controlpotmeter.h"
 #include "control/controlpushbutton.h"
 #include "effects/effectslot.h"
@@ -65,6 +66,20 @@ EffectChain::EffectChain(const QString& group,
             ConfigKey(m_group, "mix"), 0.0, 1.0, false, true, false, true, 1.0);
     m_pControlChainMix->setDefaultValue(0.0);
     connect(m_pControlChainMix.get(),
+            &ControlObject::valueChanged,
+            this,
+            &EffectChain::sendParameterUpdate);
+
+    // Makeup gain on the chain's output, ±12 dB with unity at half travel --
+    // deliberately the same control and the same range as [AuxiliaryN] pregain
+    // on the other side of the chain, because on this deck the two are the
+    // return and the send and a DJ switches between them.
+    //
+    // Only WetOnly chains apply it: in every other mode the output already
+    // contains the dry at unity and there is nothing to make up.
+    m_pControlChainMakeup = std::make_unique<ControlAudioTaperPot>(
+            ConfigKey(m_group, "makeup"), -12, 12, 0.5);
+    connect(m_pControlChainMakeup.get(),
             &ControlObject::valueChanged,
             this,
             &EffectChain::sendParameterUpdate);
@@ -243,6 +258,7 @@ void EffectChain::sendParameterUpdate() {
     pRequest->SetEffectChainParameters.enabled = m_pControlChainEnabled->toBool();
     pRequest->SetEffectChainParameters.mix_mode = mixMode();
     pRequest->SetEffectChainParameters.mix = m_pControlChainMix->get();
+    pRequest->SetEffectChainParameters.makeup = m_pControlChainMakeup->get();
     m_pMessenger->writeRequest(pRequest);
 }
 

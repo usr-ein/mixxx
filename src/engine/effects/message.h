@@ -89,6 +89,9 @@ struct EffectsRequest {
             bool enabled;
             EffectChainMixMode::Type mix_mode;
             double mix;
+            /// Gain applied to the chain's output on top of `mix`, as a linear
+            /// ratio. WetOnly chains only -- see EngineEffectChain::process().
+            double makeup;
         } SetEffectChainParameters;
         struct {
             bool enabled;

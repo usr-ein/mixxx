@@ -11,6 +11,7 @@ EngineEffectChain::EngineEffectChain(const QString& group,
           m_enableState(true),
           m_mixMode(EffectChainMixMode::DrySlashWet),
           m_dMix(0),
+          m_dMakeup(1.0f),
           m_buffer1(kMaxEngineSamples),
           m_buffer2(kMaxEngineSamples) {
     // Try to prevent memory allocation.
@@ -80,6 +81,7 @@ bool EngineEffectChain::updateParameters(const EffectsRequest& message) {
     // TODO(rryan): Parameter interpolation.
     m_mixMode = message.SetEffectChainParameters.mix_mode;
     m_dMix = static_cast<CSAMPLE>(message.SetEffectChainParameters.mix);
+    m_dMakeup = static_cast<CSAMPLE>(message.SetEffectChainParameters.makeup);
     m_enableState = message.SetEffectParameters.enabled;
     return true;
 }
@@ -220,6 +222,16 @@ bool EngineEffectChain::process(const ChannelHandle& inputHandle,
     }
 
     CSAMPLE currentMixKnob = m_dMix;
+    if (m_mixMode == EffectChainMixMode::WetOnly) {
+        // The makeup gain rides on the mix knob rather than being applied
+        // separately, which gets its ramping and its per-channel previous
+        // value for free -- and there is no dry complement in this mode for a
+        // gain above unity to break. It matters because a wet-only chain has
+        // no gain in it anywhere: the output is the wet at unity, and a reverb
+        // tail at unity is far quieter than the dry it sits beside in the
+        // external mixer.
+        currentMixKnob *= m_dMakeup;
+    }
     CSAMPLE lastCallbackMixKnob = channelStatus.oldMixKnob;
 
     bool processingOccured = false;

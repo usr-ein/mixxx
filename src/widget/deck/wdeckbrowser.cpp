@@ -324,7 +324,7 @@ WDeckBrowser::WDeckBrowser(QWidget* pParent,
     m_pDiagnostics = new WDeckDiagnostics(m_pStack);
     m_pStack->addWidget(m_pDiagnostics);
 
-    m_pRack = new WDeckRack(pEffectsManager, m_pStack);
+    m_pRack = new WDeckRack(pEffectsManager, pConfig, m_pStack);
     m_pStack->addWidget(m_pRack);
 
     connect(m_pKeyboard, &WDeckKeyboard::keyPressed, this, [this](const QString& c) {
