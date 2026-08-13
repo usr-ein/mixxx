@@ -9,9 +9,14 @@
 
 class EchoGroupState : public EffectState {
   public:
-    // 3 seconds max. This supports the full range of 2 beats for tempos down to
-    // 40 BPM.
-    static constexpr int kMaxDelaySeconds = 3;
+    // 6 seconds max, which is the full 8-beat range down to 80 BPM and the
+    // 4-beat one down to 40. Beyond that the delay is clamped to the buffer
+    // rather than refusing: a bar-long echo at 70 BPM comes out a little
+    // short, which is a far better failure than silence.
+    //
+    // The cost is the buffer, allocated per effect instance per input channel:
+    // 6 s stereo at 44.1 kHz is 2.1 MB. That is why this is 6 and not 16.
+    static constexpr int kMaxDelaySeconds = 6;
 
     EchoGroupState(const mixxx::EngineParameters& engineParameters)
             : EffectState(engineParameters) {

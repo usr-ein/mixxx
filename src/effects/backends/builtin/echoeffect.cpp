@@ -46,11 +46,13 @@ EffectManifestPointer EchoEffect::getManifest() {
     delay->setShortName(QObject::tr("Time"));
     delay->setDescription(QObject::tr(
             "Delay time\n"
-            "1/8 - 2 beats if tempo is detected\n"
-            "1/8 - 2 seconds if no tempo is detected"));
+            "1/16 - 8 beats if tempo is detected\n"
+            "1/16 - 8 seconds if no tempo is detected"));
     delay->setValueScaler(EffectManifestParameter::ValueScaler::Linear);
     delay->setUnitsHint(EffectManifestParameter::UnitsHint::Beats);
-    delay->setRange(0.0, 0.5, 2.0);
+    // Up to 8 beats, and down to 1/16 -- the range the deck's rack offers as
+    // fixed divisions. A bar is a musical unit and 2 beats could not reach one.
+    delay->setRange(0.0, 0.5, 8.0);
 
     EffectManifestParameterPointer feedback = pManifest->addParameter();
     feedback->setId("feedback_amount");
@@ -139,13 +141,13 @@ void EchoEffect::processChannel(
             if (m_pTripletParameter->toBool()) {
                 period /= 3.0;
             }
-        } else if (period < 1 / 8.0) {
-            period = 1 / 8.0;
+        } else if (period < 1 / 16.0) {
+            period = 1 / 16.0;
         }
         delay_seconds = period * groupFeatures.beat_length->seconds;
     } else {
         // period is a number of seconds
-        period = std::max(period, 1 / 8.0);
+        period = std::max(period, 1 / 16.0);
         delay_seconds = period;
     }
     VERIFY_OR_DEBUG_ASSERT(delay_seconds > 0) {

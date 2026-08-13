@@ -177,6 +177,8 @@ class WDeckRack : public QWidget, public DeckPage {
     int m_dragKnobModule = -1;
     int m_dragKnobIndex = -1;
     double m_dragStartValue = 0.0;
+    /// For a snapped knob: which stop it was on when the drag began.
+    int m_dragStartIndex = 0;
     QPoint m_dragStart;
     bool m_scrolling = false;
     int m_scrollStart = 0;

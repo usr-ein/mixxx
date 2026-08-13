@@ -115,7 +115,51 @@ namespace {
 enum class Readout {
     None,
     Hertz,
+    /// Also means the knob snaps: see kBeatDivisions.
+    Beats,
 };
+
+/// The stops a delay time is allowed to take, in beats.
+///
+/// A continuous time knob is a blur to aim at mid-transition, and every value
+/// between 1/4 and 1/2 is one nobody wants. These are the ones that mean
+/// something now that the bus carries a tempo.
+///
+/// The floor is where it is for a reason worth remembering: at 128 BPM a 1/16
+/// is 29 ms, shorter than the bus's own 32 ms round trip, so the shortest
+/// divisions cannot be latency-compensated by subtraction and will sit late. A
+/// late 1/16 is still a 1/16, which is why it is here at all.
+const QVector<double> kBeatDivisions =
+        {1 / 16.0, 1 / 8.0, 1 / 4.0, 1 / 2.0, 3 / 4.0, 1.0, 2.0, 4.0, 8.0};
+
+const QStringList& beatDivisionLabels() {
+    static const QStringList kLabels = {QStringLiteral("1/16"),
+            QStringLiteral("1/8"),
+            QStringLiteral("1/4"),
+            QStringLiteral("1/2"),
+            QStringLiteral("3/4"),
+            QStringLiteral("1"),
+            QStringLiteral("2"),
+            QStringLiteral("4"),
+            QStringLiteral("8")};
+    return kLabels;
+}
+
+/// The stop nearest *beats*, compared as a ratio rather than a difference: the
+/// list spans a factor of 128, so 1/16 and 1/8 are 0.06 apart while 4 and 8 are
+/// 4 apart, and a linear nearest would put almost everything in the top half.
+int beatDivisionIndex(double beats) {
+    int best = 0;
+    double bestDistance = -1.0;
+    for (int i = 0; i < kBeatDivisions.size(); ++i) {
+        const double distance = qAbs(qLn(qMax(beats, 1e-6) / kBeatDivisions.at(i)));
+        if (bestDistance < 0.0 || distance < bestDistance) {
+            bestDistance = distance;
+            best = i;
+        }
+    }
+    return best;
+}
 
 struct KnobSpec {
     QString caption;
@@ -168,22 +212,34 @@ const QVector<CatalogueEntry>& catalogue() {
                     15,
                     true,
                     {{QStringLiteral("WET"), QStringLiteral("wet")},
-                            {QStringLiteral("TIME"), QStringLiteral("parameter1")}},
+                            {QStringLiteral("TIME"),
+                                    QStringLiteral("parameter1"),
+                                    Readout::Beats}},
                     // Feedback at zero is what makes this a delay rather than
                     // an echo: one repeat, not a train. Send wide open, as above.
+                    //
+                    // quantize off, and that one is not optional: it defaults
+                    // ON and rounds the time to the nearest 1/4 beat, which
+                    // would silently turn every 1/16 and 1/8 the rack offers
+                    // into a 1/4.
                     {{QStringLiteral("parameter2"), 0.0},
                             {QStringLiteral("parameter3"), 0.0},
-                            {QStringLiteral("parameter4"), 1.0}}},
+                            {QStringLiteral("parameter4"), 1.0},
+                            {QStringLiteral("parameter5"), 0.0}}},
             {QStringLiteral("ECHO"),
                     QStringLiteral("ECH"),
                     2,
                     15,
                     true,
                     {{QStringLiteral("WET"), QStringLiteral("wet")},
-                            {QStringLiteral("TIME"), QStringLiteral("parameter1")},
+                            {QStringLiteral("TIME"),
+                                    QStringLiteral("parameter1"),
+                                    Readout::Beats},
                             {QStringLiteral("FDBK"), QStringLiteral("parameter2")},
                             {QStringLiteral("P-PONG"), QStringLiteral("parameter3")}},
-                    {{QStringLiteral("parameter4"), 1.0}}},
+                    // quantize off, as for Delay above.
+                    {{QStringLiteral("parameter4"), 1.0},
+                            {QStringLiteral("parameter5"), 0.0}}},
             // The filters have no WET knob, and that is not an omission: see
             // PRD §15.6. Blending a filter against its own input puts
             // everything in the passband through twice, once filtered and once
@@ -446,6 +502,16 @@ void WDeckRack::writeChainToEngine() {
         for (auto it = carried.constBegin(); it != carried.constEnd(); ++it) {
             slotControl(i, it.key())->setParameter(it.value());
         }
+        // Put snapped knobs back on a stop. Values reach a slot from three
+        // places -- carried across a reorder as a 0..1 position, restored from
+        // a saved rack, or left by an older build with a continuous time knob
+        // -- and only the last of those is even approximately on one.
+        for (const auto& knob : type.knobs) {
+            if (knob.readout == Readout::Beats) {
+                auto* pControl = slotControl(i, knob.item);
+                pControl->set(kBeatDivisions.at(beatDivisionIndex(pControl->get())));
+            }
+        }
     }
     for (int slot = m_modules.size(); slot < kNumEffectsPerUnit; ++slot) {
         slotControl(slot, QStringLiteral("clear"))->set(1.0);
@@ -478,7 +544,17 @@ double WDeckRack::knobValue(int moduleIndex, int knobIndex) const {
     }
     const auto& spec = catalogue().at(module.type).knobs.at(knobIndex);
     auto* pControl = const_cast<WDeckRack*>(this)->slotControl(module.slot, spec.item);
-    return pControl->valid() ? pControl->getParameter() : 0.0;
+    if (!pControl->valid()) {
+        return 0.0;
+    }
+    if (spec.readout == Readout::Beats) {
+        // A snapped knob shows its position in the list, not its value. The
+        // stops span a factor of 128, so a dial drawn to the value would put
+        // everything from 1/16 to 1 in the first eighth of the travel.
+        return beatDivisionIndex(pControl->get()) /
+                static_cast<double>(kBeatDivisions.size() - 1);
+    }
+    return pControl->getParameter();
 }
 
 QString WDeckRack::knobReadout(int moduleIndex, int knobIndex) const {
@@ -503,6 +579,9 @@ QString WDeckRack::knobReadout(int moduleIndex, int knobIndex) const {
         return value >= 1000.0
                 ? QStringLiteral("%1k").arg(value / 1000.0, 0, 'f', 1)
                 : QStringLiteral("%1Hz").arg(qRound(value));
+    }
+    if (spec.readout == Readout::Beats) {
+        return beatDivisionLabels().at(beatDivisionIndex(value));
     }
     return QString();
 }
@@ -1427,6 +1506,12 @@ void WDeckRack::mousePressEvent(QMouseEvent* pEvent) {
         m_dragKnobModule = moduleIndex;
         m_dragKnobIndex = knobIndex;
         m_dragStartValue = knobValue(moduleIndex, knobIndex);
+        // A snapped knob counts from the stop it was on, so a drag out and
+        // back returns to exactly where it started.
+        const auto& spec = catalogue().at(m_modules.at(moduleIndex).type).knobs.at(knobIndex);
+        m_dragStartIndex = spec.readout == Readout::Beats
+                ? beatDivisionIndex(slotControl(m_modules.at(moduleIndex).slot, spec.item)->get())
+                : 0;
         m_dragStart = point;
         // A knob under the finger is not a candidate for a long press: you
         // cannot pick a module up by its knob.
@@ -1464,10 +1549,22 @@ void WDeckRack::mouseMoveEvent(QMouseEvent* pEvent) {
     }
 
     if (m_dragKnobModule >= 0) {
+        const Module& module = m_modules.at(m_dragKnobModule);
+        const auto& spec = catalogue().at(module.type).knobs.at(m_dragKnobIndex);
+        if (spec.readout == Readout::Beats) {
+            // Clicks, not a sweep. 26 px a stop puts the whole list inside a
+            // comfortable thumb travel and makes each one land deliberately.
+            const int steps = qRound((m_dragStart.y() - point.y()) / 26.0);
+            const int index = qBound(0,
+                    m_dragStartIndex + steps,
+                    static_cast<int>(kBeatDivisions.size()) - 1);
+            slotControl(module.slot, spec.item)->set(kBeatDivisions.at(index));
+            update();
+            return;
+        }
         // Vertical only, so a sloppy diagonal still turns cleanly. Full travel
         // over ~200 px: fine control in one movement.
         const double delta = (m_dragStart.y() - point.y()) / 200.0;
-        const Module& module = m_modules.at(m_dragKnobModule);
         const bool locked = m_dragKnobIndex == 0 &&
                 catalogue().at(module.type).generatesNewMaterial &&
                 [&] {
