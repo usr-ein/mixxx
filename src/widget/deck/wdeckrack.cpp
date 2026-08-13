@@ -265,6 +265,12 @@ WDeckRack::WDeckRack(EffectsManager* pEffectsManager, QWidget* pParent)
     m_refresh.setInterval(100);
     connect(&m_refresh, &QTimer::timeout, this, [this] { update(); });
 
+    // 40 Hz, and only while a module is actually travelling. 60 would be
+    // smoother and this is a Pi 4 repainting the whole rack per tick; at ~100
+    // ms of travel the difference is four frames nobody can see.
+    m_slideTimer.setInterval(25);
+    connect(&m_slideTimer, &QTimer::timeout, this, [this] { stepSlide(); });
+
     m_tapTimer.start();
     // Read back the rack the deck was left with -- EffectsManager restores the
     // standard chains from effects.xml before the skin is parsed -- and then
@@ -288,6 +294,8 @@ void WDeckRack::setActive(bool active) {
         m_refresh.start();
     } else {
         m_refresh.stop();
+        m_slideTimer.stop();
+        m_slide.fill(0.0, m_modules.size());
         m_chooserOpen = false;
         m_browserOpen = false;
         m_browserArmedRow = -1;
@@ -373,6 +381,7 @@ void WDeckRack::syncFromEngine() {
         }
     }
     m_modules = found;
+    m_slide.fill(0.0, m_modules.size());
     applyWetLock();
 }
 
@@ -646,6 +655,36 @@ QRect WDeckRack::binRect() const {
             kNameBarHeight + rackHeight() - side - 24,
             side,
             side);
+}
+
+void WDeckRack::startSlide(int index, int fromX) {
+    if (index < 0 || index >= m_modules.size()) {
+        return;
+    }
+    if (m_slide.size() != m_modules.size()) {
+        m_slide.fill(0.0, m_modules.size());
+    }
+    m_slide[index] = fromX - moduleRect(index).x();
+    m_slideTimer.start();
+}
+
+void WDeckRack::stepSlide() {
+    bool moving = false;
+    for (double& offset : m_slide) {
+        // Exponential, not linear: it leaves fast and settles, which is what
+        // makes a displacement read as a thing moving rather than a thing
+        // being redrawn somewhere else. ~100 ms to under a pixel.
+        offset *= 0.55;
+        if (qAbs(offset) < 1.0) {
+            offset = 0.0;
+        } else {
+            moving = true;
+        }
+    }
+    if (!moving) {
+        m_slideTimer.stop();
+    }
+    update();
 }
 
 int WDeckRack::scrollSpan() const {
@@ -936,7 +975,8 @@ QRect WDeckRack::knobGeometry(const QRect& moduleRect, int count, int index) {
 void WDeckRack::paintModule(QPainter* pPainter, int index, const QPoint& offset) {
     const Module& module = m_modules.at(index);
     const auto& type = catalogue().at(module.type);
-    const QRect rect = moduleRect(index).translated(offset);
+    const QRect rect = moduleRect(index).translated(
+            offset + QPoint(qRound(m_slide.value(index)), 0));
     if (offset.isNull() && !rect.intersects(QRect(0, 0, width() - kModuleWidth, height()))) {
         return; // scrolled off; nothing to draw
     }
@@ -1447,6 +1487,34 @@ void WDeckRack::mouseMoveEvent(QMouseEvent* pEvent) {
 
     if (m_heldModule >= 0) {
         m_heldPos = point;
+        // Displace live: the rack always shows the order that would result, so
+        // there is no moment where the outcome has to be imagined. The swap
+        // happens when the held module's centre crosses a neighbour's, and the
+        // neighbour slides into the place just vacated.
+        const int centre = point.x() - m_heldGrab.x() + kModuleWidth / 2;
+        int target = m_heldModule;
+        while (target > 0 && centre < moduleRect(target - 1).center().x()) {
+            --target;
+        }
+        while (target < m_modules.size() - 1 && centre > moduleRect(target + 1).center().x()) {
+            ++target;
+        }
+        if (target != m_heldModule) {
+            const Module held = m_modules.at(m_heldModule);
+            m_modules.removeAt(m_heldModule);
+            m_modules.insert(target, held);
+            // Everything between the two positions shifted by exactly one
+            // place, in the opposite direction to the held module. A fast drag
+            // can cross several at once, so this is a range rather than a
+            // single neighbour.
+            const int step = m_heldModule < target ? -1 : 1;
+            for (int i = qMin(m_heldModule, target); i <= qMax(m_heldModule, target); ++i) {
+                if (i != target) {
+                    startSlide(i, moduleRect(i - step).x());
+                }
+            }
+            m_heldModule = target;
+        }
         update();
         return;
     }
@@ -1497,18 +1565,13 @@ void WDeckRack::mouseReleaseEvent(QMouseEvent* pEvent) {
         const QPoint point = pEvent->pos();
         if (binRect().contains(point)) {
             m_modules.removeAt(m_heldModule);
+            m_slide.fill(0.0, m_modules.size());
         } else {
-            // Drop where the finger is: the slot whose centre is nearest.
-            int target = m_modules.size() - 1;
-            for (int i = 0; i < m_modules.size(); ++i) {
-                if (point.x() < moduleRect(i).center().x()) {
-                    target = i;
-                    break;
-                }
-            }
-            const Module held = m_modules.at(m_heldModule);
-            m_modules.removeAt(m_heldModule);
-            m_modules.insert(qBound(0, target, m_modules.size()), held);
+            // Nothing to decide here any more: the rack has been showing the
+            // resulting order the whole way across, so the drop is only
+            // letting go. The module flies from where the finger left it into
+            // the slot it is already in.
+            startSlide(m_heldModule, point.x() - m_heldGrab.x());
         }
         m_heldModule = -1;
         writeChainToEngine();

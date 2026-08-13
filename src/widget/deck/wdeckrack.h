@@ -160,6 +160,16 @@ class WDeckRack : public QWidget, public DeckPage {
 
     QTimer m_refresh;
     QTimer m_longPress;
+    /// Runs only while something is sliding into its new place, and stops
+    /// itself when everything has arrived.
+    QTimer m_slideTimer;
+    /// Per module index, how far left of where it now belongs it is still
+    /// being drawn. A displaced neighbour is given the distance it just jumped
+    /// and this decays it to zero, so the rack shows the move rather than
+    /// having already made it.
+    QVector<double> m_slide;
+    void startSlide(int index, int fromX);
+    void stepSlide();
 
     int m_scroll = 0;
 
