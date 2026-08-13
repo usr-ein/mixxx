@@ -122,6 +122,10 @@ class WDeckRack : public QWidget, public DeckPage {
     // ---- engine ------------------------------------------------------------
     ControlProxy* slotControl(int slot, const QString& item);
     double knobValue(int moduleIndex, int knobIndex) const;
+    /// The value beside the caption, in the quantity the knob names -- a cutoff
+    /// in Hz -- or empty for a knob that is only a proportion. Empty for all of
+    /// them would be a rack you have to turn to find out what it is set to.
+    QString knobReadout(int moduleIndex, int knobIndex) const;
     void setKnobValue(int moduleIndex, int knobIndex, double parameter);
     /// Read the chain back into m_modules. The engine is the truth; this
     /// widget holds no state the controls do not.

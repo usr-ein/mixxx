@@ -1,6 +1,7 @@
 #include "widget/deck/wdeckrack.h"
 
 #include <QDate>
+#include <QFontMetrics>
 #include <QLinearGradient>
 #include <QMouseEvent>
 #include <QPainter>
@@ -106,6 +107,22 @@ namespace deck {
 
 namespace {
 
+/// What a knob shows beside its caption, if anything.
+///
+/// A dial position is not a value. "Somewhere past halfway" is fine for a wet
+/// blend and useless for a cutoff, so the ones that name a quantity say what it
+/// is -- read back off the control in its own units, not recomputed here.
+enum class Readout {
+    None,
+    Hertz,
+};
+
+struct KnobSpec {
+    QString caption;
+    QString item;
+    Readout readout = Readout::None;
+};
+
 /// A kind of module: a preset plus a skin.
 ///
 /// `loadedEffect` is a 1-based index into the VisibleEffects list that ships in
@@ -121,8 +138,13 @@ struct CatalogueEntry {
     int material;
     int loadedEffect;
     bool generatesNewMaterial;
-    QVector<QPair<QString, QString>> knobs;  // caption, item
-    QVector<QPair<QString, double>> hidden;  // parameterN, value
+    QVector<KnobSpec> knobs;
+    /// Held at this value on every write: parameters the module does not
+    /// expose, because exposing them would make it a different module.
+    QVector<QPair<QString, double>> hidden;
+    /// Written once, when the module first enters the chain. Unlike `hidden`
+    /// these are only a starting point -- the knob is free afterwards.
+    QVector<QPair<QString, double>> initial;
 };
 
 const QVector<CatalogueEntry>& catalogue() {
@@ -162,26 +184,38 @@ const QVector<CatalogueEntry>& catalogue() {
                             {QStringLiteral("FDBK"), QStringLiteral("parameter2")},
                             {QStringLiteral("P-PONG"), QStringLiteral("parameter3")}},
                     {{QStringLiteral("parameter4"), 1.0}}},
+            // The filters have no WET knob, and that is not an omission: see
+            // PRD §15.6. Blending a filter against its own input puts
+            // everything in the passband through twice, once filtered and once
+            // not, which is a comb rather than a half-open filter. A filter's
+            // output is the whole of its output, so `wet` is pinned open and
+            // the knob it needs is the one it has -- the cutoff, whose extreme
+            // already means "no effect".
             {QStringLiteral("HPF"),
                     QStringLiteral("HPF"),
                     3,
                     14,
                     false,
-                    {{QStringLiteral("WET"), QStringLiteral("wet")},
-                            {QStringLiteral("CUTOFF"), QStringLiteral("parameter3")},
+                    {{QStringLiteral("CUTOFF"), QStringLiteral("parameter3"), Readout::Hertz},
                             {QStringLiteral("RES"), QStringLiteral("parameter2")}},
                     // lpf pinned wide open, so only the high-pass is in circuit.
-                    {{QStringLiteral("parameter1"), 1.0}}},
+                    {{QStringLiteral("parameter1"), 1.0},
+                            {QStringLiteral("wet"), 1.0}},
+                    // Mid-band, so a filter dropped into the rack does
+                    // something. Its own default is 13 Hz -- fully open, and
+                    // indistinguishable from a module that failed to load.
+                    {{QStringLiteral("parameter3"), 0.5}}},
             {QStringLiteral("LPF"),
                     QStringLiteral("LPF"),
                     3,
                     14,
                     false,
-                    {{QStringLiteral("WET"), QStringLiteral("wet")},
-                            {QStringLiteral("CUTOFF"), QStringLiteral("parameter1")},
+                    {{QStringLiteral("CUTOFF"), QStringLiteral("parameter1"), Readout::Hertz},
                             {QStringLiteral("RES"), QStringLiteral("parameter2")}},
                     // hpf pinned fully open (down), so only the low-pass acts.
-                    {{QStringLiteral("parameter3"), 0.0}}},
+                    {{QStringLiteral("parameter3"), 0.0},
+                            {QStringLiteral("wet"), 1.0}},
+                    {{QStringLiteral("parameter1"), 0.5}}},
     };
     return kCatalogue;
 }
@@ -277,6 +311,32 @@ void WDeckRack::syncFromEngine() {
             }
         }
         if (type < 0) {
+            // Nothing remembered -- a rack just loaded from a preset, or the
+            // first sync after startup. The effect index alone does not say
+            // which module this is, because two entries can share an effect:
+            // HPF and LPF are both Filter. What separates them is the
+            // parameters they pin, so match on those. An HPF is a Filter with
+            // its low-pass held wide open, and that is readable off the slot.
+            for (int i = 0; i < catalogue().size(); ++i) {
+                const auto& entry = catalogue().at(i);
+                if (entry.loadedEffect != effect || entry.hidden.isEmpty()) {
+                    continue;
+                }
+                bool matches = true;
+                for (const auto& pinned : entry.hidden) {
+                    const double held = slotControl(slot, pinned.first)->getParameter();
+                    if (qAbs(held - pinned.second) > 0.001) {
+                        matches = false;
+                        break;
+                    }
+                }
+                if (matches) {
+                    type = i;
+                    break;
+                }
+            }
+        }
+        if (type < 0) {
             for (int i = 0; i < catalogue().size(); ++i) {
                 if (catalogue().at(i).loadedEffect == effect) {
                     type = i;
@@ -309,8 +369,8 @@ void WDeckRack::writeChainToEngine() {
         }
         previousType[module.slot] = module.type;
         for (const auto& knob : catalogue().at(module.type).knobs) {
-            previousValues[module.slot].insert(knob.second,
-                    slotControl(module.slot, knob.second)->getParameter());
+            previousValues[module.slot].insert(knob.item,
+                    slotControl(module.slot, knob.item)->getParameter());
         }
     }
 
@@ -340,6 +400,15 @@ void WDeckRack::writeChainToEngine() {
         slotControl(i, QStringLiteral("enabled"))->set(1.0);
         for (const auto& pinned : type.hidden) {
             slotControl(i, pinned.first)->setParameter(pinned.second);
+        }
+        if (carried.isEmpty()) {
+            // New to the chain, so it is holding the effect's own defaults.
+            // Those are right for a reverb and wrong for a filter, whose
+            // default is fully open -- which on a rack full of modules is
+            // indistinguishable from one that failed to load.
+            for (const auto& start : type.initial) {
+                slotControl(i, start.first)->setParameter(start.second);
+            }
         }
         for (auto it = carried.constBegin(); it != carried.constEnd(); ++it) {
             slotControl(i, it.key())->setParameter(it.value());
@@ -375,8 +444,34 @@ double WDeckRack::knobValue(int moduleIndex, int knobIndex) const {
         return 0.0; // appended but not yet written to the chain
     }
     const auto& spec = catalogue().at(module.type).knobs.at(knobIndex);
-    auto* pControl = const_cast<WDeckRack*>(this)->slotControl(module.slot, spec.second);
+    auto* pControl = const_cast<WDeckRack*>(this)->slotControl(module.slot, spec.item);
     return pControl->valid() ? pControl->getParameter() : 0.0;
+}
+
+QString WDeckRack::knobReadout(int moduleIndex, int knobIndex) const {
+    const Module& module = m_modules.at(moduleIndex);
+    if (module.slot < 0) {
+        return QString();
+    }
+    const auto& spec = catalogue().at(module.type).knobs.at(knobIndex);
+    if (spec.readout == Readout::None) {
+        return QString();
+    }
+    auto* pControl = const_cast<WDeckRack*>(this)->slotControl(module.slot, spec.item);
+    if (!pControl->valid()) {
+        return QString();
+    }
+    // Read in the control's own units rather than recomputed from the dial
+    // position: the effect owns its scale -- the filter's cutoff is
+    // logarithmic between 13 Hz and 22 kHz -- and a second copy of that curve
+    // here is a second thing to keep true.
+    const double value = pControl->get();
+    if (spec.readout == Readout::Hertz) {
+        return value >= 1000.0
+                ? QStringLiteral("%1k").arg(value / 1000.0, 0, 'f', 1)
+                : QStringLiteral("%1Hz").arg(qRound(value));
+    }
+    return QString();
 }
 
 void WDeckRack::setKnobValue(int moduleIndex, int knobIndex, double parameter) {
@@ -385,7 +480,7 @@ void WDeckRack::setKnobValue(int moduleIndex, int knobIndex, double parameter) {
         return;
     }
     const auto& spec = catalogue().at(module.type).knobs.at(knobIndex);
-    slotControl(module.slot, spec.second)->setParameter(qBound(0.0, parameter, 1.0));
+    slotControl(module.slot, spec.item)->setParameter(qBound(0.0, parameter, 1.0));
 }
 
 QString WDeckRack::generatedName() const {
@@ -739,16 +834,22 @@ void WDeckRack::paintKnob(QPainter* pPainter,
         pPainter->drawLine(centre, tip);
     }
 
+    const QString label = locked ? caption + QStringLiteral(" ·LOCK") : caption;
     QFont font = pPainter->font();
-    font.setPixelSize(12);
     font.setBold(true);
+    const QRect captionRect(rect.left() - 30, rect.bottom() + 3, rect.width() + 60, 16);
+    // A caption carrying a readout is longer than one that is not, and how much
+    // longer depends on the value -- "5.4k" and "220Hz" are different widths.
+    // Shrink to fit rather than clip: a cutoff silently truncated to "CUTOFF
+    // 22" is worse than a small one that reads.
+    for (int size = 12; size >= 9; --size) {
+        font.setPixelSize(size);
+        if (QFontMetrics(font).horizontalAdvance(label) <= captionRect.width() || size == 9) {
+            break;
+        }
+    }
     pPainter->setFont(font);
-    const QRect captionRect(rect.left() - 26, rect.bottom() + 3, rect.width() + 52, 16);
-    paintEngraved(pPainter,
-            captionRect,
-            Qt::AlignCenter,
-            locked ? caption + QStringLiteral(" ·LOCK") : caption,
-            accentFor(index));
+    paintEngraved(pPainter, captionRect, Qt::AlignCenter, label, accentFor(index));
 }
 
 QRect WDeckRack::knobGeometry(const QRect& moduleRect, int count, int index) {
@@ -826,10 +927,19 @@ void WDeckRack::paintModule(QPainter* pPainter, int index, const QPoint& offset)
     pPainter->setFont(font);
 
     for (int k = 0; k < type.knobs.size(); ++k) {
+        // The value, where the knob names a quantity, goes on the caption line
+        // beside the name. Anywhere else costs vertical room the module does
+        // not have, and a dial with a number beside it is how the reference
+        // skins label theirs.
+        QString caption = type.knobs.at(k).caption;
+        const QString readout = knobReadout(index, k);
+        if (!readout.isEmpty()) {
+            caption += QStringLiteral("  ") + readout;
+        }
         paintKnob(pPainter,
                 knobGeometry(rect, type.knobs.size(), k),
                 knobValue(index, k),
-                type.knobs.at(k).first,
+                caption,
                 static_cast<Material>(type.material),
                 k == 0 && locked);
     }
@@ -1177,7 +1287,7 @@ void WDeckRack::mousePressEvent(QMouseEvent* pEvent) {
         // Double-tap resets. Same knob, quickly, without much movement.
         if (m_tapTimer.elapsed() < 350 && (point - m_lastTapPos).manhattanLength() < 40) {
             const auto& spec = catalogue().at(m_modules.at(moduleIndex).type).knobs.at(knobIndex);
-            auto* pControl = slotControl(m_modules.at(moduleIndex).slot, spec.second);
+            auto* pControl = slotControl(m_modules.at(moduleIndex).slot, spec.item);
             pControl->reset();
             applyWetLock();
             m_tapTimer.restart();
