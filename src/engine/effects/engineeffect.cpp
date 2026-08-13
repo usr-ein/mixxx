@@ -4,25 +4,55 @@
 #include "engine/effects/engineeffectparameter.h"
 #include "engine/engine.h"
 #include "util/defs.h"
+#include "util/math.h"
 #include "util/sample.h"
+
+#include <cmath>
 
 namespace {
 
 // Used during initialization where the SoundSevice is not set up
 constexpr auto kInitalSampleRate = mixxx::audio::SampleRate(96000);
 
+// How long the meter takes to fall by 1/e. Slow enough to read a percussive
+// tail at a 10 Hz repaint, fast enough that a module going silent looks like it
+// went silent rather than like the meter stuck.
+constexpr double kReleaseSeconds = 0.25;
+
 } // namespace
+
+void EngineEffect::publishOutputLevel(
+        CSAMPLE peak, SINT frames, mixxx::audio::SampleRate sampleRate) {
+    if (!m_pOutputLevel || frames <= 0 || !sampleRate.isValid()) {
+        return;
+    }
+    // Release is computed from the callback's real duration rather than being
+    // a constant per callback, so the meter falls at the same rate whatever
+    // the buffer size is set to -- the deck's `latency` index changes it by
+    // factors of two.
+    const double seconds = static_cast<double>(frames) / sampleRate;
+    const auto release = static_cast<CSAMPLE>(std::exp(-seconds / kReleaseSeconds));
+    const auto previous = static_cast<CSAMPLE>(m_pOutputLevel->get());
+    // forceSet, not set. The control is marked read-only so that nothing
+    // outside the engine can drive a meter, and setReadOnly() implements that
+    // by installing a change-request handler that drops the value -- which
+    // set() goes through, so it would silently discard the engine's own writes
+    // too and leave every meter dark forever. forceSet bypasses the handler.
+    m_pOutputLevel->forceSet(math_max(previous * release, peak));
+}
 
 EngineEffect::EngineEffect(EffectManifestPointer pManifest,
         EffectsBackendManagerPointer pBackendManager,
         const QSet<ChannelHandleAndGroup>& activeInputChannels,
         const QSet<ChannelHandleAndGroup>& registeredInputChannels,
-        const QSet<ChannelHandleAndGroup>& registeredOutputChannels)
+        const QSet<ChannelHandleAndGroup>& registeredOutputChannels,
+        ControlObject* pOutputLevel)
         : m_pManifest(pManifest),
           m_pProcessor(pBackendManager->createProcessor(pManifest)),
           // Fully wet until told otherwise, so an effect that never receives a
           // wet message behaves exactly as it did before this existed.
           m_wet(1.0f),
+          m_pOutputLevel(pOutputLevel),
           m_parameters(pManifest->parameters().size()) {
     const QList<EffectManifestParameterPointer>& parameters = m_pManifest->parameters();
     for (int i = 0; i < parameters.size(); ++i) {

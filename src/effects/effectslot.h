@@ -182,6 +182,9 @@ class EffectSlot : public QObject {
     QMap<EffectParameterType, QList<EffectParameterSlotBasePointer>> m_parameterSlots;
 
     std::unique_ptr<ControlObject> m_pControlLoaded;
+    /// This slot's output level, 0..1. Written from the audio thread; see
+    /// EngineEffect::publishOutputLevel().
+    std::unique_ptr<ControlObject> m_pControlOutputLevel;
     // Apparently QHash doesn't work with std::unique_ptr
     QHash<EffectParameterType, QSharedPointer<ControlObject>> m_pControlNumParameters;
     QHash<EffectParameterType, QSharedPointer<ControlObject>> m_pControlNumParameterSlots;

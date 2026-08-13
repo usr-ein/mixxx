@@ -8,6 +8,8 @@
 #include <QRadialGradient>
 #include <QtMath>
 
+#include <cmath>
+
 #include "control/controlproxy.h"
 #include "effects/defs.h"
 #include "effects/effectchain.h"
@@ -292,6 +294,7 @@ WDeckRack::WDeckRack(EffectsManager* pEffectsManager,
     setMouseTracking(false);
 
     m_pMasterMix = std::make_unique<ControlProxy>(kUnit, QStringLiteral("mix"));
+    m_pOutputLevel = std::make_unique<ControlProxy>(kUnit, QStringLiteral("output_level"));
     m_pMakeup = std::make_unique<ControlProxy>(kUnit, QStringLiteral("makeup"));
     m_pAuxPregain = std::make_unique<ControlProxy>(
             QStringLiteral("[Auxiliary1]"), QStringLiteral("pregain"));
@@ -556,18 +559,36 @@ void WDeckRack::setRingOut(bool ringOut) {
     // abandoned: flipping the rocker changes *where* the gain is applied, not
     // how loud the rack is, and a jump would make it useless mid-transition.
     ControlProxy* pWas = masterControl();
-    const double level = pWas && pWas->valid() ? pWas->getParameter() : 0.5;
+    // The level to carry across is the one the DJ would come back to. While
+    // muted the driven control is holding zero and the real level is in
+    // m_mutedLevel, so reading the control would arrive at the far side muted
+    // at both ends, with the readout showing a level neither stage has.
+    double level = 0.5;
+    if (m_mutedLevel >= 0.0) {
+        level = m_mutedLevel;
+    } else if (pWas && pWas->valid()) {
+        level = pWas->getParameter();
+    }
     m_ringOut = ringOut;
+
+    // The arriving stage takes its level BEFORE the departing one is parked at
+    // unity, and the order is the whole fix. The two gains multiply, and
+    // nothing makes a pair of separate controls atomic -- each sends its own
+    // message and the audio thread can run a buffer between them. Parking
+    // first puts both at unity for that buffer, which is full wet whatever the
+    // knob said: a burst of effect mid-transition. This way the odd buffer is
+    // level x level instead -- momentarily quiet, and nobody hears a dip of
+    // one buffer.
+    ControlProxy* pNow = masterControl();
+    if (pNow && pNow->valid()) {
+        pNow->setParameter(m_mutedLevel >= 0.0 ? 0.0 : level);
+    }
     // The one not in use is parked at unity, which on a ±12 dB taper is half
     // travel and not zero -- parking it at zero would silence the rack through
     // the stage nothing is driving.
     ControlProxy* pIdle = m_ringOut ? m_pMakeup.get() : m_pAuxPregain.get();
     if (pIdle && pIdle->valid()) {
         pIdle->setParameter(0.5);
-    }
-    ControlProxy* pNow = masterControl();
-    if (pNow && pNow->valid()) {
-        pNow->setParameter(level);
     }
     if (m_pConfig) {
         m_pConfig->setValue(
@@ -1070,6 +1091,52 @@ void WDeckRack::paintKnob(QPainter* pPainter,
     paintEngraved(pPainter, captionRect, Qt::AlignCenter, label, accentFor(index));
 }
 
+void WDeckRack::paintVu(QPainter* pPainter, const QRect& rect, double level, bool vertical) {
+    // Recessed slot first, so an idle meter still reads as a piece of hardware
+    // rather than as a gap in the panel.
+    pPainter->fillRect(rect, QColor(0x08, 0x09, 0x0A));
+    paintBevel(pPainter, rect, false);
+
+    // dB, not amplitude. A linear meter puts everything below −20 dB in the
+    // bottom tenth, which is exactly where a reverb tail and a closed filter
+    // live -- the two things this meter exists to tell apart.
+    constexpr double kFloorDb = -48.0;
+    double lit = 0.0;
+    if (level > 0.0) {
+        const double db = 20.0 * std::log10(level);
+        lit = qBound(0.0, (db - kFloorDb) / -kFloorDb, 1.0);
+    }
+
+    constexpr int kSegments = 12;
+    const int inner = vertical ? rect.height() - 4 : rect.width() - 4;
+    const int step = inner / kSegments;
+    if (step <= 0) {
+        return;
+    }
+    const int litCount = static_cast<int>(lit * kSegments + 0.5);
+    for (int i = 0; i < kSegments; ++i) {
+        // Green to amber to red, so the top of the scale reads as the top of
+        // the scale without needing a legend.
+        QColor on(0x55, 0xE0, 0x40);
+        if (i >= kSegments - 2) {
+            on = QColor(0xFF, 0x40, 0x30);
+        } else if (i >= kSegments - 4) {
+            on = QColor(0xFF, 0xC0, 0x20);
+        }
+        const QColor colour = i < litCount ? on : QColor(on.red() / 7, on.green() / 7, on.blue() / 7);
+        QRect seg;
+        if (vertical) {
+            seg = QRect(rect.left() + 2,
+                    rect.bottom() - 2 - (i + 1) * step + 1,
+                    rect.width() - 4,
+                    step - 1);
+        } else {
+            seg = QRect(rect.left() + 2 + i * step, rect.top() + 2, step - 1, rect.height() - 4);
+        }
+        pPainter->fillRect(seg, colour);
+    }
+}
+
 QRect WDeckRack::knobGeometry(const QRect& moduleRect, int count, int index) {
     const QRect face = moduleRect.adjusted(3, 3, -3, -3);
     const int wellTop = face.top() + 5 + 30 + 6;
@@ -1144,6 +1211,19 @@ void WDeckRack::paintModule(QPainter* pPainter, int index, const QPoint& offset)
             accentFor(type.material));
     font.setLetterSpacing(QFont::PercentageSpacing, 100.0);
     pPainter->setFont(font);
+
+    // The module's meter lives in the title strip, right of its name. It costs
+    // no vertical room -- there is none to spare -- and it is where the eye
+    // already goes. What it answers is "is anything coming out of this?", which
+    // is the question a rack of six healthy-looking modules cannot otherwise
+    // be asked.
+    if (module.slot >= 0) {
+        auto* pLevel = slotControl(module.slot, QStringLiteral("output_level"));
+        paintVu(pPainter,
+                QRect(strip.right() - 74, strip.center().y() - 5, 70, 10),
+                pLevel->valid() ? pLevel->get() : 0.0,
+                false);
+    }
 
     for (int k = 0; k < type.knobs.size(); ++k) {
         // The value, where the knob names a quantity, goes on the caption line
@@ -1225,6 +1305,14 @@ void WDeckRack::paintMaster(QPainter* pPainter) {
             Qt::AlignCenter,
             reading,
             muted ? QColor(0x8A, 0x90, 0x9B) : accentFor(0));
+
+    // The master's meter: what the rack is returning, after the mix and the
+    // makeup gain. Wider and taller than a module's because it is the one that
+    // answers "is the rack making any sound at all".
+    paintVu(pPainter,
+            QRect(face.left() + 14, masterRockerRect().top() - 30, face.width() - 28, 16),
+            m_pOutputLevel && m_pOutputLevel->valid() ? m_pOutputLevel->get() : 0.0,
+            false);
 
     // The rocker: which end of the chain the knob is on.
     const QRect rocker = masterRockerRect();

@@ -43,6 +43,13 @@ EffectSlot::EffectSlot(const QString& group,
     }
 
     m_pControlLoaded = std::make_unique<ControlObject>(ConfigKey(m_group, "loaded"));
+
+    // What this slot is putting out, 0..1, written from the audio thread by
+    // EngineEffectChain. Read-only from outside: a meter nobody can set is a
+    // meter that cannot lie about the audio.
+    m_pControlOutputLevel = std::make_unique<ControlObject>(
+            ConfigKey(m_group, "output_level"));
+    m_pControlOutputLevel->setReadOnly();
     m_pControlLoaded->setReadOnly();
 
     m_pControlNumParameters.insert(EffectParameterType::Knob,
@@ -164,7 +171,8 @@ void EffectSlot::addToEngine() {
             m_pBackendManager,
             m_pChain->getActiveChannels(),
             m_pEffectsManager->registeredInputChannels(),
-            m_pEffectsManager->registeredOutputChannels());
+            m_pEffectsManager->registeredOutputChannels(),
+            m_pControlOutputLevel.get());
 
     EffectsRequest* request = new EffectsRequest();
     request->type = EffectsRequest::ADD_EFFECT_TO_CHAIN;
@@ -394,6 +402,9 @@ void EffectSlot::unloadEffect() {
 
     m_pControlLoaded->forceSet(0.0);
     m_pControlLoadedEffect->setAndConfirm(0.0);
+    // Nothing will write it once the effect is gone, and a meter frozen at the
+    // last thing it saw reads as a slot that is still working.
+    m_pControlOutputLevel->forceSet(0.0);
     for (const auto& pControlNumParameters : std::as_const(m_pControlNumParameters)) {
         pControlNumParameters->forceSet(0.0);
     }

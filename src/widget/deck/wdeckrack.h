@@ -103,6 +103,12 @@ class WDeckRack : public QWidget, public DeckPage {
             bool locked,
             /// Drawn in grey, still showing its value: the master while muted.
             bool greyed = false);
+    /// A recessed slot with a segmented ladder in it, green through amber to
+    /// red, the way the reference skins draw theirs. *level* is a linear
+    /// amplitude, 0..1, as the engine publishes it; the scale is dB, because a
+    /// linear meter spends nine tenths of its travel on the top 20 dB and
+    /// shows nothing at all where a reverb tail lives.
+    static void paintVu(QPainter* pPainter, const QRect& rect, double level, bool vertical);
     /// A bevel is two lines: light on top and left, dark on bottom and right.
     /// Swap them and the same shape reads as recessed, which is how knob
     /// troughs and screw holes are drawn.
@@ -229,6 +235,8 @@ class WDeckRack : public QWidget, public DeckPage {
     QRect masterRockerRect() const;
 
     UserSettingsPointer m_pConfig;
+    /// What the whole chain is returning, for the master's meter.
+    std::unique_ptr<ControlProxy> m_pOutputLevel;
     std::unique_ptr<ControlProxy> m_pMasterMix;
     /// The send: [Auxiliary1] pregain, pre-effect, ±12 dB.
     std::unique_ptr<ControlProxy> m_pAuxPregain;

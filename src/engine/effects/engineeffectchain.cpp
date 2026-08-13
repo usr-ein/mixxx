@@ -2,7 +2,16 @@
 
 #include "engine/effects/engineeffect.h"
 #include "util/defs.h"
+#include "util/math.h"
 #include "util/sample.h"
+
+#include <cmath>
+
+namespace {
+// Same shape as a slot's meter, and the same reasoning: see
+// EngineEffect::publishOutputLevel().
+constexpr double kOutputReleaseSeconds = 0.25;
+} // namespace
 
 EngineEffectChain::EngineEffectChain(const QString& group,
         const QSet<ChannelHandleAndGroup>& registeredInputChannels,
@@ -12,8 +21,13 @@ EngineEffectChain::EngineEffectChain(const QString& group,
           m_mixMode(EffectChainMixMode::DrySlashWet),
           m_dMix(0),
           m_dMakeup(1.0f),
+          m_outputLevel(ConfigKey(group, QStringLiteral("output_level"))),
           m_buffer1(kMaxEngineSamples),
           m_buffer2(kMaxEngineSamples) {
+    // Nothing outside the engine may drive a meter: a level a skin can set is
+    // a level that can lie about the audio.
+    m_outputLevel.setReadOnly();
+
     // Try to prevent memory allocation.
     m_effects.reserve(256);
 
@@ -335,6 +349,22 @@ bool EngineEffectChain::process(const ChannelHandle& inputHandle,
                         }
                     }
 
+                    // Metered here rather than inside the effect, and after the
+                    // blend rather than before it, because what a DJ wants from
+                    // a module's meter is what the module *contributes* -- a
+                    // slot at a wet of zero is passing its input through
+                    // untouched and should read as doing nothing, however busy
+                    // its DSP is.
+                    //
+                    // This is the instrument that was missing when a filter
+                    // closed to 13 Hz silenced the whole rack and every module
+                    // still looked healthy (PRD §17.3): the signal visibly dies
+                    // at the module that killed it.
+                    pEffect->publishOutputLevel(
+                            SampleUtil::maxAbsAmplitude(pIntermediateOutput, numSamples),
+                            static_cast<SINT>(numSamples) / 2,
+                            sampleRate);
+
                     processingOccured = true;
                     effectChainGroupDelayFrames += pEffect->getGroupDelayFrames();
 
@@ -407,6 +437,21 @@ bool EngineEffectChain::process(const ChannelHandle& inputHandle,
         // channel whose unit is merely off settles at Enabling (standby).
         SampleUtil::clear(pOut, numSamples);
         processingOccured = true;
+    }
+
+    if (processingOccured) {
+        // The master's meter, measured on the chain's actual output -- after
+        // the mix and the makeup gain, so it reads what the rack is returning
+        // and not what its last module produced.
+        const SINT frames = static_cast<SINT>(numSamples) / 2;
+        if (frames > 0 && sampleRate.isValid()) {
+            const double seconds = static_cast<double>(frames) / sampleRate;
+            const auto release = static_cast<CSAMPLE>(std::exp(-seconds / kOutputReleaseSeconds));
+            const auto previous = static_cast<CSAMPLE>(m_outputLevel.get());
+            // forceSet: see EngineEffect::publishOutputLevel().
+            m_outputLevel.forceSet(math_max(previous * release,
+                    SampleUtil::maxAbsAmplitude(pOut, numSamples)));
+        }
     }
 
     channelStatus.oldMixKnob = currentMixKnob;

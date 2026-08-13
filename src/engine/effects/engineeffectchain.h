@@ -8,6 +8,7 @@
 #include "effects/defs.h"
 #include "engine/channelhandle.h"
 #include "engine/effects/engineeffectsdelay.h"
+#include "control/controlobject.h"
 #include "engine/effects/message.h"
 #include "util/class.h"
 #include "util/samplebuffer.h"
@@ -78,6 +79,11 @@ class EngineEffectChain final : public EffectsRequestHandler {
     EffectChainMixMode::Type m_mixMode;
     CSAMPLE m_dMix;
     CSAMPLE m_dMakeup;
+    /// What leaves the chain, 0..1, with the same ballistics as a slot's. The
+    /// master's meter: measured after the mix and the makeup gain, so it is
+    /// what the rack is actually returning rather than what its last module
+    /// produced.
+    ControlObject m_outputLevel;
     QList<EngineEffect*> m_effects;
     mixxx::SampleBuffer m_buffer1;
     mixxx::SampleBuffer m_buffer2;
