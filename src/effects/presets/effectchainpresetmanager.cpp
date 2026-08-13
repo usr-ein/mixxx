@@ -373,13 +373,33 @@ bool EffectChainPresetManager::deletePreset(const QString& chainPresetName) {
         return false;
     }
 
+    forgetPreset(chainPresetName);
+    return true;
+}
+
+bool EffectChainPresetManager::deletePresetSilently(const QString& chainPresetName) {
+    if (!m_effectChainPresets.contains(chainPresetName) ||
+            m_effectChainPresets.value(chainPresetName)->isReadOnly()) {
+        return false;
+    }
+    QFile file(m_pConfig->getSettingsPath() + kEffectChainPresetDirectory +
+            kFolderDelimiter + mixxx::filename::sanitize(chainPresetName) + kXmlFileExtension);
+    if (!file.remove()) {
+        qWarning() << "Could not delete effect chain preset" << chainPresetName
+                   << file.errorString();
+        return false;
+    }
+    forgetPreset(chainPresetName);
+    return true;
+}
+
+void EffectChainPresetManager::forgetPreset(const QString& chainPresetName) {
     EffectChainPresetPointer pPreset =
             m_effectChainPresets.take(chainPresetName);
     m_effectChainPresetsSorted.removeAll(pPreset);
     m_quickEffectChainPresetsSorted.removeAll(pPreset);
     emit effectChainPresetListUpdated();
     emit quickEffectChainPresetListUpdated();
-    return true;
 }
 
 void EffectChainPresetManager::setPresetOrder(
@@ -481,6 +501,15 @@ bool EffectChainPresetManager::savePreset(EffectChainPresetPointer pPreset) {
         } else {
             errorText = QString();
         }
+    }
+
+    return savePresetAs(pPreset, name);
+}
+
+bool EffectChainPresetManager::savePresetAs(
+        EffectChainPresetPointer pPreset, const QString& name) {
+    if (name.isEmpty() || name == kNoEffectString || m_effectChainPresets.contains(name)) {
+        return false;
     }
 
     pPreset->setName(name);

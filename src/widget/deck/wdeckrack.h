@@ -145,6 +145,9 @@ class WDeckRack : public QWidget, public DeckPage {
     void deleteRack(const QString& name);
     void paintRackBrowser(QPainter* pPainter);
     QRect rackBrowserRowRect(int index) const;
+    /// Which row is under a point, or -1. Row 0 is "save this one".
+    int rackBrowserRowAt(const QPoint& point) const;
+    int rackBrowserScrollSpan() const;
 
     // ---- hit testing -------------------------------------------------------
     /// Which module and knob is under a point, or -1.
@@ -173,6 +176,17 @@ class WDeckRack : public QWidget, public DeckPage {
     bool m_chooserOpen = false;
     /// The saved-rack list, opened by tapping the name bar.
     bool m_browserOpen = false;
+    int m_browserScroll = 0;
+    int m_browserScrollStart = 0;
+    /// The saved rack a hold has armed for deletion, or -1.
+    ///
+    /// Deleting on the hold itself would be a destructive gesture with no way
+    /// out of it. The row goes red instead and the *release over it* is what
+    /// commits, so sliding off the row before letting go cancels.
+    int m_browserArmedRow = -1;
+    /// Still a tap: nothing has scrolled and no hold has fired, so the release
+    /// means the row it is over.
+    bool m_browserTap = false;
     EffectsManager* m_pEffectsManager = nullptr;
     /// Last tap, for the double-tap reset.
     QElapsedTimer m_tapTimer;

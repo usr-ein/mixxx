@@ -59,6 +59,10 @@ class EffectChainPresetManager : public QObject {
     void exportPreset(const QString& chainPresetName);
     bool renamePreset(const QString& oldName);
     bool deletePreset(const QString& chainPresetName);
+    /// Delete without the confirmation dialog, for a caller that has already
+    /// confirmed in its own idiom. Returns false if the preset is read-only,
+    /// unknown, or its file could not be removed.
+    bool deletePresetSilently(const QString& chainPresetName);
 
     void resetToDefaults();
 
@@ -71,6 +75,13 @@ class EffectChainPresetManager : public QObject {
 
     void savePresetAndReload(EffectChainPointer pChainSlot);
     bool savePreset(EffectChainPresetPointer pPreset);
+    /// Save under a name already decided, with no dialog.
+    ///
+    /// savePreset() asks for the name, which assumes a keyboard. The deck does
+    /// not have one -- it names a rack after what is in it -- so it needs the
+    /// same save without the question. Returns false if the name is empty,
+    /// reserved, or already taken; the caller owns making it unique.
+    bool savePresetAs(EffectChainPresetPointer pPreset, const QString& name);
     void updatePreset(EffectChainPointer pChainSlot);
 
     EffectManifestPointer getDefaultEqEffect();
@@ -90,6 +101,10 @@ class EffectChainPresetManager : public QObject {
 
   private:
     bool savePresetXml(EffectChainPresetPointer pPreset);
+    /// Drop a preset from the lists and tell everyone. The file is the
+    /// caller's to remove; this is only the bookkeeping the two delete paths
+    /// share.
+    void forgetPreset(const QString& chainPresetName);
 
     void importUserPresets();
     void importDefaultPresets();

@@ -240,6 +240,15 @@ WDeckRack::WDeckRack(EffectsManager* pEffectsManager, QWidget* pParent)
     m_longPress.setSingleShot(true);
     m_longPress.setInterval(450);
     connect(&m_longPress, &QTimer::timeout, this, [this] {
+        if (m_browserOpen) {
+            // A hold over a saved rack arms it for deletion; the release over
+            // it is what commits. Row 0 is Save and is not a rack.
+            const int row = rackBrowserRowAt(m_heldPos);
+            m_browserArmedRow = row >= 1 ? row : -1;
+            m_browserTap = false;
+            update();
+            return;
+        }
         m_heldModule = moduleAt(m_heldPos);
         // A held module cancels whatever else the finger might have started.
         m_dragKnobModule = -1;
@@ -254,7 +263,18 @@ WDeckRack::WDeckRack(EffectsManager* pEffectsManager, QWidget* pParent)
     connect(&m_refresh, &QTimer::timeout, this, [this] { update(); });
 
     m_tapTimer.start();
+    // Read back the rack the deck was left with -- EffectsManager restores the
+    // standard chains from effects.xml before the skin is parsed -- and then
+    // write it straight back out.
+    //
+    // The write is not redundant. StandardEffectChain is the one chain type
+    // that does not enable its slots, and EffectPreset has no field to carry
+    // the enable either, so a restored rack comes back *drawn and silent*.
+    // This is also why it happens here rather than when the page is first
+    // opened: a DJ who never opens the Effects page should still have the rack
+    // they were using last night.
     syncFromEngine();
+    writeChainToEngine();
 }
 
 WDeckRack::~WDeckRack() = default;
@@ -267,6 +287,7 @@ void WDeckRack::setActive(bool active) {
         m_refresh.stop();
         m_chooserOpen = false;
         m_browserOpen = false;
+        m_browserArmedRow = -1;
         m_heldModule = -1;
     }
     update();
@@ -535,11 +556,23 @@ void WDeckRack::saveCurrentRack() {
     // Generated, never typed. A deck with no keyboard should not ask for one,
     // and a rack's identity really is its contents -- the date is what
     // separates two racks built from the same modules.
-    pPreset->setName(QStringLiteral("%1  %2")
-                             .arg(generatedName().replace(QStringLiteral("  →  "),
-                                     QStringLiteral("-")))
-                             .arg(QDate::currentDate().toString(QStringLiteral("yyyy-MM-dd"))));
-    pManager->savePreset(pPreset);
+    //
+    // savePresetAs() rather than savePreset(), which puts up a QInputDialog:
+    // on this deck that dialog appeared behind a full-screen window with no
+    // keyboard to answer it, so the save never happened and the rack never
+    // appeared in the list. That is the whole of "saving does not work".
+    const QString base = QStringLiteral("%1  %2")
+                                 .arg(generatedName().replace(
+                                         QStringLiteral("  →  "), QStringLiteral("-")))
+                                 .arg(QDate::currentDate().toString(
+                                         QStringLiteral("yyyy-MM-dd")));
+    // Two racks of the same modules saved on the same day are a normal evening,
+    // so the name is made unique here -- savePresetAs() refuses a collision
+    // rather than silently overwriting the earlier one.
+    QString name = base;
+    for (int suffix = 2; !pManager->savePresetAs(pPreset, name) && suffix < 100; ++suffix) {
+        name = QStringLiteral("%1 (%2)").arg(base).arg(suffix);
+    }
 }
 
 void WDeckRack::loadRack(const QString& name) {
@@ -560,6 +593,9 @@ void WDeckRack::loadRack(const QString& name) {
     // DRY/WET would put the dry into a mixer that already has it.
     pChain->setMixMode(EffectChainMixMode::WetOnly);
     syncFromEngine();
+    // And back out again, for the enable a preset cannot carry. Without this a
+    // loaded rack draws perfectly and makes no sound.
+    writeChainToEngine();
 }
 
 void WDeckRack::deleteRack(const QString& name) {
@@ -568,7 +604,11 @@ void WDeckRack::deleteRack(const QString& name) {
     }
     const auto pManager = m_pEffectsManager->getChainPresetManager();
     if (pManager) {
-        pManager->deletePreset(name);
+        // Silently, because the rack has already confirmed in its own idiom --
+        // the row went red and was released over. deletePreset() would put a
+        // QMessageBox on top of a full-screen deck, which is the same trap
+        // saving fell into.
+        pManager->deletePresetSilently(name);
     }
 }
 
@@ -1049,10 +1089,33 @@ void WDeckRack::paintNameBar(QPainter* pPainter) {
     pPainter->drawText(rect.adjusted(0, 0, -140, 0), Qt::AlignVCenter | Qt::AlignRight, tempo);
 }
 
+namespace {
+constexpr int kBrowserRowHeight = 58;
+constexpr int kBrowserRowGap = 6;
+constexpr int kBrowserTop = 24;
+} // namespace
+
 QRect WDeckRack::rackBrowserRowRect(int index) const {
-    const int rowHeight = 58;
-    const int top = kNameBarHeight + 24 + index * (rowHeight + 6);
-    return QRect(60, top, width() - 120, rowHeight);
+    const int top = kNameBarHeight + kBrowserTop +
+            index * (kBrowserRowHeight + kBrowserRowGap) - m_browserScroll;
+    return QRect(60, top, width() - 120, kBrowserRowHeight);
+}
+
+int WDeckRack::rackBrowserScrollSpan() const {
+    const int rows = savedRacks().size() + 1;
+    const int content = kBrowserTop + rows * (kBrowserRowHeight + kBrowserRowGap);
+    const int viewport = height() - kNameBarHeight - kBezelHeight;
+    return qMax(0, content - viewport);
+}
+
+int WDeckRack::rackBrowserRowAt(const QPoint& point) const {
+    const int rows = savedRacks().size() + 1;
+    for (int i = 0; i < rows; ++i) {
+        if (rackBrowserRowRect(i).contains(point)) {
+            return i;
+        }
+    }
+    return -1;
 }
 
 void WDeckRack::paintRackBrowser(QPainter* pPainter) {
@@ -1065,26 +1128,48 @@ void WDeckRack::paintRackBrowser(QPainter* pPainter) {
     pPainter->setPen(kLcdInk);
     pPainter->drawText(QRect(60, kNameBarHeight - 6, width() - 120, 24),
             Qt::AlignVCenter | Qt::AlignLeft,
-            tr("SAVED RACKS   ·   hold a row to delete"));
+            tr("SAVED RACKS   ·   drag to scroll   ·   hold a row to delete"));
 
     const QStringList names = savedRacks();
+    // Clipped to the area below the header, so a scrolled row leaves the list
+    // rather than sliding up over the title.
+    pPainter->setClipRect(
+            QRect(0, kNameBarHeight + 18, width(), height() - kNameBarHeight - kBezelHeight - 18));
     // Row 0 is always "save this one", so an empty list is still a usable
     // screen rather than a dead end.
     for (int i = 0; i <= names.size(); ++i) {
         const QRect row = rackBrowserRowRect(i);
-        if (row.bottom() > height() - kBezelHeight) {
-            break;
+        if (row.bottom() < kNameBarHeight || row.top() > height()) {
+            continue; // scrolled out of sight
         }
         const bool isSave = i == 0;
-        pPainter->fillRect(row, isSave ? QColor(0x18, 0x2C, 0x10) : QColor(0x16, 0x18, 0x1C));
-        paintBevel(pPainter, row, true);
+        const bool armed = i == m_browserArmedRow;
+        pPainter->fillRect(row,
+                armed ? QColor(0x4A, 0x10, 0x10)
+                      : (isSave ? QColor(0x18, 0x2C, 0x10) : QColor(0x16, 0x18, 0x1C)));
+        if (armed) {
+            pPainter->setBrush(Qt::NoBrush);
+            pPainter->setPen(QPen(QColor(0xFF, 0x55, 0x55), 2));
+            pPainter->drawRect(row.adjusted(1, 1, -1, -1));
+        } else {
+            paintBevel(pPainter, row, true);
+        }
         font.setPixelSize(20);
         pPainter->setFont(font);
-        pPainter->setPen(isSave ? QColor(0x88, 0xFF, 0x00) : QColor(0xDD, 0xDD, 0xDD));
+        pPainter->setPen(armed ? QColor(0xFF, 0xAA, 0xAA)
+                               : (isSave ? QColor(0x88, 0xFF, 0x00) : QColor(0xDD, 0xDD, 0xDD)));
         pPainter->drawText(row.adjusted(20, 0, -20, 0),
                 Qt::AlignVCenter | Qt::AlignLeft,
                 isSave ? tr("+  Save this rack") : names.at(i - 1));
+        if (armed) {
+            font.setPixelSize(14);
+            pPainter->setFont(font);
+            pPainter->drawText(row.adjusted(20, 0, -20, 0),
+                    Qt::AlignVCenter | Qt::AlignRight,
+                    tr("release to delete  ·  slide off to keep"));
+        }
     }
+    pPainter->setClipping(false);
 }
 
 void WDeckRack::paintChooser(QPainter* pPainter) {
@@ -1223,20 +1308,15 @@ void WDeckRack::mousePressEvent(QMouseEvent* pEvent) {
     const QPoint point = pEvent->pos();
 
     if (m_browserOpen) {
-        const QStringList names = savedRacks();
-        for (int i = 0; i <= names.size(); ++i) {
-            if (!rackBrowserRowRect(i).contains(point)) {
-                continue;
-            }
-            if (i == 0) {
-                saveCurrentRack();
-            } else {
-                loadRack(names.at(i - 1));
-            }
-            break;
-        }
-        m_browserOpen = false;
-        update();
+        // Nothing happens on the press: the list scrolls, and a hold means
+        // delete, so what the gesture was is only known at the release.
+        m_dragStart = point;
+        m_heldPos = point;
+        m_browserScrollStart = m_browserScroll;
+        m_browserArmedRow = -1;
+        m_browserTap = true;
+        m_scrolling = true;
+        m_longPress.start();
         return;
     }
 
@@ -1244,6 +1324,9 @@ void WDeckRack::mousePressEvent(QMouseEvent* pEvent) {
     // on screen, so it is where a DJ looks for the others.
     if (point.y() < kNameBarHeight) {
         m_browserOpen = true;
+        m_browserScroll = 0;
+        m_browserArmedRow = -1;
+        m_browserTap = false;
         update();
         return;
     }
@@ -1315,6 +1398,26 @@ void WDeckRack::mousePressEvent(QMouseEvent* pEvent) {
 void WDeckRack::mouseMoveEvent(QMouseEvent* pEvent) {
     const QPoint point = pEvent->pos();
 
+    if (m_browserOpen) {
+        if (m_browserArmedRow >= 0) {
+            // Armed: sliding off the row is the way out, so track whether the
+            // finger is still on it and let the release decide.
+            update();
+            return;
+        }
+        if ((point - m_dragStart).manhattanLength() > 12) {
+            m_longPress.stop();
+            m_browserTap = false;
+        }
+        if (m_scrolling) {
+            m_browserScroll = qBound(0,
+                    m_browserScrollStart - (point.y() - m_dragStart.y()),
+                    rackBrowserScrollSpan());
+            update();
+        }
+        return;
+    }
+
     if (m_dragKnobModule >= 0) {
         // Vertical only, so a sloppy diagonal still turns cleanly. Full travel
         // over ~200 px: fine control in one movement.
@@ -1354,6 +1457,36 @@ void WDeckRack::mouseMoveEvent(QMouseEvent* pEvent) {
 
 void WDeckRack::mouseReleaseEvent(QMouseEvent* pEvent) {
     m_longPress.stop();
+
+    if (m_browserOpen) {
+        const QPoint point = pEvent->pos();
+        const int row = rackBrowserRowAt(point);
+        if (m_browserArmedRow >= 0) {
+            // Committed only if the finger is still on the row it armed.
+            if (row == m_browserArmedRow) {
+                const QStringList names = savedRacks();
+                if (m_browserArmedRow - 1 < names.size()) {
+                    deleteRack(names.at(m_browserArmedRow - 1));
+                }
+            }
+            m_browserArmedRow = -1;
+        } else if (m_browserTap && row >= 0) {
+            if (row == 0) {
+                saveCurrentRack();
+            } else {
+                const QStringList names = savedRacks();
+                if (row - 1 < names.size()) {
+                    loadRack(names.at(row - 1));
+                }
+            }
+            m_browserOpen = false;
+        }
+        // A scroll leaves the list open, which is the whole point of it.
+        m_browserTap = false;
+        m_scrolling = false;
+        update();
+        return;
+    }
 
     if (m_heldModule >= 0) {
         const QPoint point = pEvent->pos();
@@ -1425,6 +1558,7 @@ bool WDeckRack::handleBack() {
     // and only then the page.
     if (m_browserOpen) {
         m_browserOpen = false;
+        m_browserArmedRow = -1;
         update();
         return true;
     }
