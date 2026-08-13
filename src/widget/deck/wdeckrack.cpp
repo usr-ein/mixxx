@@ -295,16 +295,54 @@ void WDeckRack::syncFromEngine() {
 void WDeckRack::writeChainToEngine() {
     // Rewrite every slot from m_modules. Reordering is a chain reorder, not a
     // visual one, so this is what makes a drop change the audio.
+    //
+    // What each slot holds is read off first, because "move slot 3 to slot 1"
+    // is not something the engine can be asked: slots are rewritten in place,
+    // and telling one to load an effect loads it *with defaults*. Carrying the
+    // values across is what stops a drag two places left from silently
+    // resetting the reverb that was just dialled in.
+    QVector<int> previousType(kNumEffectsPerUnit, -1);
+    QVector<QHash<QString, double>> previousValues(kNumEffectsPerUnit);
+    for (const Module& module : m_modules) {
+        if (module.slot < 0 || module.slot >= kNumEffectsPerUnit) {
+            continue; // straight from the chooser: it has never been in a slot
+        }
+        previousType[module.slot] = module.type;
+        for (const auto& knob : catalogue().at(module.type).knobs) {
+            previousValues[module.slot].insert(knob.second,
+                    slotControl(module.slot, knob.second)->getParameter());
+        }
+    }
+
     for (int i = 0; i < m_modules.size(); ++i) {
         Module& module = m_modules[i];
         const auto& type = catalogue().at(module.type);
-        if (module.slot != i) {
-            module.slot = i;
+        const QHash<QString, double> carried = module.slot >= 0
+                ? previousValues.value(module.slot)
+                : QHash<QString, double>();
+        // Load whenever the slot is not already holding this kind of module.
+        // Compared by catalogue type rather than by effect index because two
+        // types share an effect -- HPF and LPF are both Filter -- and they pin
+        // different parameters, so swapping one for the other has to reload
+        // even though `loaded_effect` would not change.
+        const bool loading = previousType.value(i) != module.type ||
+                !slotControl(i, QStringLiteral("loaded"))->toBool();
+        module.slot = i;
+        if (loading) {
+            // This is the write the rack used to skip. The guard was
+            // `module.slot != i`, and the chooser appends a module already
+            // carrying the index it is about to take -- so for the one case
+            // that needed a load it was false, and the module was drawn but
+            // never put into the chain. Leaving the page rebuilt from the
+            // chain, found nothing, and emptied the rack.
             slotControl(i, QStringLiteral("loaded_effect"))->set(type.loadedEffect);
         }
         slotControl(i, QStringLiteral("enabled"))->set(1.0);
         for (const auto& pinned : type.hidden) {
             slotControl(i, pinned.first)->setParameter(pinned.second);
+        }
+        for (auto it = carried.constBegin(); it != carried.constEnd(); ++it) {
+            slotControl(i, it.key())->setParameter(it.value());
         }
     }
     for (int slot = m_modules.size(); slot < kNumEffectsPerUnit; ++slot) {
@@ -320,7 +358,7 @@ void WDeckRack::applyWetLock() {
     // original.
     bool seen = false;
     for (const Module& module : m_modules) {
-        if (module.type < 0) {
+        if (module.type < 0 || module.slot < 0) {
             continue;
         }
         const bool killer = catalogue().at(module.type).generatesNewMaterial;
@@ -333,6 +371,9 @@ void WDeckRack::applyWetLock() {
 
 double WDeckRack::knobValue(int moduleIndex, int knobIndex) const {
     const Module& module = m_modules.at(moduleIndex);
+    if (module.slot < 0) {
+        return 0.0; // appended but not yet written to the chain
+    }
     const auto& spec = catalogue().at(module.type).knobs.at(knobIndex);
     auto* pControl = const_cast<WDeckRack*>(this)->slotControl(module.slot, spec.second);
     return pControl->valid() ? pControl->getParameter() : 0.0;
@@ -340,6 +381,9 @@ double WDeckRack::knobValue(int moduleIndex, int knobIndex) const {
 
 void WDeckRack::setKnobValue(int moduleIndex, int knobIndex, double parameter) {
     const Module& module = m_modules.at(moduleIndex);
+    if (module.slot < 0) {
+        return;
+    }
     const auto& spec = catalogue().at(module.type).knobs.at(knobIndex);
     slotControl(module.slot, spec.second)->setParameter(qBound(0.0, parameter, 1.0));
 }
@@ -1102,7 +1146,9 @@ void WDeckRack::mousePressEvent(QMouseEvent* pEvent) {
         const int y = (height() - 260) / 2;
         for (int i = 0; i < columns; ++i) {
             if (QRect(x, y, cellWidth, 260).contains(point)) {
-                m_modules.append({i, m_modules.size()});
+                // Slot -1: not in the chain yet. writeChainToEngine() gives it
+                // one, and knows from the -1 that it has no values to carry.
+                m_modules.append({i, -1});
                 writeChainToEngine();
                 break;
             }
