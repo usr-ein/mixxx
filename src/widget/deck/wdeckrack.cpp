@@ -633,6 +633,10 @@ ControlProxy* WDeckRack::masterControl() const {
     return m_ringOut ? m_pAuxPregain.get() : m_pMakeup.get();
 }
 
+ControlProxy* WDeckRack::idleControl() const {
+    return m_ringOut ? m_pMakeup.get() : m_pAuxPregain.get();
+}
+
 void WDeckRack::setRingOut(bool ringOut) {
     // Carry the level across rather than leaving it on the control being
     // abandoned: flipping the rocker changes *where* the gain is applied, not
@@ -650,24 +654,45 @@ void WDeckRack::setRingOut(bool ringOut) {
     }
     m_ringOut = ringOut;
 
-    // The arriving stage takes its level BEFORE the departing one is parked at
-    // unity, and the order is the whole fix. The two gains multiply, and
-    // nothing makes a pair of separate controls atomic -- each sends its own
-    // message and the audio thread can run a buffer between them. Parking
-    // first puts both at unity for that buffer, which is full wet whatever the
-    // knob said: a burst of effect mid-transition. This way the odd buffer is
-    // level x level instead -- momentarily quiet, and nobody hears a dip of
-    // one buffer.
     ControlProxy* pNow = masterControl();
-    if (pNow && pNow->valid()) {
-        pNow->setParameter(m_mutedLevel >= 0.0 ? 0.0 : level);
-    }
-    // The one not in use is parked at unity, which on a ±12 dB taper is half
-    // travel and not zero -- parking it at zero would silence the rack through
-    // the stage nothing is driving.
-    ControlProxy* pIdle = m_ringOut ? m_pMakeup.get() : m_pAuxPregain.get();
-    if (pIdle && pIdle->valid()) {
-        pIdle->setParameter(0.5);
+    ControlProxy* pIdle = idleControl();
+
+    if (m_mutedLevel >= 0.0) {
+        // Muted, and a mode switch is not an unmute: BOTH stages go to zero.
+        //
+        // Parking the idle one at unity here is what made a muted rack speak.
+        // Muted in CUT, the output is closed but the send is wide open, so the
+        // reverb tank has been filling the whole time. Switching to RING OUT
+        // opens the output -- that IS what ring out means -- and everything
+        // that accumulated behind the closed gate comes out at once. The knob
+        // was down, the master said MUTED, and there was a noise.
+        //
+        // This does not disturb muting *within* a mode, which never comes
+        // through here: mute in RING OUT still pulls the send alone and still
+        // lets the tail ring out, which is the point of it.
+        if (pNow && pNow->valid()) {
+            pNow->setParameter(0.0);
+        }
+        if (pIdle && pIdle->valid()) {
+            pIdle->setParameter(0.0);
+        }
+    } else {
+        // The arriving stage takes its level BEFORE the departing one is
+        // parked at unity, and the order matters. The two gains multiply, and
+        // nothing makes a pair of separate controls atomic -- each sends its
+        // own message and the audio thread can run a buffer between them.
+        // Parking first puts both at unity for that buffer, which is full wet
+        // whatever the knob said. This way the odd buffer is level x level
+        // instead -- momentarily quiet, and nobody hears a dip of one buffer.
+        if (pNow && pNow->valid()) {
+            pNow->setParameter(level);
+        }
+        // The one not in use sits at unity, which on a ±12 dB taper is half
+        // travel and not zero -- parking it at zero would silence the rack
+        // through the stage nothing is driving.
+        if (pIdle && pIdle->valid()) {
+            pIdle->setParameter(0.5);
+        }
     }
     if (m_pConfig) {
         m_pConfig->setValue(
@@ -2018,6 +2043,13 @@ bool WDeckRack::handleSelect() {
     // is the send, so the tail decays; in cut it is the return, so it stops.
     if (m_mutedLevel >= 0.0) {
         pMaster->setParameter(m_mutedLevel);
+        // And open the stage the knob is not on. Usually it is already at
+        // unity, but a rocker flip while muted takes both to zero -- so
+        // unmuting is the only place that can put it back.
+        ControlProxy* pIdle = idleControl();
+        if (pIdle && pIdle->valid()) {
+            pIdle->setParameter(0.5);
+        }
         m_mutedLevel = -1.0;
     } else {
         m_mutedLevel = pMaster->getParameter();

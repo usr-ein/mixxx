@@ -271,6 +271,8 @@ class WDeckRack : public QWidget, public DeckPage {
     bool m_ringOut = true;
     /// The gain in force, whichever of the two it is.
     ControlProxy* masterControl() const;
+    /// The other one: at unity in normal use, so only one stage has gain in it.
+    ControlProxy* idleControl() const;
     void setRingOut(bool ringOut);
     QRect masterRockerRect() const;
 

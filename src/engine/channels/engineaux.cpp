@@ -81,11 +81,19 @@ void EngineAux::process(CSAMPLE* pOut, const int iBufferSize) {
         SampleUtil::copyWithGain(pOut, sampleBuffer, pregain, iBufferSize);
         EngineEffectsManager* pEngineEffectsManager = m_pEffectsManager->getEngineEffectsManager();
         if (pEngineEffectsManager != nullptr) {
+            // The rack runs here, prefader, and it contains beat-aware effects.
+            // Without these the Echo takes its "no tempo detected" branch and
+            // reads its time knob as SECONDS: a 1/2 became half a second, which
+            // at 144 BPM is 1.2 beats -- near enough to a beat to sound almost
+            // right and never land.
+            GroupFeatureState features;
+            collectFeatures(&features);
             pEngineEffectsManager->processPreFaderInPlace(m_group.handle(),
                     m_pEffectsManager->getMainHandle(),
                     pOut,
                     iBufferSize,
-                    mixxx::audio::SampleRate::fromDouble(m_sampleRate.get()));
+                    mixxx::audio::SampleRate::fromDouble(m_sampleRate.get()),
+                    features);
         }
         m_sampleBuffer = nullptr;
     } else {

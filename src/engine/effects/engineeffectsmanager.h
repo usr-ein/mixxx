@@ -2,13 +2,13 @@
 
 #include "audio/types.h"
 #include "engine/channelhandle.h"
+#include "engine/effects/groupfeaturestate.h"
 #include "engine/effects/message.h"
 #include "util/samplebuffer.h"
 #include "util/types.h"
 
 class EngineEffectChain;
 class EngineEffect;
-struct GroupFeatureState;
 
 /// EngineEffectsManager is the entry point for processing effects in the audio
 /// thread. It also passes EffectsRequests from EffectsMessenger down to the
@@ -27,12 +27,20 @@ class EngineEffectsManager final : public EffectsRequestHandler {
 
     /// Process the prefader EngineEffectChains on the pInOut buffer, modifying
     /// the contents of the input buffer.
+    ///
+    /// *groupFeatures* defaults to empty, which is what the decks and
+    /// microphones want: their prefader chains are the EQ and QuickEffect, and
+    /// upstream gathers features only after this stage. A channel whose
+    /// prefader chain contains beat-aware effects has to pass its own -- the
+    /// aux does, because the effect rack lives there and a delay with no beat
+    /// length silently reinterprets its time knob as *seconds*.
     void processPreFaderInPlace(
             const ChannelHandle& inputHandle,
             const ChannelHandle& outputHandle,
             CSAMPLE* pInOut,
             unsigned int numSamples,
-            mixxx::audio::SampleRate sampleRate);
+            mixxx::audio::SampleRate sampleRate,
+            const GroupFeatureState& groupFeatures = GroupFeatureState());
 
     /// Process the postfader EngineEffectChains on the pInOut buffer, modifying
     /// the contents of the input buffer.
