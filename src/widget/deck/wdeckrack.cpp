@@ -414,6 +414,10 @@ void WDeckRack::setActive(bool active) {
         syncFromEngine();
         m_refresh.start();
     } else {
+        // Leaving the page drops whatever knob had the encoder: no screen
+        // inherits a claim made on another one (DeckEncoder).
+        m_focusModule = kFocusMaster;
+        m_focusKnob = -1;
         m_refresh.stop();
         m_slideTimer.stop();
         m_slide.fill(0.0, m_modules.size());

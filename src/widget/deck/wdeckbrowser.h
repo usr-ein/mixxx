@@ -15,6 +15,7 @@
 #include "preferences/usersettings.h"
 #include "skin/legacy/skincontext.h"
 #include "track/track_decl.h"
+#include "widget/deck/deckencoder.h"
 #include "widget/wbasewidget.h"
 
 class ControlEncoder;
@@ -81,7 +82,7 @@ class DeckSortChip : public QLabel {
 /// **Navigation is a stack, not a tree.** Each level records what it was
 /// showing and which row was selected, so BACK restores the level below exactly
 /// as it was left rather than rebuilding it from scratch and losing the place.
-class WDeckBrowser : public QWidget, public WBaseWidget {
+class WDeckBrowser : public QWidget, public WBaseWidget, public DeckEncoder::Target {
     Q_OBJECT
 
   public:
@@ -92,6 +93,13 @@ class WDeckBrowser : public QWidget, public WBaseWidget {
     ~WDeckBrowser() override;
 
     void setup(const QDomNode& node, const SkinContext& context);
+
+    // DeckEncoder::Target. Which of the browser's own screens is showing --
+    // a menu, a track list, the Effects page -- is decided below, not by the
+    // router: the router only knows that the library is up.
+    void encoderMove(int steps) override;
+    void encoderPress() override;
+    void encoderResetFocus() override;
 
   signals:
     void loadTrackToPlayer(TrackPointer pTrack, const QString& group, bool play);
@@ -144,6 +152,7 @@ class WDeckBrowser : public QWidget, public WBaseWidget {
         int selectedRow = 0;
     };
 
+    void finishControlSetup();
     void pushLevel(Level level);
     void popLevel();
     void rebuildCurrentLevel();

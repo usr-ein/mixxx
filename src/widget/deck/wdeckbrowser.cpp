@@ -34,6 +34,7 @@
 #include "widget/deck/deckmenumodel.h"
 #include "widget/deck/deckpage.h"
 #include "widget/deck/wdeckdiagnostics.h"
+#include "widget/deck/deckencoder.h"
 #include "widget/deck/wdeckrack.h"
 #include "widget/deck/wdeckinfopanel.h"
 #include "widget/deck/wdecksearch.h"
@@ -456,7 +457,23 @@ WDeckBrowser::WDeckBrowser(QWidget* pParent,
     // ---- the deck's controls -------------------------------------------
     m_pMove = std::make_unique<ControlEncoder>(ConfigKey("[Browser]", "move"), false);
     connect(m_pMove.get(), &ControlEncoder::valueChanged, this, [this](double v) {
-        const int steps = static_cast<int>(v);
+        encoderMove(static_cast<int>(v));
+    });
+    if (DeckEncoder::instance()) {
+        DeckEncoder::instance()->setBrowser(this);
+    }
+
+    m_pSelect = std::make_unique<ControlPushButton>(ConfigKey("[Browser]", "select"));
+    connect(m_pSelect.get(), &ControlPushButton::valueChanged, this, [this](double v) {
+        if (v > 0.0) {
+            encoderPress();
+        }
+    });
+    finishControlSetup();
+}
+
+void WDeckBrowser::encoderMove(int steps) {
+    {
         if (steps == 0) {
             return;
         }
@@ -472,13 +489,11 @@ WDeckBrowser::WDeckBrowser(QWidget* pParent,
             return;
         }
         (inTrackList() ? m_pTrackView : m_pMenuView)->moveSelection(steps);
-    });
+    }
+}
 
-    m_pSelect = std::make_unique<ControlPushButton>(ConfigKey("[Browser]", "select"));
-    connect(m_pSelect.get(), &ControlPushButton::valueChanged, this, [this](double v) {
-        if (v <= 0.0) {
-            return;
-        }
+void WDeckBrowser::encoderPress() {
+    {
         if (m_pSortMenu->isOpen()) {
             m_pSortMenu->activateSelection();
             return;
@@ -495,8 +510,15 @@ WDeckBrowser::WDeckBrowser(QWidget* pParent,
         if (pView->selectedRow() >= 0) {
             onActivated(pView->selectedRow());
         }
-    });
+    }
+}
 
+void WDeckBrowser::encoderResetFocus() {
+    // Nothing of the browser's own survives a screen change: the pages hold
+    // any focus there is, and setActive() clears theirs when they leave.
+}
+
+void WDeckBrowser::finishControlSetup() {
     m_pBack = std::make_unique<ControlPushButton>(ConfigKey("[Browser]", "back"));
     connect(m_pBack.get(), &ControlPushButton::valueChanged, this, [this](double v) {
         if (v <= 0.0) {

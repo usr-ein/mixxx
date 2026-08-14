@@ -5,6 +5,7 @@
 #include <memory>
 
 #include "skin/legacy/skincontext.h"
+#include "widget/deck/deckencoder.h"
 #include "widget/wbasewidget.h"
 
 class ControlProxy;
@@ -26,7 +27,7 @@ namespace deck {
 /// **Touching it claims the encoder.** The border lights while it holds focus,
 /// so there is never a question of what the wheel is about to do; touching
 /// anything else gives it back. See eventFilter().
-class WDeckFxStrip : public QWidget, public WBaseWidget {
+class WDeckFxStrip : public QWidget, public WBaseWidget, public DeckEncoder::Target {
     Q_OBJECT
 
   public:
@@ -34,6 +35,13 @@ class WDeckFxStrip : public QWidget, public WBaseWidget {
     ~WDeckFxStrip() override;
 
     void setup(const QDomNode& node, const SkinContext& context);
+
+    // DeckEncoder::Target. Rotation only arrives while this has focus -- the
+    // router sends it to the waveform zoom otherwise -- but the press always
+    // arrives, because on the deck view it is the FX mute either way.
+    void encoderMove(int steps) override;
+    void encoderPress() override;
+    void encoderResetFocus() override;
 
   protected:
     void paintEvent(QPaintEvent* pEvent) override;
@@ -64,8 +72,6 @@ class WDeckFxStrip : public QWidget, public WBaseWidget {
     std::unique_ptr<ControlProxy> m_pAuxPregain;
     std::unique_ptr<ControlProxy> m_pMakeup;
     std::unique_ptr<ControlProxy> m_pRingOut;
-    std::unique_ptr<ControlProxy> m_pMove;
-    std::unique_ptr<ControlProxy> m_pSelect;
 
     QTimer m_refresh;
     bool m_focused = false;

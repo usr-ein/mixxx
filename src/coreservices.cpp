@@ -483,9 +483,9 @@ void CoreServices::initialize(QApplication* pApp) {
 
     // Before anything that might parse a skin. See ProLinkControls.
     m_pProLinkControls = std::make_unique<mixxx::prolink::ProLinkControls>();
-    // Same reason, same timing: the effect rack and the deck view's FX strip
-    // are two widgets in one skin that share these.
-    m_pDeckFxControls = std::make_unique<mixxx::deck::DeckFxControls>();
+    // Same reason, same timing. It also decides what the encoder means on
+    // each screen, which is why it is one object and not three.
+    m_pDeckEncoder = std::make_unique<mixxx::deck::DeckEncoder>();
 
     m_pControlIndicatorTimer = std::make_shared<mixxx::ControlIndicatorTimer>(this);
 
@@ -870,7 +870,7 @@ void CoreServices::finalize() {
 
     m_pControlIndicatorTimer.reset();
     m_pProLinkControls.reset();
-    m_pDeckFxControls.reset();
+    m_pDeckEncoder.reset();
 
     t.elapsed(true);
 }

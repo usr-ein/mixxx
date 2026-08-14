@@ -6,7 +6,7 @@
 
 #include "control/controlproxy.h"
 #include "moc_wdeckfxstrip.cpp"
-#include "widget/deck/deckfxcontrols.h"
+#include "widget/deck/deckencoder.h"
 #include "widget/deck/wdeckrack.h"
 
 namespace {
@@ -27,56 +27,57 @@ WDeckFxStrip::WDeckFxStrip(QWidget* pParent)
     m_pAuxPregain = std::make_unique<ControlProxy>(
             QStringLiteral("[Auxiliary1]"), QStringLiteral("pregain"));
     m_pRingOut = std::make_unique<ControlProxy>(kTri, QStringLiteral("fx_ring_out"));
-    m_pMove = std::make_unique<ControlProxy>(kTri, QStringLiteral("fx_move"));
-    m_pSelect = std::make_unique<ControlProxy>(kTri, QStringLiteral("fx_select"));
-
-    // The encoder arrives through the mapping, which only routes here while
-    // `fx_focus` is set -- so the strip does not have to fight the browser for
-    // it, and the browser does not have to know the strip exists.
-    m_pMove->connectValueChanged(this, [this](double steps) {
-        if (!m_focused || steps == 0.0) {
-            return;
-        }
-        ControlProxy* pMaster = masterControl();
-        if (!pMaster || !pMaster->valid()) {
-            return;
-        }
-        const double base = m_mutedLevel >= 0.0 ? m_mutedLevel : pMaster->getParameter();
-        const double next = qBound(0.0, base + steps * 0.028, 1.0);
-        if (m_mutedLevel >= 0.0) {
-            m_mutedLevel = next;
-        } else {
-            pMaster->setParameter(next);
-        }
-        update();
-    });
-    m_pSelect->connectValueChanged(this, [this](double v) {
-        if (!m_focused || v <= 0.0) {
-            return;
-        }
-        ControlProxy* pMaster = masterControl();
-        if (!pMaster || !pMaster->valid()) {
-            return;
-        }
-        if (m_mutedLevel >= 0.0) {
-            pMaster->setParameter(m_mutedLevel);
-            ControlProxy* pIdle = idleControl();
-            if (pIdle && pIdle->valid()) {
-                pIdle->setParameter(0.5);
-            }
-            m_mutedLevel = -1.0;
-        } else {
-            m_mutedLevel = pMaster->getParameter();
-            pMaster->setParameter(0.0);
-        }
-        update();
-    });
 
     // The VU has to move without anyone touching anything, so unlike the rack
     // this repaints whether or not it is being used. It is 76 px wide.
     m_refresh.setInterval(100);
     connect(&m_refresh, &QTimer::timeout, this, [this] { update(); });
     m_refresh.start();
+
+    if (DeckEncoder::instance()) {
+        DeckEncoder::instance()->setDeckView(this);
+    }
+}
+
+void WDeckFxStrip::encoderMove(int steps) {
+    ControlProxy* pMaster = masterControl();
+    if (!pMaster || !pMaster->valid()) {
+        return;
+    }
+    // Turning while muted sets the level it will come back to, rather than
+    // unmuting by surprise.
+    const double base = m_mutedLevel >= 0.0 ? m_mutedLevel : pMaster->getParameter();
+    const double next = qBound(0.0, base + steps * 0.028, 1.0);
+    if (m_mutedLevel >= 0.0) {
+        m_mutedLevel = next;
+    } else {
+        pMaster->setParameter(next);
+    }
+    update();
+}
+
+void WDeckFxStrip::encoderPress() {
+    ControlProxy* pMaster = masterControl();
+    if (!pMaster || !pMaster->valid()) {
+        return;
+    }
+    if (m_mutedLevel >= 0.0) {
+        pMaster->setParameter(m_mutedLevel);
+        ControlProxy* pIdle = idleControl();
+        if (pIdle && pIdle->valid()) {
+            pIdle->setParameter(0.5);
+        }
+        m_mutedLevel = -1.0;
+    } else {
+        m_mutedLevel = pMaster->getParameter();
+        pMaster->setParameter(0.0);
+    }
+    update();
+}
+
+void WDeckFxStrip::encoderResetFocus() {
+    m_focused = false;
+    update();
 }
 
 void WDeckFxStrip::setup(const QDomNode& node, const SkinContext& context) {
@@ -87,8 +88,9 @@ void WDeckFxStrip::setup(const QDomNode& node, const SkinContext& context) {
 }
 
 WDeckFxStrip::~WDeckFxStrip() {
-    if (DeckFxControls::instance()) {
-        DeckFxControls::instance()->focus()->forceSet(0.0);
+    if (DeckEncoder::instance()) {
+        DeckEncoder::instance()->setFxFocused(false);
+        DeckEncoder::instance()->setDeckView(nullptr);
     }
 }
 
@@ -143,14 +145,8 @@ void WDeckFxStrip::setFocused(bool focused) {
         return;
     }
     m_focused = focused;
-    // forceSet, and written on the ControlObject rather than through a proxy.
-    // The control is read-only so that no mapping can steer the encoder
-    // somewhere nothing is lit -- and setReadOnly() enforces that with a
-    // change-request handler that drops the value, which set() goes through.
-    // A proxy would therefore have written nothing at all, silently, and the
-    // border would have lit while the encoder stayed with the browser.
-    if (DeckFxControls::instance()) {
-        DeckFxControls::instance()->focus()->forceSet(focused ? 1.0 : 0.0);
+    if (DeckEncoder::instance()) {
+        DeckEncoder::instance()->setFxFocused(focused);
     }
     if (focused) {
         // On qApp, not on window(). The waveform is a native OpenGLWindow, and
@@ -181,12 +177,17 @@ bool WDeckFxStrip::eventFilter(QObject* pObject, QEvent* pEvent) {
 // ---------------------------------------------------------------------------
 
 QRect WDeckFxStrip::knobRect() const {
+    // At the top, under the title. It is the control a hand reaches for
+    // without looking, so it goes where a hand arrives.
     const int size = qMin(width() - 18, 58);
-    return QRect((width() - size) / 2, height() / 2 - size / 2 - 20, size, size);
+    return QRect((width() - size) / 2, 40, size, size);
 }
 
 QRect WDeckFxStrip::vuRect() const {
-    return QRect(width() / 2 - 9, 34, 18, height() / 2 - 84);
+    // Below the knob and its readout, with a gap: the meter is read, not
+    // touched, so it gives up the reachable half of the strip.
+    const int top = knobRect().bottom() + 62;
+    return QRect(width() / 2 - 11, top, 22, rockerRect().top() - top - 16);
 }
 
 QRect WDeckFxStrip::rockerRect() const {
