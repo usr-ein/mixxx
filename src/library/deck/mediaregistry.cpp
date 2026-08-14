@@ -7,6 +7,7 @@
 #include <QFileInfo>
 #include <QSqlDatabase>
 #include <QSqlQuery>
+#include <QUrl>
 #include <QtConcurrentRun>
 
 #include <QStandardPaths>
@@ -374,6 +375,31 @@ MediaRegistry::ReadResult MediaRegistry::readMedium(
             return result;
         }
         raw = pdbFile.readAll();
+    }
+
+    // Keep the bytes we ingested. A medium's pdb is the one input to all of
+    // this and it is otherwise unrecoverable -- a remote one never touches the
+    // disk, and a stick can be unplugged -- so "this playlist came up empty"
+    // is a question nobody can answer afterwards without it. 660 kB, replaced
+    // per medium, and it makes the difference between reading the parser and
+    // reading the data.
+    {
+        // databaseName() is a URL here ("file:/home/.../mixxxdb.sqlite"), not
+        // a path, and QFileInfo on it yields something relative to $HOME.
+        const QString name = database.databaseName();
+        const QString file = name.startsWith(QLatin1String("file:"))
+                ? QUrl(name).toLocalFile()
+                : name;
+        const QString dir = QFileInfo(file).absolutePath();
+        const QString path = QDir(dir).filePath(QStringLiteral("last-ingest.pdb"));
+        QFile copy(path);
+        if (copy.open(QIODevice::WriteOnly | QIODevice::Truncate)) {
+            copy.write(raw);
+            kLogger.info() << "kept the ingested pdb:" << path << raw.size() << "bytes";
+        } else {
+            kLogger.warning() << "could not keep the ingested pdb at" << path
+                              << copy.errorString();
+        }
     }
 
     mixxx::prolink::PdbContents contents = mixxx::prolink::parsePdb(raw);
