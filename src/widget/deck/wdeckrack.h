@@ -63,8 +63,14 @@ class WDeckRack : public QWidget, public DeckPage {
     void mouseMoveEvent(QMouseEvent* pEvent) override;
     void mouseReleaseEvent(QMouseEvent* pEvent) override;
 
-  private:
+  public:
     /// What a module is made of. Purely visual; two modules can share an effect.
+    ///
+    /// Public, with the four painters below, because the deck view's FX strip
+    /// draws the same hardware and duplicating a bevel is how two panels start
+    /// to look like two panels. If a third caller appears this wants lifting
+    /// out into a `deckchrome` of its own; with two it is not yet worth the
+    /// indirection.
     enum class Material {
         BrushedSteel,
         YellowPlastic,
@@ -105,6 +111,7 @@ class WDeckRack : public QWidget, public DeckPage {
     QRect binRect() const;
     int scrollSpan() const;
 
+  public:
     // ---- painting ----------------------------------------------------------
     /// Chrome for one material, rendered once and reused.
     const QPixmap& chromeFor(Material material, int width);
@@ -141,6 +148,10 @@ class WDeckRack : public QWidget, public DeckPage {
     /// from the module rect rather than from constants, because the rack's
     /// height depends on the browser's breadcrumb and is not knowable here.
     static QRect knobGeometry(const QRect& moduleRect, int count, int index);
+    /// The ink a material's captions are printed in.
+    static QColor materialInk(int material);
+
+  private:
     void paintModule(QPainter* pPainter, int index, const QPoint& offset = QPoint());
     void paintMaster(QPainter* pPainter);
     void paintNameBar(QPainter* pPainter);
@@ -291,6 +302,8 @@ class WDeckRack : public QWidget, public DeckPage {
     QRect masterRockerRect() const;
 
     UserSettingsPointer m_pConfig;
+    /// The rocker, shared with the deck view's FX strip.
+    std::unique_ptr<ControlProxy> m_pRingOutControl;
     /// What the whole chain is returning, for the master's meter.
     std::unique_ptr<ControlProxy> m_pOutputLevel;
     std::unique_ptr<ControlProxy> m_pMasterMix;

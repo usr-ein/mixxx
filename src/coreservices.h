@@ -3,6 +3,7 @@
 #include <memory>
 
 #include "network/prolink/prolinkcontrols.h"
+#include "widget/deck/deckfxcontrols.h"
 #include "preferences/settingsmanager.h"
 #include "util/timer.h"
 
@@ -126,6 +127,7 @@ class CoreServices : public QObject {
     /// for any binding whose key does not exist yet, and a second creator of a
     /// key gets an object connected to nothing -- see ProLinkControls.
     std::unique_ptr<mixxx::prolink::ProLinkControls> m_pProLinkControls;
+    std::unique_ptr<mixxx::deck::DeckFxControls> m_pDeckFxControls;
     std::shared_ptr<mixxx::ControlIndicatorTimer> m_pControlIndicatorTimer;
     std::shared_ptr<EffectsManager> m_pEffectsManager;
     std::shared_ptr<EngineMixer> m_pEngine;

@@ -60,6 +60,7 @@
 #include "widget/wnumberrate.h"
 #include "widget/woverview.h"
 #include "widget/deck/wdeckbrowser.h"
+#include "widget/deck/wdeckfxstrip.h"
 #include "widget/deck/wdecktoast.h"
 #include "widget/wprolinkphasemeter.h"
 #include "widget/wtempopanel.h"
@@ -542,6 +543,8 @@ QList<QWidget*> LegacySkinParser::parseNode(const QDomElement& node) {
         result = wrapWidget(parseStandardWidget<WComboBox>(node));
     } else if (nodeName == "Overview") {
         result = wrapWidget(parseOverview(node));
+    } else if (nodeName == "DeckFxStrip") {
+        result = wrapWidget(parseDeckFxStrip(node));
     } else if (nodeName == "DeckBrowser") {
         result = wrapWidget(parseDeckBrowser(node));
     } else if (nodeName == "DeckToast") {
@@ -1079,6 +1082,13 @@ QWidget* LegacySkinParser::parseVisual(const QDomElement& node) {
     viewer->slotTrackLoaded(pPlayer->getLoadedTrack());
 
     return viewer;
+}
+
+QWidget* LegacySkinParser::parseDeckFxStrip(const QDomElement& node) {
+    auto* pStrip = new mixxx::deck::WDeckFxStrip(m_pParent);
+    commonWidgetSetup(node, pStrip, false);
+    pStrip->setup(node, *m_pContext);
+    return pStrip;
 }
 
 QWidget* LegacySkinParser::parseDeckBrowser(const QDomElement& node) {

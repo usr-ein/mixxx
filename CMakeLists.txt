@@ -1082,6 +1082,8 @@ add_library(mixxx-lib STATIC EXCLUDE_FROM_ALL
   src/network/networktask.cpp
   src/util/posixsignalhandler.cpp
   src/network/prolink/prolinkcontrols.cpp
+  src/widget/deck/deckfxcontrols.cpp
+  src/widget/deck/wdeckfxstrip.cpp
   src/network/prolink/keysync.cpp
   src/network/prolink/prolinkkeysync.cpp
   src/network/prolink/synctempo.cpp

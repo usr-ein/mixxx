@@ -317,10 +317,20 @@ WDeckRack::WDeckRack(EffectsManager* pEffectsManager,
             QStringLiteral("[Auxiliary1]"), QStringLiteral("aux_send"));
     m_pDeckSendLevel = std::make_unique<ControlProxy>(
             QStringLiteral("[Auxiliary1]"), QStringLiteral("deck_send"));
-    if (m_pConfig) {
-        m_ringOut = m_pConfig->getValue(
-                ConfigKey(QStringLiteral("[TriMixxx]"), QStringLiteral("fx_master_ring_out")),
-                true);
+    // Shared with the deck view's FX strip, which shows the same switch. A
+    // copy in each would drift apart the moment either was touched.
+    m_pRingOutControl = std::make_unique<ControlProxy>(
+            QStringLiteral("[TriMixxx]"), QStringLiteral("fx_ring_out"));
+    if (m_pRingOutControl->valid()) {
+        m_ringOut = m_pRingOutControl->toBool();
+        m_pRingOutControl->connectValueChanged(this, [this](double v) {
+            // The strip flipped it. Follow, without writing back.
+            const bool wanted = v > 0.0;
+            if (wanted != m_ringOut) {
+                m_ringOut = wanted;
+                update();
+            }
+        });
     }
     // The chain's own mix is not a gain the rack uses: with a makeup control
     // on the output there is one gain stage, and two would be two things to
@@ -721,10 +731,8 @@ void WDeckRack::setRingOut(bool ringOut) {
             pIdle->setParameter(0.5);
         }
     }
-    if (m_pConfig) {
-        m_pConfig->setValue(
-                ConfigKey(QStringLiteral("[TriMixxx]"), QStringLiteral("fx_master_ring_out")),
-                m_ringOut);
+    if (m_pRingOutControl && m_pRingOutControl->valid()) {
+        m_pRingOutControl->set(m_ringOut ? 1.0 : 0.0);
     }
 }
 
@@ -1010,6 +1018,10 @@ int WDeckRack::scrollSpan() const {
 // ---------------------------------------------------------------------------
 // Painting
 // ---------------------------------------------------------------------------
+
+QColor WDeckRack::materialInk(int material) {
+    return inkFor(material);
+}
 
 void WDeckRack::paintBevel(QPainter* pPainter, const QRect& rect, bool raised) {
     const QColor light = raised ? QColor(255, 255, 255, 140) : QColor(0, 0, 0, 150);
