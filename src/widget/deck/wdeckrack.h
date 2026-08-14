@@ -83,17 +83,31 @@ class WDeckRack : public QWidget, public DeckPage {
     static constexpr int kBezelHeight = 56;
     static constexpr int kModuleWidth = 204;
     static constexpr int kGutter = 4;
+    /// The INPUT module, pinned at the far left as the master is pinned right.
+    /// Narrower than a module: it carries two dials and no name to speak of.
+    static constexpr int kInputWidth = 156;
+    /// Sentinels for what the encoder is pointed at, in place of a module
+    /// index. Both are fixed modules that live outside m_modules.
+    static constexpr int kFocusMaster = -1;
+    static constexpr int kFocusInput = -2;
 
     int rackHeight() const;
     QRect moduleRect(int index) const; ///< in widget coordinates, scrolled
     QRect masterRect() const;
+    /// The fixed INPUT module: the two send levels feeding the whole rack.
+    QRect inputRect() const;
+    QRect inputKnobRect(int knobIndex) const;
+    /// Which INPUT dial is under a point, or -1.
+    int inputKnobAt(const QPoint& point) const;
+    ControlProxy* inputControl(int knobIndex) const;
+    void paintInput(QPainter* pPainter);
     QRect plusRect() const;
     QRect binRect() const;
     int scrollSpan() const;
 
     // ---- painting ----------------------------------------------------------
     /// Chrome for one material, rendered once and reused.
-    const QPixmap& chromeFor(Material material);
+    const QPixmap& chromeFor(Material material, int width);
     static void paintChrome(QPainter* pPainter, const QRect& rect, Material material);
     static void paintKnob(QPainter* pPainter,
             const QRect& rect,
@@ -282,6 +296,10 @@ class WDeckRack : public QWidget, public DeckPage {
     std::unique_ptr<ControlProxy> m_pMasterMix;
     /// The send: [Auxiliary1] pregain, pre-effect, ±12 dB.
     std::unique_ptr<ControlProxy> m_pAuxPregain;
+    /// What reaches the chain from each source, before `pregain` scales their
+    /// sum. The INPUT module's two dials.
+    std::unique_ptr<ControlProxy> m_pAuxSendLevel;
+    std::unique_ptr<ControlProxy> m_pDeckSendLevel;
     /// The return: the chain's own output gain, the same ±12 dB.
     std::unique_ptr<ControlProxy> m_pMakeup;
     /// The tempo the rack is running at and which deck it came from, shown in

@@ -1,11 +1,14 @@
 #include "engine/enginemixer.h"
 
+#include <algorithm>
+
 #include "audio/types.h"
 #include "control/controlaudiotaperpot.h"
 #include "control/controlpotmeter.h"
 #include "control/controlpushbutton.h"
 #include "effects/effectsmanager.h"
 #include "engine/channelmixer.h"
+#include "engine/channels/engineaux.h"
 #include "engine/channels/enginechannel.h"
 #include "engine/effects/engineeffectsmanager.h"
 #include "engine/enginebuffer.h"
@@ -150,12 +153,14 @@ EngineMixer::EngineMixer(
     m_talkover = mixxx::SampleBuffer(kMaxEngineSamples);
     m_talkoverHeadphones = mixxx::SampleBuffer(kMaxEngineSamples);
     m_sidechainMix = mixxx::SampleBuffer(kMaxEngineSamples);
+    m_deckSend = mixxx::SampleBuffer(kMaxEngineSamples);
     m_head.clear();
     m_main.clear();
     m_booth.clear();
     m_talkover.clear();
     m_talkoverHeadphones.clear();
     m_sidechainMix.clear();
+    m_deckSend.clear();
 
     // Setup the output buses
     for (int o = EngineChannel::LEFT; o <= EngineChannel::RIGHT; ++o) {
@@ -358,13 +363,51 @@ void EngineMixer::processChannels(int iBufferSize) {
         }
     }
 
+    // Auxiliary channels go last, whatever order they were registered in.
+    //
+    // An aux channel can sum the decks into itself before running its effects
+    // -- that is how the deck's own audio reaches the effect rack (PRD §15.1)
+    // -- and that only works if the decks have already been processed. Left to
+    // registration order it happened to be true, which is the worst kind of
+    // true: nothing would have failed, the deck's contribution would just have
+    // been one callback stale and nobody would ever have found it.
+    std::stable_partition(m_activeChannels.begin() + activeChannelsStartIndex,
+            m_activeChannels.end(),
+            [](const ChannelInfo* pInfo) {
+                return !pInfo->m_pChannel->isAuxiliaryChannel();
+            });
+
     // Now that the list is built and ordered, do the processing.
+    m_deckSend.clear();
+    bool haveDeckSend = false;
     for (int i = activeChannelsStartIndex;
              i < m_activeChannels.size(); ++i) {
         ChannelInfo* pChannelInfo = m_activeChannels[i];
         EngineChannel* pChannel = pChannelInfo->m_pChannel;
         DEBUG_ASSERT(pChannelInfo->m_pBuffer.size() >= iBufferSize);
+
+        // Hand the decks to the aux before it processes, so its chain sees
+        // them. Post-fader: the channel's own volume, because a send that
+        // ignored the fader would keep feeding the rack from a deck the DJ had
+        // pulled down.
+        if (pChannel->isAuxiliaryChannel() && haveDeckSend) {
+            static_cast<EngineAux*>(pChannel)->receiveDeckSend(
+                    m_deckSend.data(), iBufferSize);
+        }
+
         pChannel->process(pChannelInfo->m_pBuffer.data(), iBufferSize);
+
+        if (pChannel->isPrimaryDeck() && pChannelInfo->m_pVolumeControl) {
+            const auto volume = static_cast<CSAMPLE_GAIN>(
+                    pChannelInfo->m_pVolumeControl->get());
+            if (volume > CSAMPLE_GAIN_ZERO) {
+                SampleUtil::addWithGain(m_deckSend.data(),
+                        pChannelInfo->m_pBuffer.data(),
+                        volume,
+                        iBufferSize);
+                haveDeckSend = true;
+            }
+        }
 
         // Collect metadata for effects
         if (m_pEngineEffectsManager) {

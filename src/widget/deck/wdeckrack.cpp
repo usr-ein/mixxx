@@ -45,22 +45,6 @@ struct MaterialColors {
     QColor shadow;
 };
 
-/// The colour of the pilot lamp on a module's title strip. Kept bright, and
-/// kept separate from the text ink below: a lamp is a light, and a caption is
-/// something printed on a panel.
-QColor accentFor(int material) {
-    switch (material) {
-    case 0:
-        return QColor(0xF0, 0xC8, 0x60); // gold on steel
-    case 1:
-        return QColor(0x3A, 0x2E, 0x00); // dark ink on yellow
-    case 2:
-        return QColor(0x06, 0x2A, 0x0C); // dark ink on green
-    default:
-        return QColor(0x6C, 0xD8, 0xFF); // cyan on gloss black
-    }
-}
-
 /// The knob cap, which is deliberately NOT the panel's colour.
 ///
 /// Caps matching their panel is what the first pass did and it made the black
@@ -329,6 +313,10 @@ WDeckRack::WDeckRack(EffectsManager* pEffectsManager,
     m_pMakeup = std::make_unique<ControlProxy>(kUnit, QStringLiteral("makeup"));
     m_pAuxPregain = std::make_unique<ControlProxy>(
             QStringLiteral("[Auxiliary1]"), QStringLiteral("pregain"));
+    m_pAuxSendLevel = std::make_unique<ControlProxy>(
+            QStringLiteral("[Auxiliary1]"), QStringLiteral("aux_send"));
+    m_pDeckSendLevel = std::make_unique<ControlProxy>(
+            QStringLiteral("[Auxiliary1]"), QStringLiteral("deck_send"));
     if (m_pConfig) {
         m_ringOut = m_pConfig->getValue(
                 ConfigKey(QStringLiteral("[TriMixxx]"), QStringLiteral("fx_master_ring_out")),
@@ -505,7 +493,7 @@ void WDeckRack::syncFromEngine() {
     }
     m_modules = found;
     if (m_focusModule >= m_modules.size()) {
-        m_focusModule = -1;
+        m_focusModule = kFocusMaster;
         m_focusKnob = -1;
     }
     m_slide.fill(0.0, m_modules.size());
@@ -635,6 +623,14 @@ void WDeckRack::focusKnob(int moduleIndex, int knobIndex) {
 }
 
 void WDeckRack::turnFocusedKnob(int steps) {
+    if (m_focusModule == kFocusInput) {
+        ControlProxy* pControl = inputControl(m_focusKnob);
+        if (pControl && pControl->valid()) {
+            pControl->setParameter(qBound(0.0, pControl->getParameter() + steps * 0.02, 1.0));
+            persistSoon();
+        }
+        return;
+    }
     if (m_focusModule < 0 || m_focusModule >= m_modules.size()) {
         return;
     }
@@ -925,8 +921,33 @@ int WDeckRack::rackHeight() const {
 }
 
 QRect WDeckRack::moduleRect(int index) const {
-    const int x = index * (kModuleWidth + kGutter) - m_scroll;
+    const int x = kInputWidth + kGutter + index * (kModuleWidth + kGutter) - m_scroll;
     return QRect(x, kNameBarHeight, kModuleWidth, rackHeight());
+}
+
+QRect WDeckRack::inputRect() const {
+    return QRect(0, kNameBarHeight, kInputWidth, rackHeight());
+}
+
+QRect WDeckRack::inputKnobRect(int knobIndex) const {
+    const QRect face = inputRect().adjusted(3, 3, -3, -3);
+    constexpr int kSize = 74;
+    const int top = face.top() + 5 + 30 + 26;
+    const int x = face.center().x() - kSize / 2;
+    return QRect(x, top + knobIndex * (kSize + 46), kSize, kSize);
+}
+
+int WDeckRack::inputKnobAt(const QPoint& point) const {
+    for (int k = 0; k < 2; ++k) {
+        if (inputKnobRect(k).adjusted(-12, -10, 12, 24).contains(point)) {
+            return k;
+        }
+    }
+    return -1;
+}
+
+ControlProxy* WDeckRack::inputControl(int knobIndex) const {
+    return knobIndex == 0 ? m_pAuxSendLevel.get() : m_pDeckSendLevel.get();
 }
 
 QRect WDeckRack::masterRect() const {
@@ -937,7 +958,8 @@ QRect WDeckRack::plusRect() const {
     if (m_modules.size() >= kNumEffectsPerUnit) {
         return QRect(); // full: the (+) is not drawn and not tappable
     }
-    const int x = m_modules.size() * (kModuleWidth + kGutter) - m_scroll;
+    const int x = kInputWidth + kGutter +
+            m_modules.size() * (kModuleWidth + kGutter) - m_scroll;
     return QRect(x + 40, kNameBarHeight + rackHeight() / 2 - 40, 80, 80);
 }
 
@@ -981,7 +1003,7 @@ void WDeckRack::stepSlide() {
 
 int WDeckRack::scrollSpan() const {
     const int content = (m_modules.size() + 1) * (kModuleWidth + kGutter);
-    const int viewport = width() - kModuleWidth;
+    const int viewport = width() - kModuleWidth - kInputWidth - kGutter;
     return qMax(0, content - viewport);
 }
 
@@ -1014,7 +1036,6 @@ void WDeckRack::paintEngraved(QPainter* pPainter,
 void WDeckRack::paintChrome(QPainter* pPainter, const QRect& rect, Material material) {
     const int index = static_cast<int>(material);
     const MaterialColors colors = colorsFor(index);
-    const QColor accent = accentFor(index);
 
     // A frame within a frame, which is most of what makes the reference skins
     // read as equipment: a dark outer edge, a raised face inside it, and the
@@ -1070,16 +1091,13 @@ void WDeckRack::paintChrome(QPainter* pPainter, const QRect& rect, Material mate
     pPainter->setClipping(false);
     paintBevel(pPainter, strip, false);
 
-    // A lit pilot at the left of the strip: the module is in circuit.
-    // Clear of the top-left screw, which sits at face.left()+11 with a radius
-    // of 5 and so reaches into the strip. The lamp used to be drawn on top of
-    // it.
-    const QRect lamp(strip.left() + 16, strip.center().y() - 4, 8, 8);
-    pPainter->setPen(Qt::NoPen);
-    pPainter->setBrush(accent);
-    pPainter->drawEllipse(lamp);
-    pPainter->setBrush(QColor(255, 255, 255, 150));
-    pPainter->drawEllipse(lamp.adjusted(2, 2, -4, -4));
+    // No pilot lamp here. There was one, and it was a lie: drawn into the
+    // cached chrome pixmap, it had no access to any control and was lit on
+    // every module of a material whether the slot was doing anything or not.
+    // On a deck whose recurring fault is things looking healthy while dead --
+    // a filter closed to 13 Hz silencing the whole rack while four modules sat
+    // there with correct chrome -- a fake indicator earns its removal. The VU
+    // two centimetres to its right answers the same question truthfully.
 
     // ---- the well the knobs sit in -----------------------------------------
     const QRect well(face.left() + 5, strip.bottom() + 6, face.width() - 10,
@@ -1113,17 +1131,17 @@ void WDeckRack::paintChrome(QPainter* pPainter, const QRect& rect, Material mate
     }
 }
 
-const QPixmap& WDeckRack::chromeFor(Material material) {
-    const int key = static_cast<int>(material) * 10000 + rackHeight();
+const QPixmap& WDeckRack::chromeFor(Material material, int width) {
+    const int key = static_cast<int>(material) * 1000000 + width * 1000 + rackHeight();
     auto it = m_chrome.find(key);
     if (it != m_chrome.end()) {
         return it.value();
     }
-    QPixmap pixmap(kModuleWidth, rackHeight());
+    QPixmap pixmap(width, rackHeight());
     pixmap.fill(Qt::transparent);
     QPainter painter(&pixmap);
     painter.setRenderHint(QPainter::Antialiasing, true);
-    paintChrome(&painter, QRect(0, 0, kModuleWidth, rackHeight()), material);
+    paintChrome(&painter, QRect(0, 0, width, rackHeight()), material);
     m_chrome.insert(key, pixmap);
     return m_chrome[key];
 }
@@ -1338,7 +1356,7 @@ void WDeckRack::paintModule(QPainter* pPainter, int index, const QPoint& offset)
         return; // scrolled off; nothing to draw
     }
 
-    pPainter->drawPixmap(rect.topLeft(), chromeFor(static_cast<Material>(type.material)));
+    pPainter->drawPixmap(rect.topLeft(), chromeFor(static_cast<Material>(type.material), kModuleWidth));
 
     // The dry-killer lock is a property of position, so it is recomputed rather
     // than stored: the first module that generates new material.
@@ -1359,7 +1377,7 @@ void WDeckRack::paintModule(QPainter* pPainter, int index, const QPoint& offset)
     font.setLetterSpacing(QFont::AbsoluteSpacing, 2.0);
     pPainter->setFont(font);
     paintEngraved(pPainter,
-            strip.adjusted(30, 0, -6, 0),
+            strip.adjusted(24, 0, -6, 0),
             Qt::AlignVCenter | Qt::AlignLeft,
             type.name,
             inkFor(type.material));
@@ -1408,7 +1426,7 @@ void WDeckRack::paintModule(QPainter* pPainter, int index, const QPoint& offset)
 
 void WDeckRack::paintMaster(QPainter* pPainter) {
     const QRect rect = masterRect();
-    pPainter->drawPixmap(rect.topLeft(), chromeFor(Material::BrushedSteel));
+    pPainter->drawPixmap(rect.topLeft(), chromeFor(Material::BrushedSteel, kModuleWidth));
 
     const QRect face = rect.adjusted(3, 3, -3, -3);
     const QRect strip(face.left() + 5, face.top() + 5, face.width() - 10, 30);
@@ -1418,7 +1436,7 @@ void WDeckRack::paintMaster(QPainter* pPainter) {
     font.setLetterSpacing(QFont::AbsoluteSpacing, 2.0);
     pPainter->setFont(font);
     paintEngraved(pPainter,
-            strip.adjusted(30, 0, -6, 0),
+            strip.adjusted(24, 0, -6, 0),
             Qt::AlignVCenter | Qt::AlignLeft,
             tr("MASTER"),
             inkFor(0));
@@ -1442,7 +1460,7 @@ void WDeckRack::paintMaster(QPainter* pPainter) {
             Material::BrushedSteel,
             false,
             muted,
-            m_focusModule < 0);
+            m_focusModule == kFocusMaster);
 
     // The number, because a knob pointer is not a reading. Big enough to catch
     // from across the booth, which is the whole job of a master. In dB, since
@@ -1500,6 +1518,50 @@ QRect WDeckRack::masterRockerRect() const {
     // module rather than off constants -- the rack's height depends on the
     // browser's breadcrumb.
     return QRect(face.left() + 14, face.bottom() - 78, face.width() - 28, 30);
+}
+
+void WDeckRack::paintInput(QPainter* pPainter) {
+    const QRect rect = inputRect();
+    pPainter->drawPixmap(rect.topLeft(), chromeFor(Material::BrushedSteel, kInputWidth));
+
+    const QRect face = rect.adjusted(3, 3, -3, -3);
+    const QRect strip(face.left() + 5, face.top() + 5, face.width() - 10, 30);
+    QFont font = pPainter->font();
+    font.setPixelSize(17);
+    font.setBold(true);
+    font.setLetterSpacing(QFont::AbsoluteSpacing, 2.0);
+    pPainter->setFont(font);
+    paintEngraved(pPainter,
+            strip.adjusted(24, 0, -6, 0),
+            Qt::AlignVCenter | Qt::AlignLeft,
+            tr("INPUT"),
+            inkFor(0));
+    font.setLetterSpacing(QFont::PercentageSpacing, 100.0);
+
+    // The two sends feeding the rack: the mixer's aux, and this deck's own
+    // audio. They are the Xone's per-channel aux sends, one layer in.
+    for (int k = 0; k < 2; ++k) {
+        ControlProxy* pControl = inputControl(k);
+        const double level = pControl && pControl->valid() ? pControl->getParameter() : 0.5;
+        paintKnob(pPainter,
+                inputKnobRect(k),
+                level,
+                k == 0 ? tr("AUX") : tr("DECK"),
+                Material::BrushedSteel,
+                false,
+                false,
+                m_focusModule == kFocusInput && m_focusKnob == k);
+        font.setPixelSize(15);
+        font.setBold(true);
+        pPainter->setFont(font);
+        const QRect readout(face.left(), inputKnobRect(k).bottom() + 20, face.width(), 20);
+        paintEngraved(pPainter,
+                readout,
+                Qt::AlignCenter,
+                level <= 0.0 ? QStringLiteral("−∞")
+                             : QStringLiteral("%1 dB").arg(level * 24.0 - 12.0, 0, 'f', 1),
+                inkFor(0));
+    }
 }
 
 void WDeckRack::paintNameBar(QPainter* pPainter) {
@@ -1659,11 +1721,21 @@ void WDeckRack::paintEvent(QPaintEvent*) {
     painter.setRenderHint(QPainter::Antialiasing, true);
     painter.fillRect(rect(), QColor(0x0C, 0x0C, 0x0C));
 
+    // The modules scroll between the two fixed panels, so they are clipped to
+    // that gap rather than sliding over INPUT on the left or MASTER on the
+    // right.
+    painter.save();
+    painter.setClipRect(QRect(kInputWidth + kGutter,
+            0,
+            width() - kModuleWidth - kInputWidth - kGutter,
+            height()));
     for (int i = 0; i < m_modules.size(); ++i) {
         if (i != m_heldModule) {
             paintModule(&painter, i);
         }
     }
+
+    painter.restore();
 
     const QRect plus = plusRect();
     if (plus.isValid() && !m_modules.isEmpty()) {
@@ -1686,6 +1758,7 @@ void WDeckRack::paintEvent(QPaintEvent*) {
                 tr("Add an effect"));
     }
 
+    paintInput(&painter);
     paintMaster(&painter);
     paintNameBar(&painter);
 
@@ -1731,8 +1804,8 @@ void WDeckRack::paintEvent(QPaintEvent*) {
 // ---------------------------------------------------------------------------
 
 int WDeckRack::moduleAt(const QPoint& point) const {
-    if (point.x() >= width() - kModuleWidth) {
-        return -1; // the master is pinned there and is not draggable
+    if (point.x() >= width() - kModuleWidth || point.x() < kInputWidth + kGutter) {
+        return -1; // MASTER and INPUT are pinned and neither is draggable
     }
     for (int i = 0; i < m_modules.size(); ++i) {
         if (moduleRect(i).contains(point)) {
@@ -1813,7 +1886,7 @@ void WDeckRack::mousePressEvent(QMouseEvent* pEvent) {
     if (point.x() >= width() - kModuleWidth && point.y() >= kNameBarHeight) {
         // The master module takes the encoder back, which is how a DJ returns
         // the wheel to the level without hunting for a gesture.
-        m_focusModule = -1;
+        m_focusModule = kFocusMaster;
         m_focusKnob = -1;
         update();
     }
@@ -1822,6 +1895,21 @@ void WDeckRack::mousePressEvent(QMouseEvent* pEvent) {
         // Which half was tapped, so tapping the side already lit does nothing
         // rather than toggling away from it.
         setRingOut(point.x() < masterRockerRect().center().x());
+        update();
+        return;
+    }
+
+    if (point.x() < kInputWidth && point.y() >= kNameBarHeight) {
+        const int knob = inputKnobAt(point);
+        if (knob >= 0) {
+            m_focusModule = kFocusInput;
+            m_focusKnob = knob;
+            m_dragKnobModule = kFocusInput;
+            m_dragKnobIndex = knob;
+            ControlProxy* pControl = inputControl(knob);
+            m_dragStartValue = pControl && pControl->valid() ? pControl->getParameter() : 0.5;
+            m_dragStart = point;
+        }
         update();
         return;
     }
@@ -1894,6 +1982,17 @@ void WDeckRack::mouseMoveEvent(QMouseEvent* pEvent) {
             m_browserScroll = qBound(0,
                     m_browserScrollStart - (point.y() - m_dragStart.y()),
                     rackBrowserScrollSpan());
+            update();
+        }
+        return;
+    }
+
+    if (m_dragKnobModule == kFocusInput) {
+        ControlProxy* pControl = inputControl(m_dragKnobIndex);
+        if (pControl && pControl->valid()) {
+            const double delta = (m_dragStart.y() - point.y()) / 200.0;
+            pControl->setParameter(qBound(0.0, m_dragStartValue + delta, 1.0));
+            persistSoon();
             update();
         }
         return;
@@ -2015,7 +2114,7 @@ void WDeckRack::mouseReleaseEvent(QMouseEvent* pEvent) {
             m_modules.removeAt(m_heldModule);
             // The encoder cannot stay pointed at a module that is in the bin.
             if (m_focusModule == m_heldModule) {
-                m_focusModule = -1;
+                m_focusModule = kFocusMaster;
                 m_focusKnob = -1;
             } else if (m_focusModule > m_heldModule) {
                 --m_focusModule;
@@ -2045,7 +2144,7 @@ void WDeckRack::mouseReleaseEvent(QMouseEvent* pEvent) {
 bool WDeckRack::handleMove(int steps) {
     // Rotation follows the last knob touched (PRD §17.4). Nothing touched yet
     // -- the state the page opens in -- and it is the master, as it always was.
-    if (m_focusModule >= 0) {
+    if (m_focusModule != kFocusMaster) {
         turnFocusedKnob(steps);
         update();
         return true;

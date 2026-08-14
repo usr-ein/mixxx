@@ -17,6 +17,18 @@ class EngineAux : public EngineChannel, public AudioDestination {
     EngineAux(const ChannelHandleAndGroup& handleGroup, EffectsManager* pEffectsManager);
     ~EngineAux() override;
 
+    bool isAuxiliaryChannel() const override {
+        return true;
+    }
+
+    /// Hand this channel the post-fader sum of the decks for this callback.
+    ///
+    /// Valid for the current callback only; EngineMixer refills it every time
+    /// and EngineAux forgets it after use, so a callback where the mixer does
+    /// not call this contributes no deck audio rather than repeating the last
+    /// buffer it saw.
+    void receiveDeckSend(const CSAMPLE* pBuffer, int iBufferSize);
+
     ActiveState updateActiveState() override;
 
     /// Called by EngineMixer whenever is requesting a new buffer of audio.
@@ -43,6 +55,14 @@ class EngineAux : public EngineChannel, public AudioDestination {
   private:
     QScopedPointer<ControlObject> m_pInputConfigured;
     ControlAudioTaperPot* m_pPregain;
+    /// How much of the physical input, and how much of the decks, reaches the
+    /// effect chain. Separate from `pregain`, which scales their SUM and is
+    /// what the rack's master rides in ring-out mode: one control, one meaning.
+    ControlAudioTaperPot* m_pAuxSend;
+    ControlAudioTaperPot* m_pDeckSend;
+    /// This callback's deck sum, or null. Not owned; see receiveDeckSend().
+    const CSAMPLE* m_pDeckSendBuffer = nullptr;
+    int m_deckSendSize = 0;
     /// The tempo the effect rack runs at, chosen from whichever deck has been
     /// playing longest. See ProLinkNetworkService::publishEffectTempo.
     ///

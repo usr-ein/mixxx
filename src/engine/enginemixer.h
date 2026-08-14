@@ -287,6 +287,10 @@ class EngineMixer : public QObject, public AudioSource {
     mixxx::SampleBuffer m_talkover;
     mixxx::SampleBuffer m_talkoverHeadphones;
     mixxx::SampleBuffer m_sidechainMix;
+    /// The post-fader sum of the primary decks, handed to auxiliary channels
+    /// so the effect rack can work on this deck's own audio (PRD §15.1).
+    /// Rebuilt every callback; never mixed into the output itself.
+    mixxx::SampleBuffer m_deckSend;
 
     EngineWorkerScheduler* m_pWorkerScheduler;
     EngineSync* m_pEngineSync;

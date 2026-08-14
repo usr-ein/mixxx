@@ -53,6 +53,12 @@ class EngineChannel : public EngineObject {
     void setTalkover(bool enabled);
     virtual bool isTalkoverEnabled() const;
     inline bool isTalkoverChannel() { return m_bIsTalkoverChannel; };
+    /// An auxiliary input. EngineMixer processes these LAST, so that a channel
+    /// which sums other channels into itself -- the effect-pedal bus does --
+    /// finds their buffers already filled rather than one callback stale.
+    virtual bool isAuxiliaryChannel() const {
+        return false;
+    }
     inline bool isPrimaryDeck() {
         return m_bIsPrimaryDeck;
     };
