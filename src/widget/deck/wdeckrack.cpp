@@ -45,9 +45,9 @@ struct MaterialColors {
     QColor shadow;
 };
 
-/// The caption/accent colour a material carries. Winamp's metal panels label
-/// themselves in gold, which is most of why they read as equipment rather than
-/// as grey boxes; the plastics take ink, the gloss takes cyan.
+/// The colour of the pilot lamp on a module's title strip. Kept bright, and
+/// kept separate from the text ink below: a lamp is a light, and a caption is
+/// something printed on a panel.
 QColor accentFor(int material) {
     switch (material) {
     case 0:
@@ -68,6 +68,26 @@ QColor accentFor(int material) {
 /// goes the other way -- dark knobs on light panels, light knobs on dark -- for
 /// exactly this reason, so the cap contrasts and the pointer can be read at a
 /// glance from across the booth.
+/// The ink a material's captions are printed in.
+///
+/// Gold on steel was the Winamp reference and it does not survive contact with
+/// this panel: at 12 px on a light brushed grey it is a smear rather than a
+/// word. Real equipment silkscreens dark legends on light panels for the same
+/// reason, so steel takes black. The plastics already do, and gloss black is
+/// the one panel dark enough to take a light one.
+QColor inkFor(int material) {
+    switch (material) {
+    case 0:
+        return QColor(0x11, 0x11, 0x11); // black on steel
+    case 1:
+        return QColor(0x3A, 0x2E, 0x00); // dark ink on yellow
+    case 2:
+        return QColor(0x06, 0x2A, 0x0C); // dark ink on green
+    default:
+        return QColor(0x6C, 0xD8, 0xFF); // cyan on gloss black
+    }
+}
+
 MaterialColors capColorsFor(int material) {
     switch (material) {
     case 0: // steel panel, graphite cap
@@ -1021,7 +1041,10 @@ void WDeckRack::paintChrome(QPainter* pPainter, const QRect& rect, Material mate
         sheen.setColorAt(0.0, QColor(255, 255, 255, 70));
         sheen.setColorAt(0.30, QColor(255, 255, 255, 10));
         sheen.setColorAt(0.55, QColor(255, 255, 255, 0));
-        pPainter->fillRect(face.adjusted(0, 0, -face.width() / 2, 0), sheen);
+        // The whole face. Filling half of it left a hard vertical seam down
+        // the middle of every filter -- the gradient already fades to nothing,
+        // so it needed no help stopping.
+        pPainter->fillRect(face, sheen);
     } else {
         QLinearGradient band(face.topLeft(),
                 QPoint(face.left(), face.top() + face.height() / 3));
@@ -1048,7 +1071,10 @@ void WDeckRack::paintChrome(QPainter* pPainter, const QRect& rect, Material mate
     paintBevel(pPainter, strip, false);
 
     // A lit pilot at the left of the strip: the module is in circuit.
-    const QRect lamp(strip.left() + 7, strip.center().y() - 4, 8, 8);
+    // Clear of the top-left screw, which sits at face.left()+11 with a radius
+    // of 5 and so reaches into the strip. The lamp used to be drawn on top of
+    // it.
+    const QRect lamp(strip.left() + 16, strip.center().y() - 4, 8, 8);
     pPainter->setPen(Qt::NoPen);
     pPainter->setBrush(accent);
     pPainter->drawEllipse(lamp);
@@ -1118,12 +1144,15 @@ void WDeckRack::paintKnob(QPainter* pPainter,
     const QColor live = greyed ? QColor(0x77, 0x7D, 0x86) : QColor(0x88, 0xFF, 0x00);
 
     if (focused) {
-        // A lit collar, outside the ticks so it never obscures the value. This
-        // is the whole of what makes rotation-follows-touch safe to use: the
-        // knob the wheel will move is the one wearing the ring.
+        // A lit collar, outside the ticks so it never obscures the value, and
+        // OPEN AT THE BOTTOM -- the same 270 degrees the travel spans. A closed
+        // ring is drawn straight through the caption underneath it, which on
+        // the master meant the word SEND with a green line across it. The gap
+        // is where the legend goes, which is how a real panel is laid out
+        // anyway.
         pPainter->setBrush(Qt::NoBrush);
         pPainter->setPen(QPen(QColor(0x88, 0xFF, 0x00), 2));
-        pPainter->drawEllipse(rect.adjusted(-13, -13, 13, 13));
+        pPainter->drawArc(rect.adjusted(-11, -11, 11, 11), 225 * 16, -270 * 16);
     }
 
     // Tick marks around the travel, like the scale printed round a real pot.
@@ -1213,7 +1242,7 @@ void WDeckRack::paintKnob(QPainter* pPainter,
         }
     }
     pPainter->setFont(font);
-    paintEngraved(pPainter, captionRect, Qt::AlignCenter, label, accentFor(index));
+    paintEngraved(pPainter, captionRect, Qt::AlignCenter, label, inkFor(index));
 }
 
 void WDeckRack::paintVu(QPainter* pPainter, const QRect& rect, double level, bool vertical) {
@@ -1330,10 +1359,10 @@ void WDeckRack::paintModule(QPainter* pPainter, int index, const QPoint& offset)
     font.setLetterSpacing(QFont::AbsoluteSpacing, 2.0);
     pPainter->setFont(font);
     paintEngraved(pPainter,
-            strip.adjusted(22, 0, -6, 0),
+            strip.adjusted(30, 0, -6, 0),
             Qt::AlignVCenter | Qt::AlignLeft,
             type.name,
-            accentFor(type.material));
+            inkFor(type.material));
     font.setLetterSpacing(QFont::PercentageSpacing, 100.0);
     pPainter->setFont(font);
 
@@ -1389,10 +1418,10 @@ void WDeckRack::paintMaster(QPainter* pPainter) {
     font.setLetterSpacing(QFont::AbsoluteSpacing, 2.0);
     pPainter->setFont(font);
     paintEngraved(pPainter,
-            strip.adjusted(22, 0, -6, 0),
+            strip.adjusted(30, 0, -6, 0),
             Qt::AlignVCenter | Qt::AlignLeft,
             tr("MASTER"),
-            accentFor(0));
+            inkFor(0));
     font.setLetterSpacing(QFont::PercentageSpacing, 100.0);
 
     // While muted the knob keeps showing the level it will come back to, drawn
@@ -1403,7 +1432,9 @@ void WDeckRack::paintMaster(QPainter* pPainter) {
     const double level = muted
             ? m_mutedLevel
             : (pMaster && pMaster->valid() ? pMaster->getParameter() : 0.5);
-    const QRect knobRect(rect.center().x() - 52, strip.bottom() + 26, 104, 104);
+    // 88 rather than 104: the legend under it needs room that the knob was
+    // taking, and the master is already the biggest control on the page.
+    const QRect knobRect(rect.center().x() - 44, strip.bottom() + 30, 88, 88);
     paintKnob(pPainter,
             knobRect,
             level,
@@ -1432,7 +1463,7 @@ void WDeckRack::paintMaster(QPainter* pPainter) {
             readout,
             Qt::AlignCenter,
             reading,
-            muted ? QColor(0x8A, 0x90, 0x9B) : accentFor(0));
+            muted ? QColor(0x6A, 0x70, 0x7B) : inkFor(0));
 
     // The master's meter: what the rack is returning, after the mix and the
     // makeup gain. Wider and taller than a module's because it is the one that
@@ -1460,13 +1491,6 @@ void WDeckRack::paintMaster(QPainter* pPainter) {
         pPainter->drawText(half, Qt::AlignCenter, i == 0 ? tr("RING OUT") : tr("CUT"));
     }
 
-    font.setPixelSize(12);
-    font.setBold(false);
-    pPainter->setFont(font);
-    pPainter->setPen(QColor(0x5A, 0x5F, 0x68));
-    pPainter->drawText(QRect(face.left(), face.bottom() - 34, face.width(), 18),
-            Qt::AlignCenter,
-            muted ? tr("press to unmute") : tr("press to mute"));
 }
 
 QRect WDeckRack::masterRockerRect() const {
