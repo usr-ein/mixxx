@@ -3,12 +3,16 @@
 #include <QDateTime>
 #include <QFile>
 #include <QFileInfo>
+#include <QHash>
+#include <QHostAddress>
+#include <QNetworkInterface>
 #include <QProcess>
 #include <QScrollBar>
 #include <QScroller>
 #include <QScrollerProperties>
 #include <QStorageInfo>
 #include <QStringList>
+#include <QSysInfo>
 
 #include "control/controlobject.h"
 #include "control/controlproxy.h"
@@ -63,6 +67,32 @@ QString bar(double fraction) {
         out += i < filled ? QChar(0x2588) : QChar(0x2591);
     }
     return out;
+}
+
+/// The interface's IPv4 address, or an empty string: no such interface, or no
+/// address on it yet.
+QString ipv4Of(const QNetworkInterface& iface) {
+    const QList<QNetworkAddressEntry> entries = iface.addressEntries();
+    for (const QNetworkAddressEntry& entry : entries) {
+        if (entry.ip().protocol() == QAbstractSocket::IPv4Protocol) {
+            return entry.ip().toString();
+        }
+    }
+    return QString();
+}
+
+/// `key=value` lines, the format pi_config/wifi-fallback writes to
+/// /run/trimixxx/wifi.
+QHash<QString, QString> keyValues(const QString& text) {
+    QHash<QString, QString> values;
+    const QStringList lines = text.split(QChar('\n'), Qt::SkipEmptyParts);
+    for (const QString& line : lines) {
+        const int equals = line.indexOf(QChar('='));
+        if (equals > 0) {
+            values.insert(line.left(equals).trimmed(), line.mid(equals + 1).trimmed());
+        }
+    }
+    return values;
 }
 } // namespace
 
@@ -223,6 +253,66 @@ QString WDeckDiagnostics::html() const {
     const QString uptime = readFile(QStringLiteral("/proc/uptime")).section(QChar(' '), 0, 0);
     out += row(tr("Uptime"),
             QStringLiteral("%1 h").arg(uptime.toDouble() / 3600.0, 0, 'f', 1));
+    out += QStringLiteral("</table>");
+
+    // ---- network -----------------------------------------------------------
+    //
+    // How to reach the deck, which is what this page gets opened for at a
+    // venue. Addresses come live from the kernel, so a cable plugged in after
+    // boot shows up within the second. What the Wi-Fi *is* -- home, or the
+    // deck's own hotspot and its password -- comes from /run/trimixxx/wifi,
+    // which pi_config/wifi-fallback writes once it has decided; until then,
+    // and on a deck without it, the address alone.
+    //
+    // Ethernet is the Pro DJ Link port: on the CDJs' switch it holds a
+    // 169.254 link-local address, and that is the one a laptop on the same
+    // switch can ssh to.
+    out += QStringLiteral("<h2>Network</h2><table>");
+    const QString host = QSysInfo::machineHostName().toHtmlEscaped();
+    const QString user = qEnvironmentVariable("USER").toHtmlEscaped();
+    out += row(tr("Host"),
+            QStringLiteral("%1 &nbsp;<span style='color:#888888'>ssh %2%1.local</span>")
+                    .arg(host, user.isEmpty() ? QString() : user + QChar('@')));
+
+    const QNetworkInterface ethernet =
+            QNetworkInterface::interfaceFromName(QStringLiteral("eth0"));
+    const QString ethernetAddress = ipv4Of(ethernet);
+    if (!ethernet.isValid()) {
+        out += row(tr("Ethernet"), tr("no eth0"));
+    } else if (!ethernet.flags().testFlag(QNetworkInterface::IsRunning)) {
+        out += row(tr("Ethernet"), tr("no cable"));
+    } else if (ethernetAddress.isEmpty()) {
+        out += row(tr("Ethernet"), tr("linked, no address yet"));
+    } else {
+        out += row(tr("Ethernet"), ethernetAddress);
+    }
+
+    const QHash<QString, QString> wifi =
+            keyValues(readFile(QStringLiteral("/run/trimixxx/wifi")));
+    const QString wifiAddress =
+            ipv4Of(QNetworkInterface::interfaceFromName(QStringLiteral("wlan0")));
+    const QString ssid = wifi.value(QStringLiteral("ssid")).toHtmlEscaped();
+    if (wifi.value(QStringLiteral("mode")) == QStringLiteral("hotspot")) {
+        // The deck's own network: everything a phone needs to join it and ssh
+        // in, on one line, so nobody at the venue needs the repo to hand.
+        out += row(tr("Wi-Fi"),
+                QStringLiteral("<span class='warn'>%1</span> %2 &middot; %3 %4 "
+                               "&middot; %5")
+                        .arg(tr("HOTSPOT"),
+                                ssid,
+                                tr("password"),
+                                wifi.value(QStringLiteral("password")).toHtmlEscaped(),
+                                wifiAddress.isEmpty()
+                                        ? wifi.value(QStringLiteral("address"))
+                                                  .toHtmlEscaped()
+                                        : wifiAddress));
+    } else if (wifiAddress.isEmpty()) {
+        out += row(tr("Wi-Fi"), tr("not connected"));
+    } else if (ssid.isEmpty()) {
+        out += row(tr("Wi-Fi"), wifiAddress);
+    } else {
+        out += row(tr("Wi-Fi"), QStringLiteral("%1 &middot; %2").arg(ssid, wifiAddress));
+    }
     out += QStringLiteral("</table>");
 
     // ---- system ------------------------------------------------------------
