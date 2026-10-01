@@ -17,6 +17,7 @@
 #include "effects/presets/effectchainpreset.h"
 #include "effects/presets/effectchainpresetmanager.h"
 #include "moc_wdeckrack.cpp"
+#include "widget/deck/deckbezel.h"
 
 namespace {
 
@@ -307,6 +308,7 @@ WDeckRack::WDeckRack(EffectsManager* pEffectsManager,
     setObjectName(QStringLiteral("DeckRack"));
     setAutoFillBackground(true);
     setMouseTracking(false);
+    m_bezelHeight = panelHasBezel() ? kBezelHeight : 0;
 
     m_pMasterMix = std::make_unique<ControlProxy>(kUnit, QStringLiteral("mix"));
     m_pOutputLevel = std::make_unique<ControlProxy>(kUnit, QStringLiteral("output_level"));
@@ -929,7 +931,7 @@ void WDeckRack::deleteRack(const QString& name) {
 // ---------------------------------------------------------------------------
 
 int WDeckRack::rackHeight() const {
-    return height() - kNameBarHeight - kBezelHeight;
+    return height() - kNameBarHeight - m_bezelHeight;
 }
 
 QRect WDeckRack::moduleRect(int index) const {
@@ -1638,7 +1640,7 @@ QRect WDeckRack::rackBrowserRowRect(int index) const {
 int WDeckRack::rackBrowserScrollSpan() const {
     const int rows = savedRacks().size() + 1;
     const int content = kBrowserTop + rows * (kBrowserRowHeight + kBrowserRowGap);
-    const int viewport = height() - kNameBarHeight - kBezelHeight;
+    const int viewport = height() - kNameBarHeight - m_bezelHeight;
     return qMax(0, content - viewport);
 }
 
@@ -1668,7 +1670,7 @@ void WDeckRack::paintRackBrowser(QPainter* pPainter) {
     // Clipped to the area below the header, so a scrolled row leaves the list
     // rather than sliding up over the title.
     pPainter->setClipRect(
-            QRect(0, kNameBarHeight + 18, width(), height() - kNameBarHeight - kBezelHeight - 18));
+            QRect(0, kNameBarHeight + 18, width(), height() - kNameBarHeight - m_bezelHeight - 18));
     // Row 0 is always "save this one", so an empty list is still a usable
     // screen rather than a dead end.
     for (int i = 0; i <= names.size(); ++i) {

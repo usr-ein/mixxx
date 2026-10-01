@@ -230,6 +230,10 @@ class WDeckBrowser : public QWidget, public WBaseWidget, public DeckEncoder::Tar
     QList<Level> m_stack;
 
     WDeckSortMenu* m_pSortMenu;
+    /// The strip kept clear for the panel's top lip: 36 px, or 0 on a flush
+    /// panel (deckbezel.h). The sort menu opens just under the breadcrumb, so
+    /// it needs to know.
+    int m_topBezelPadHeight = 0;
     /// The search screen: a query line, the results in the track view, and the
     /// keyboard under them.
     QWidget* m_pSearchPage;

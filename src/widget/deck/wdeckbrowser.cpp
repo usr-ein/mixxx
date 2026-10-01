@@ -29,6 +29,7 @@
 #include "track/trackref.h"
 #include "moc_wdeckbrowser.cpp"
 #include "util/logger.h"
+#include "widget/deck/deckbezel.h"
 #include "widget/deck/deckdelegates.h"
 #include "widget/deck/decklistview.h"
 #include "widget/deck/deckmenumodel.h"
@@ -125,19 +126,24 @@ WDeckBrowser::WDeckBrowser(QWidget* pParent,
           m_pLibrary(pLibrary),
           m_pConfig(std::move(pConfig)) {
     setAttribute(Qt::WA_StyledBackground, true);
+    // A flush panel has none of the three lips below, and the lists take the
+    // space instead.
+    const bool bezel = panelHasBezel();
+    m_topBezelPadHeight = bezel ? kTopBezelPadHeight : 0;
+
     // The left lip, as a margin rather than a spacer widget: it has to inset
     // every level -- the breadcrumb, the lists, the info panel and the search
     // page alike -- and a margin on the one layout they all sit in does that
     // without any of them knowing.
     auto* pLayout = new QVBoxLayout(this);
-    pLayout->setContentsMargins(kLeftBezelPadWidth, 0, 0, 0);
+    pLayout->setContentsMargins(bezel ? kLeftBezelPadWidth : 0, 0, 0, 0);
     pLayout->setSpacing(0);
 
     // The bezel strip at the top, matching the one at the bottom: the panel is
     // recessed on both edges, so the first rows are as hard to read as the last
     // ones are to touch.
     auto* pTopBezelPad = new QWidget(this);
-    pTopBezelPad->setFixedHeight(kTopBezelPadHeight);
+    pTopBezelPad->setFixedHeight(m_topBezelPadHeight);
     pTopBezelPad->setObjectName(QStringLiteral("DeckBezelPad"));
     pLayout->addWidget(pTopBezelPad);
 
@@ -211,7 +217,7 @@ WDeckBrowser::WDeckBrowser(QWidget* pParent,
     // The bezel strip: the panel's last rows sit under a lip, so anything drawn
     // there cannot be touched and barely seen.
     auto* pBezelPad = new QWidget(this);
-    pBezelPad->setFixedHeight(kBezelPadHeight);
+    pBezelPad->setFixedHeight(bezel ? kBezelPadHeight : 0);
     pBezelPad->setObjectName(QStringLiteral("DeckBezelPad"));
     pLayout->addWidget(pBezelPad);
 
@@ -1163,7 +1169,7 @@ void WDeckBrowser::openSortMenu() {
         return;
     }
     m_pSortMenu->move((width() - m_pSortMenu->width()) / 2,
-            kTopBezelPadHeight + kBreadcrumbHeight);
+            m_topBezelPadHeight + kBreadcrumbHeight);
     m_pSortMenu->open(m_sortColumn, m_sortDescending);
 }
 

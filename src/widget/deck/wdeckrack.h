@@ -86,6 +86,8 @@ class WDeckRack : public QWidget, public DeckPage {
 
     // ---- geometry ----------------------------------------------------------
     static constexpr int kNameBarHeight = 48;
+    /// The strip kept clear for the panel's bottom lip -- when it has one; see
+    /// m_bezelHeight.
     static constexpr int kBezelHeight = 56;
     static constexpr int kModuleWidth = 204;
     static constexpr int kGutter = 4;
@@ -191,6 +193,10 @@ class WDeckRack : public QWidget, public DeckPage {
     /// The knob the encoder is currently turning: a module index and a knob
     /// index, or {-1, -1} for the master.
     ///
+    /// kBezelHeight on a panel with a bottom lip, 0 on a flush one (see
+    /// deckbezel.h). Everything below the rack itself is measured from this.
+    int m_bezelHeight = kBezelHeight;
+
     /// A filter sweep wants the detented wheel, not a fingertip dragged 200 px
     /// up a 204 px module -- so touching a knob claims the encoder. The press
     /// never moves: it is the master's mute whatever the rotation is pointed
