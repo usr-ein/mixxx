@@ -1,5 +1,6 @@
 #pragma once
 
+#include <QColor>
 #include <QLabel>
 #include <QTimer>
 #include <QList>
@@ -199,6 +200,8 @@ class WDeckBrowser : public QWidget, public WBaseWidget {
 
     Library* m_pLibrary;
     UserSettingsPointer m_pConfig;
+    /// This deck's accent (deckaccent.h), for the breadcrumb's rich text.
+    const QColor m_accent;
     std::unique_ptr<MediaRegistry> m_pRegistry;
 
     QLabel* m_pBreadcrumb;

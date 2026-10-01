@@ -1,6 +1,7 @@
 #pragma once
 
 #include <QCache>
+#include <QColor>
 #include <QPixmap>
 #include <QStyledItemDelegate>
 
@@ -44,6 +45,8 @@ class MenuRowDelegate : public QStyledItemDelegate {
     QPixmap coverFor(const QStringList& paths, int size) const;
 
     int m_rowHeight = 80;
+    /// The selected row: this deck's accent (deckaccent.h).
+    const QColor m_selected;
     mutable QCache<QString, QPixmap> m_coverCache;
 };
 
@@ -124,6 +127,8 @@ class TrackRowDelegate : public QStyledItemDelegate {
     bool m_infoLayout = false;
     int m_secondaryColumn = -1;
     Columns m_columns;
+    /// The selected row: this deck's accent (deckaccent.h).
+    const QColor m_selected;
     mutable QCache<QString, QPixmap> m_coverCache;
 };
 

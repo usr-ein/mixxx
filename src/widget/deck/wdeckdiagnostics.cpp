@@ -21,6 +21,7 @@
 #include "library/deck/streamingfile.h"
 #include "library/deck/trackcache.h"
 #include "util/versionstore.h"
+#include "widget/deck/deckaccent.h"
 
 namespace {
 /// A minute of history at one sample a second.
@@ -72,7 +73,8 @@ namespace mixxx {
 namespace deck {
 
 WDeckDiagnostics::WDeckDiagnostics(QWidget* pParent)
-        : QTextBrowser(pParent) {
+        : QTextBrowser(pParent),
+          m_accent(deckAccent().name()) {
     setObjectName(QStringLiteral("DeckDiagnostics"));
     setOpenExternalLinks(false);
     setOpenLinks(false);
@@ -195,14 +197,17 @@ void WDeckDiagnostics::sample() {
 }
 
 QString WDeckDiagnostics::html() const {
+    // The headings and the sparklines are this deck's accent (deckaccent.h).
     QString out = QStringLiteral(
             "<style>"
             "body { color:#dddddd; font-family:'MesloLGL Nerd Font'; font-size:15px; }"
-            "h2 { color:#88ff00; font-size:17px; margin-top:18px; }"
+            "h2 { color:%1; font-size:17px; margin-top:18px; }"
             "td { padding:2px 10px 2px 0; }"
             "td.k { color:#888888; }"
             ".warn { color:#ff6600; }"
-            "</style>");
+            ".spark { color:%1; }"
+            "</style>")
+                          .arg(m_accent);
 
     // ---- identity ----------------------------------------------------------
     out += QStringLiteral("<h2>Identity</h2><table>");
@@ -277,15 +282,15 @@ QString WDeckDiagnostics::html() const {
     // ---- system ------------------------------------------------------------
     out += QStringLiteral("<h2>System</h2><table>");
     out += row(tr("CPU"),
-            QStringLiteral("%1 %  <span style='color:#88ff00'>%2</span>")
+            QStringLiteral("%1 %  <span class='spark'>%2</span>")
                     .arg(m_cpuHistory.isEmpty() ? 0.0 : m_cpuHistory.last(), 0, 'f', 0)
                     .arg(sparkline(m_cpuHistory, 100.0)));
     out += row(tr("Memory"),
-            QStringLiteral("%1 %  <span style='color:#88ff00'>%2</span>")
+            QStringLiteral("%1 %  <span class='spark'>%2</span>")
                     .arg(m_memHistory.isEmpty() ? 0.0 : m_memHistory.last(), 0, 'f', 0)
                     .arg(sparkline(m_memHistory, 100.0)));
     out += row(tr("Temperature"),
-            QStringLiteral("%1 °C  <span style='color:#88ff00'>%2</span>")
+            QStringLiteral("%1 °C  <span class='spark'>%2</span>")
                     .arg(m_tempHistory.isEmpty() ? 0.0 : m_tempHistory.last(), 0, 'f', 1)
                     .arg(sparkline(m_tempHistory, 90.0)));
 

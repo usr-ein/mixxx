@@ -57,6 +57,9 @@ class WDeckDiagnostics : public QTextBrowser, public DeckPage {
     /// A history rendered with block characters, oldest to newest.
     static QString sparkline(const QList<double>& history, double max);
 
+    /// This deck's accent (deckaccent.h), as the CSS colour the page's
+    /// headings and sparklines are drawn in.
+    const QString m_accent;
     QTimer m_timer;
     QList<double> m_cpuHistory;
     QList<double> m_memHistory;

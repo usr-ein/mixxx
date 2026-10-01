@@ -8,15 +8,17 @@
 #include "library/dao/trackschema.h"
 #include "library/deck/deckqueries.h"
 #include "library/deck/mediaregistry.h"
+#include "widget/deck/deckaccent.h"
 #include "widget/deck/decklistview.h"
 #include "widget/deck/deckmenumodel.h"
 
 namespace {
 // The palette. Deliberately the skin's, spelled out here rather than pulled
 // from the stylesheet: a QStyledItemDelegate paints raw, and a half-styled row
-// is worse than an unstyled one.
+// is worse than an unstyled one. The selected row is the one colour that is
+// not fixed: it is this deck's accent, which each delegate reads when it is
+// built (deckaccent.h).
 const QColor kBackground(0x0c, 0x0c, 0x0c);
-const QColor kSelected(0x88, 0xff, 0x00);
 const QColor kSelectedText(0x0c, 0x0c, 0x0c);
 const QColor kText(0xee, 0xee, 0xee);
 const QColor kDimText(0x77, 0x77, 0x77);
@@ -187,7 +189,7 @@ namespace mixxx {
 namespace deck {
 
 MenuRowDelegate::MenuRowDelegate(QObject* pParent)
-        : QStyledItemDelegate(pParent), m_coverCache(64) {
+        : QStyledItemDelegate(pParent), m_selected(deckAccent()), m_coverCache(64) {
 }
 
 QSize MenuRowDelegate::sizeHint(const QStyleOptionViewItem& option,
@@ -261,7 +263,7 @@ void MenuRowDelegate::paint(QPainter* pPainter,
 
     pPainter->save();
     pPainter->setRenderHint(QPainter::Antialiasing, true);
-    pPainter->fillRect(option.rect, filled ? kSelected : kBackground);
+    pPainter->fillRect(option.rect, filled ? m_selected : kBackground);
 
     QColor textColour = filled ? kSelectedText : (row.dimmed ? kDimText : kText);
     QColor detailColour = filled ? kSelectedText : (row.dimmed ? kDimText : kDetail);
@@ -341,13 +343,13 @@ void MenuRowDelegate::paint(QPainter* pPainter,
         pPainter->drawLine(option.rect.bottomLeft(), option.rect.bottomRight());
     }
     if (outlined) {
-        paintSelectionOutline(pPainter, option.rect, kSelected);
+        paintSelectionOutline(pPainter, option.rect, m_selected);
     }
     pPainter->restore();
 }
 
 TrackRowDelegate::TrackRowDelegate(QObject* pParent)
-        : QStyledItemDelegate(pParent), m_coverCache(128) {
+        : QStyledItemDelegate(pParent), m_selected(deckAccent()), m_coverCache(128) {
 }
 
 QSize TrackRowDelegate::sizeHint(const QStyleOptionViewItem& option,
@@ -404,7 +406,7 @@ void TrackRowDelegate::paint(QPainter* pPainter,
     };
 
     pPainter->save();
-    pPainter->fillRect(option.rect, filled ? kSelected : kBackground);
+    pPainter->fillRect(option.rect, filled ? m_selected : kBackground);
 
     const QColor textColour = filled ? kSelectedText : kText;
     const QColor detailColour = filled ? kSelectedText : kDetail;
@@ -574,7 +576,7 @@ void TrackRowDelegate::paint(QPainter* pPainter,
     // it. The row is only 72 px tall and the outline is what says which one it
     // is, so a broken edge is a broken answer.
     if (outlined) {
-        paintSelectionOutline(pPainter, option.rect, kSelected);
+        paintSelectionOutline(pPainter, option.rect, m_selected);
     }
     pPainter->restore();
 }

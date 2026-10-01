@@ -29,6 +29,7 @@
 #include "track/trackref.h"
 #include "moc_wdeckbrowser.cpp"
 #include "util/logger.h"
+#include "widget/deck/deckaccent.h"
 #include "widget/deck/deckbezel.h"
 #include "widget/deck/deckdelegates.h"
 #include "widget/deck/decklistview.h"
@@ -119,7 +120,8 @@ WDeckBrowser::WDeckBrowser(QWidget* pParent, Library* pLibrary, UserSettingsPoin
         : QWidget(pParent),
           WBaseWidget(this),
           m_pLibrary(pLibrary),
-          m_pConfig(std::move(pConfig)) {
+          m_pConfig(std::move(pConfig)),
+          m_accent(deckAccent()) {
     setAttribute(Qt::WA_StyledBackground, true);
     // A flush panel has none of the three lips below, and the lists take the
     // space instead.
@@ -670,6 +672,11 @@ mixxx::deck::DeckPage* WDeckBrowser::currentPage() const {
 }
 
 void WDeckBrowser::updateBreadcrumb() {
+    // Rich text, so the stylesheet's colour for the label does not reach the
+    // links in it: they carry this deck's accent themselves, and the separators
+    // the same accent at half brightness, so they divide the path without
+    // competing with it.
+    const QString accent = m_accent.name();
     QStringList parts;
     for (int i = 0; i < m_stack.size(); ++i) {
         // The root is a house, not the word SOURCES: it is the one segment
@@ -685,13 +692,12 @@ void WDeckBrowser::updateBreadcrumb() {
         // Padded, because a link the height of a line of text is a poor target
         // for a fingertip in a 48 px bar.
         parts.append(QStringLiteral(
-                "<a style='color:#88ff00; text-decoration:none;' href='%1'>"
-                "&nbsp;%2&nbsp;</a>")
-                             .arg(i)
-                             .arg(label));
+                "<a style='color:%1; text-decoration:none;' href='%2'>"
+                "&nbsp;%3&nbsp;</a>")
+                             .arg(accent, QString::number(i), label));
     }
-    m_pBreadcrumb->setText(
-            parts.join(QStringLiteral("<span style='color:#557700'> › </span>")));
+    m_pBreadcrumb->setText(parts.join(QStringLiteral("<span style='color:%1'> › </span>")
+                    .arg(m_accent.darker(200).name())));
 
     // The arrow says the direction and the name says the field, so the
     // breadcrumb answers "what am I looking at, and in what order" -- and the
