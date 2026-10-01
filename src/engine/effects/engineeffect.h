@@ -7,7 +7,6 @@
 #include <memory>
 
 #include "audio/types.h"
-#include "control/controlobject.h"
 #include "effects/backends/effectmanifest.h"
 #include "effects/backends/effectprocessor.h"
 #include "engine/channelhandle.h"
@@ -21,16 +20,11 @@
 class EngineEffect final : public EffectsRequestHandler {
   public:
     /// Called in main thread by EffectSlot
-    /// *pOutputLevel* is the slot's `output_level` control, owned by the
-    /// EffectSlot that creates this and written from the audio thread. May be
-    /// null. The slot outlives the engine's deletion of this object, which is
-    /// what makes holding the bare pointer safe.
     EngineEffect(EffectManifestPointer pManifest,
             EffectsBackendManagerPointer pBackendManager,
             const QSet<ChannelHandleAndGroup>& activeInputChannels,
             const QSet<ChannelHandleAndGroup>& registeredInputChannels,
-            const QSet<ChannelHandleAndGroup>& registeredOutputChannels,
-            ControlObject* pOutputLevel = nullptr);
+            const QSet<ChannelHandleAndGroup>& registeredOutputChannels);
     /// Called in main thread by EffectSlot
     ~EngineEffect();
 
@@ -52,13 +46,6 @@ class EngineEffect final : public EffectsRequestHandler {
             const EffectEnableState chainEnableState,
             const GroupFeatureState& groupFeatures);
 
-    /// Publish what this slot is putting out, with VU ballistics: instant
-    /// attack so a transient is never missed, exponential release so it is
-    /// still there to see when the GUI next looks. Called from the audio
-    /// thread by EngineEffectChain, which measures *after* the per-slot wet
-    /// blend -- what the module contributes, not what its DSP produced.
-    void publishOutputLevel(CSAMPLE peak, SINT frames, mixxx::audio::SampleRate sampleRate);
-
     const EffectManifestPointer getManifest() const {
         return m_pManifest;
     }
@@ -71,15 +58,6 @@ class EngineEffect final : public EffectsRequestHandler {
         return m_pProcessor->getGroupDelayFrames();
     }
 
-    /// How much of this effect's output replaces its input, 0..1.
-    ///
-    /// Read by EngineEffectChain, which does the blending -- an effect cannot
-    /// do it itself, because "its input" is the previous effect's output and
-    /// only the chain knows what that was.
-    CSAMPLE_GAIN wet() const {
-        return m_wet;
-    }
-
   private:
     QString debugString() const {
         return QString("EngineEffect(%1)").arg(m_pManifest->name());
@@ -88,9 +66,6 @@ class EngineEffect final : public EffectsRequestHandler {
     EffectManifestPointer m_pManifest;
     std::unique_ptr<EffectProcessor> m_pProcessor;
     ChannelHandleMap<ChannelHandleMap<EffectEnableState>> m_effectEnableStateForChannelMatrix;
-    CSAMPLE_GAIN m_wet;
-    /// Owned by the EffectSlot; may be null. See the constructor.
-    ControlObject* m_pOutputLevel;
     bool m_effectRampsFromDry;
     // Must not be modified after construction.
     QVector<EngineEffectParameterPointer> m_parameters;

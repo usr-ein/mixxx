@@ -99,7 +99,7 @@ void EngineEffectsManager::processPreFaderInPlace(const ChannelHandle& inputHand
         mixxx::audio::SampleRate sampleRate) {
     // Feature state is gathered after prefader effects processing.
     // This is okay because the equalizer effects do not make use of it.
-    GroupFeatureState groupFeatures;
+    GroupFeatureState featureState;
     processInner(SignalProcessingStage::Prefader,
             inputHandle,
             outputHandle,
@@ -107,7 +107,7 @@ void EngineEffectsManager::processPreFaderInPlace(const ChannelHandle& inputHand
             pInOut,
             numSamples,
             sampleRate,
-            groupFeatures);
+            featureState);
 }
 
 void EngineEffectsManager::processPostFaderInPlace(

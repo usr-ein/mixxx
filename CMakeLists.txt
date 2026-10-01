@@ -1082,8 +1082,6 @@ add_library(mixxx-lib STATIC EXCLUDE_FROM_ALL
   src/network/networktask.cpp
   src/util/posixsignalhandler.cpp
   src/network/prolink/prolinkcontrols.cpp
-  src/widget/deck/deckencoder.cpp
-  src/widget/deck/wdeckfxstrip.cpp
   src/network/prolink/keysync.cpp
   src/network/prolink/prolinkkeysync.cpp
   src/network/prolink/synctempo.cpp
@@ -1361,7 +1359,6 @@ add_library(mixxx-lib STATIC EXCLUDE_FROM_ALL
   src/widget/deck/deckmenumodel.cpp
   src/widget/deck/wdeckbrowser.cpp
   src/widget/deck/wdeckdiagnostics.cpp
-  src/widget/deck/wdeckrack.cpp
   src/widget/deck/wdeckinfopanel.cpp
   src/widget/deck/wdecktoast.cpp
   src/widget/deck/wdecksearch.cpp

@@ -2,13 +2,13 @@
 
 #include "audio/types.h"
 #include "engine/channelhandle.h"
-#include "engine/effects/groupfeaturestate.h"
 #include "engine/effects/message.h"
 #include "util/samplebuffer.h"
 #include "util/types.h"
 
 class EngineEffectChain;
 class EngineEffect;
+struct GroupFeatureState;
 
 /// EngineEffectsManager is the entry point for processing effects in the audio
 /// thread. It also passes EffectsRequests from EffectsMessenger down to the

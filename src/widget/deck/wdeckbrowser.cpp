@@ -35,8 +35,6 @@
 #include "widget/deck/deckmenumodel.h"
 #include "widget/deck/deckpage.h"
 #include "widget/deck/wdeckdiagnostics.h"
-#include "widget/deck/deckencoder.h"
-#include "widget/deck/wdeckrack.h"
 #include "widget/deck/wdeckinfopanel.h"
 #include "widget/deck/wdecksearch.h"
 #include "widget/deck/wdecksortmenu.h"
@@ -117,10 +115,7 @@ void DeckSortChip::mouseReleaseEvent(QMouseEvent* pEvent) {
     pEvent->accept();
 }
 
-WDeckBrowser::WDeckBrowser(QWidget* pParent,
-        Library* pLibrary,
-        UserSettingsPointer pConfig,
-        EffectsManager* pEffectsManager)
+WDeckBrowser::WDeckBrowser(QWidget* pParent, Library* pLibrary, UserSettingsPointer pConfig)
         : QWidget(pParent),
           WBaseWidget(this),
           m_pLibrary(pLibrary),
@@ -331,9 +326,6 @@ WDeckBrowser::WDeckBrowser(QWidget* pParent,
     m_pDiagnostics = new WDeckDiagnostics(m_pStack);
     m_pStack->addWidget(m_pDiagnostics);
 
-    m_pRack = new WDeckRack(pEffectsManager, pConfig, m_pStack);
-    m_pStack->addWidget(m_pRack);
-
     connect(m_pKeyboard, &WDeckKeyboard::keyPressed, this, [this](const QString& c) {
         m_searchText += c;
         runSearch();
@@ -463,23 +455,7 @@ WDeckBrowser::WDeckBrowser(QWidget* pParent,
     // ---- the deck's controls -------------------------------------------
     m_pMove = std::make_unique<ControlEncoder>(ConfigKey("[Browser]", "move"), false);
     connect(m_pMove.get(), &ControlEncoder::valueChanged, this, [this](double v) {
-        encoderMove(static_cast<int>(v));
-    });
-    if (DeckEncoder::instance()) {
-        DeckEncoder::instance()->setBrowser(this);
-    }
-
-    m_pSelect = std::make_unique<ControlPushButton>(ConfigKey("[Browser]", "select"));
-    connect(m_pSelect.get(), &ControlPushButton::valueChanged, this, [this](double v) {
-        if (v > 0.0) {
-            encoderPress();
-        }
-    });
-    finishControlSetup();
-}
-
-void WDeckBrowser::encoderMove(int steps) {
-    {
+        const int steps = static_cast<int>(v);
         if (steps == 0) {
             return;
         }
@@ -488,18 +464,19 @@ void WDeckBrowser::encoderMove(int steps) {
             return;
         }
         // Whatever page is on screen gets first refusal. Most levels are lists
-        // and take the default; the ones that are not -- diagnostics scrolls,
-        // the effects page moves between controls and then changes one -- say
-        // so themselves rather than being named here.
+        // and take the default; the one that is not -- diagnostics, which
+        // scrolls -- says so itself rather than being named here.
         if (DeckPage* pPage = currentPage(); pPage && pPage->handleMove(steps)) {
             return;
         }
         (inTrackList() ? m_pTrackView : m_pMenuView)->moveSelection(steps);
-    }
-}
+    });
 
-void WDeckBrowser::encoderPress() {
-    {
+    m_pSelect = std::make_unique<ControlPushButton>(ConfigKey("[Browser]", "select"));
+    connect(m_pSelect.get(), &ControlPushButton::valueChanged, this, [this](double v) {
+        if (v <= 0.0) {
+            return;
+        }
         if (m_pSortMenu->isOpen()) {
             m_pSortMenu->activateSelection();
             return;
@@ -516,15 +493,8 @@ void WDeckBrowser::encoderPress() {
         if (pView->selectedRow() >= 0) {
             onActivated(pView->selectedRow());
         }
-    }
-}
+    });
 
-void WDeckBrowser::encoderResetFocus() {
-    // Nothing of the browser's own survives a screen change: the pages hold
-    // any focus there is, and setActive() clears theirs when they leave.
-}
-
-void WDeckBrowser::finishControlSetup() {
     m_pBack = std::make_unique<ControlPushButton>(ConfigKey("[Browser]", "back"));
     connect(m_pBack.get(), &ControlPushButton::valueChanged, this, [this](double v) {
         if (v <= 0.0) {
@@ -536,9 +506,9 @@ void WDeckBrowser::finishControlSetup() {
             m_pSortMenu->dismiss();
             return;
         }
-        // BACK leaves the innermost mode first. A page with one -- a value
-        // being adjusted, a module being dragged -- takes this and leaves that
-        // mode; only when there is none does the level pop.
+        // BACK leaves the innermost mode first. A page with a mode of its own
+        // takes this and leaves that mode; only when there is none does the
+        // level pop.
         if (DeckPage* pPage = currentPage(); pPage && pPage->handleBack()) {
             return;
         }
@@ -678,10 +648,6 @@ void WDeckBrowser::rebuildCurrentLevel() {
     case Level::Kind::Search:
         showSearch(level);
         break;
-    case Level::Kind::Effects:
-        m_pStack->setCurrentWidget(m_pRack);
-        m_pRack->setFocus();
-        break;
     case Level::Kind::Diagnostics:
         m_pStack->setCurrentWidget(m_pDiagnostics);
         m_pDiagnostics->setFocus();
@@ -690,7 +656,6 @@ void WDeckBrowser::rebuildCurrentLevel() {
     // Sampling follows visibility: a page nobody is looking at has no business
     // reading /proc once a second.
     m_pDiagnostics->setActive(level.kind == Level::Kind::Diagnostics);
-    m_pRack->setActive(level.kind == Level::Kind::Effects);
     m_pLevelControl->forceSet(m_stack.size() - 1);
     m_pInTrackList->forceSet(inTrackList() ? 1.0 : 0.0);
     updateBreadcrumb();
@@ -815,15 +780,6 @@ void WDeckBrowser::showSources() {
         empty.dimmed = true;
         rows.append(empty);
     }
-
-    // Above Diagnostics because it is reached during a set and Diagnostics is
-    // not, and below the media because a stick is still the reason the browser
-    // is open nine times out of ten.
-    MenuRow effects;
-    effects.mark = MenuRow::Mark::Effects;
-    effects.title = tr("Effects");
-    effects.payload = QStringLiteral("#effects");
-    rows.append(effects);
 
     MenuRow diagnostics;
     diagnostics.mark = MenuRow::Mark::Diagnostics;
@@ -1683,13 +1639,6 @@ void WDeckBrowser::onActivated(int row) {
             // The same overlay the old POWER button raised; the daemon does the
             // actual poweroff, since Mixxx cannot touch the OS.
             ControlObject::set(ConfigKey("[TriMixxx]", "shutdown_confirm"), 1.0);
-            return;
-        }
-        if (payload == QStringLiteral("#effects")) {
-            Level level;
-            level.kind = Level::Kind::Effects;
-            level.title = menuRow.title;
-            pushLevel(level);
             return;
         }
         if (payload == QStringLiteral("#diagnostics")) {

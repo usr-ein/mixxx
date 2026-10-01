@@ -3,10 +3,8 @@
 #include <QtDebug>
 
 #include "control/controlaudiotaperpot.h"
-#include "control/controlproxy.h"
 #include "effects/effectsmanager.h"
 #include "engine/effects/engineeffectsmanager.h"
-#include "engine/effects/groupfeaturestate.h"
 #include "moc_engineaux.cpp"
 #include "util/sample.h"
 
@@ -15,15 +13,10 @@ EngineAux::EngineAux(const ChannelHandleAndGroup& handleGroup, EffectsManager* p
                   /*isTalkoverChannel*/ false,
                   /*isPrimaryDeck*/ false),
           m_pInputConfigured(new ControlObject(ConfigKey(getGroup(), "input_configured"))),
-          m_pPregain(new ControlAudioTaperPot(ConfigKey(getGroup(), "pregain"), -12, 12, 0.5)),
-          m_pAuxSend(new ControlAudioTaperPot(ConfigKey(getGroup(), "aux_send"), -12, 12, 0.5)),
-          m_pDeckSend(new ControlAudioTaperPot(ConfigKey(getGroup(), "deck_send"), -12, 12, 0.5)) {
+          m_pPregain(new ControlAudioTaperPot(ConfigKey(getGroup(), "pregain"), -12, 12, 0.5)) {
     // Make input_configured read-only.
     m_pInputConfigured->setReadOnly();
     m_pInputConfigured->addAlias(ConfigKey(getGroup(), QStringLiteral("enabled")));
-
-    m_pFxBpm = std::make_unique<ControlProxy>(
-            QStringLiteral("[EffectTempo]"), QStringLiteral("bpm"));
 
     // by default Aux is disabled on the main and disabled on PFL. User
     // can over-ride by setting the "pfl" or "main_mix" controls.
@@ -33,13 +26,6 @@ EngineAux::EngineAux(const ChannelHandleAndGroup& handleGroup, EffectsManager* p
 
 EngineAux::~EngineAux() {
     delete m_pPregain;
-    delete m_pAuxSend;
-    delete m_pDeckSend;
-}
-
-void EngineAux::receiveDeckSend(const CSAMPLE* pBuffer, int iBufferSize) {
-    m_pDeckSendBuffer = pBuffer;
-    m_deckSendSize = iBufferSize;
 }
 
 EngineChannel::ActiveState EngineAux::updateActiveState() {
@@ -85,38 +71,11 @@ void EngineAux::receiveBuffer(
 
 void EngineAux::process(CSAMPLE* pOut, const int iBufferSize) {
     const CSAMPLE* sampleBuffer = m_sampleBuffer; // save pointer on stack
-    const auto pregain = static_cast<CSAMPLE_GAIN>(m_pPregain->get());
-    const auto auxSend = static_cast<CSAMPLE_GAIN>(m_pAuxSend->get());
-    const auto deckSend = static_cast<CSAMPLE_GAIN>(m_pDeckSend->get());
-    // The decks are summed in here, BEFORE the chain, which is what lets one
-    // effect rack work on the deck's own audio as well as on the mixer's aux
-    // send (PRD §15.1). It has to be a sum feeding one chain rather than the
-    // unit being routed to both channels: routed, Mixxx would run a separate
-    // instance per channel with its own state, and in WetOnly the deck's
-    // channel would emit tail alone and take its own dry with it.
-    //
-    // The deck's dry path is untouched -- this is a copy -- so it goes to the
-    // output as it always did.
-    const CSAMPLE* deckBuffer = m_pDeckSendBuffer;
-    const bool haveDeck = deckBuffer != nullptr && m_deckSendSize >= iBufferSize &&
-            deckSend > CSAMPLE_GAIN_ZERO;
-    m_pDeckSendBuffer = nullptr; // one callback only
-    if (sampleBuffer || haveDeck) {
-        if (sampleBuffer) {
-            SampleUtil::copyWithGain(pOut, sampleBuffer, pregain * auxSend, iBufferSize);
-        } else {
-            SampleUtil::clear(pOut, iBufferSize);
-        }
-        if (haveDeck) {
-            SampleUtil::addWithGain(pOut, deckBuffer, pregain * deckSend, iBufferSize);
-        }
+    CSAMPLE_GAIN pregain = static_cast<CSAMPLE_GAIN>(m_pPregain->get());
+    if (sampleBuffer) {
+        SampleUtil::copyWithGain(pOut, sampleBuffer, pregain, iBufferSize);
         EngineEffectsManager* pEngineEffectsManager = m_pEffectsManager->getEngineEffectsManager();
         if (pEngineEffectsManager != nullptr) {
-            // Prefader only, which for this channel is the equalizer chain and
-            // nothing else. The effect RACK is a StandardEffectChain and runs
-            // postfader, in ChannelMixer -- which collects this channel's
-            // features on the way and hands them to the effects, so the beat
-            // length below reaches the Echo without anything extra here.
             pEngineEffectsManager->processPreFaderInPlace(m_group.handle(),
                     m_pEffectsManager->getMainHandle(),
                     pOut,
@@ -134,20 +93,4 @@ void EngineAux::process(CSAMPLE* pOut, const int iBufferSize) {
 
 void EngineAux::collectFeatures(GroupFeatureState* pGroupFeatures) const {
     m_vuMeter.collectFeatures(pGroupFeatures);
-
-    // Lend the aux a beatgrid it cannot have of its own. What arrives here is
-    // several decks summed by a mixer; there is no track, no analysis and no
-    // playposition, so the only honest tempo is the one some deck reports it is
-    // playing at.
-    //
-    // Only the length, not the phase: `beat_fraction_buffer_end` is left unset
-    // deliberately. Knowing how long a beat is makes Echo's Quantize snap the
-    // delay to a musical division, which is the useful part. Knowing *where*
-    // the beat is would need the phase of a signal that is a mix of several
-    // decks, arriving 32 ms late -- and there is no single right answer to
-    // give, so none is given.
-    const double bpm = m_pFxBpm ? m_pFxBpm->get() : 0.0;
-    if (bpm > 0.0) {
-        pGroupFeatures->beat_length = {60.0 / bpm, 1.0};
-    }
 }

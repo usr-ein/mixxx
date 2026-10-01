@@ -1,7 +1,6 @@
 #include "effects/effectchain.h"
 
 #include "control/controlencoder.h"
-#include "control/controlaudiotaperpot.h"
 #include "control/controlpotmeter.h"
 #include "control/controlpushbutton.h"
 #include "effects/effectslot.h"
@@ -70,20 +69,6 @@ EffectChain::EffectChain(const QString& group,
             this,
             &EffectChain::sendParameterUpdate);
 
-    // Makeup gain on the chain's output, ±12 dB with unity at half travel --
-    // deliberately the same control and the same range as [AuxiliaryN] pregain
-    // on the other side of the chain, because on this deck the two are the
-    // return and the send and a DJ switches between them.
-    //
-    // Only WetOnly chains apply it: in every other mode the output already
-    // contains the dry at unity and there is nothing to make up.
-    m_pControlChainMakeup = std::make_unique<ControlAudioTaperPot>(
-            ConfigKey(m_group, "makeup"), -12, 12, 0.5);
-    connect(m_pControlChainMakeup.get(),
-            &ControlObject::valueChanged,
-            this,
-            &EffectChain::sendParameterUpdate);
-
     m_pControlChainSuperParameter = std::make_unique<ControlPotmeter>(
             ConfigKey(m_group, "super1"), 0.0, 1.0);
     // QObject::connect cannot connect to slots with optional parameters using function
@@ -98,7 +83,7 @@ EffectChain::EffectChain(const QString& group,
     m_pControlChainMixMode =
             std::make_unique<ControlPushButton>(ConfigKey(m_group, "mix_mode"));
     m_pControlChainMixMode->setButtonMode(ControlPushButton::TOGGLE);
-    m_pControlChainMixMode->setStates(EffectChainMixMode::kNumToggleModes);
+    m_pControlChainMixMode->setStates(EffectChainMixMode::kNumModes);
     double mixModeCODefault = static_cast<double>(EffectChainMixMode::DrySlashWet);
     m_pControlChainMixMode->setDefaultValue(mixModeCODefault);
     m_pControlChainMixMode->set(mixModeCODefault);
@@ -258,7 +243,6 @@ void EffectChain::sendParameterUpdate() {
     pRequest->SetEffectChainParameters.enabled = m_pControlChainEnabled->toBool();
     pRequest->SetEffectChainParameters.mix_mode = mixMode();
     pRequest->SetEffectChainParameters.mix = m_pControlChainMix->get();
-    pRequest->SetEffectChainParameters.makeup = m_pControlChainMakeup->get();
     m_pMessenger->writeRequest(pRequest);
 }
 

@@ -15,7 +15,6 @@
 #include "preferences/usersettings.h"
 #include "skin/legacy/skincontext.h"
 #include "track/track_decl.h"
-#include "widget/deck/deckencoder.h"
 #include "widget/wbasewidget.h"
 
 class ControlEncoder;
@@ -24,7 +23,6 @@ class ControlPushButton;
 class Library;
 class BaseTrackCache;
 class QStackedWidget;
-class EffectsManager;
 
 namespace mixxx {
 namespace deck {
@@ -37,7 +35,6 @@ class WDeckSortMenu;
 class WDeckKeyboard;
 class WDeckInfoPanel;
 class WDeckDiagnostics;
-class WDeckRack;
 class DeckPage;
 class TrackRowDelegate;
 
@@ -82,24 +79,14 @@ class DeckSortChip : public QLabel {
 /// **Navigation is a stack, not a tree.** Each level records what it was
 /// showing and which row was selected, so BACK restores the level below exactly
 /// as it was left rather than rebuilding it from scratch and losing the place.
-class WDeckBrowser : public QWidget, public WBaseWidget, public DeckEncoder::Target {
+class WDeckBrowser : public QWidget, public WBaseWidget {
     Q_OBJECT
 
   public:
-    WDeckBrowser(QWidget* pParent,
-            Library* pLibrary,
-            UserSettingsPointer pConfig,
-            EffectsManager* pEffectsManager);
+    WDeckBrowser(QWidget* pParent, Library* pLibrary, UserSettingsPointer pConfig);
     ~WDeckBrowser() override;
 
     void setup(const QDomNode& node, const SkinContext& context);
-
-    // DeckEncoder::Target. Which of the browser's own screens is showing --
-    // a menu, a track list, the Effects page -- is decided below, not by the
-    // router: the router only knows that the library is up.
-    void encoderMove(int steps) override;
-    void encoderPress() override;
-    void encoderResetFocus() override;
 
   signals:
     void loadTrackToPlayer(TrackPointer pTrack, const QString& group, bool play);
@@ -139,7 +126,6 @@ class WDeckBrowser : public QWidget, public WBaseWidget, public DeckEncoder::Tar
             ArtistAlbums,
             Tracks,
             Search,
-            Effects,
             Diagnostics,
         };
         Kind kind = Kind::Sources;
@@ -152,7 +138,6 @@ class WDeckBrowser : public QWidget, public WBaseWidget, public DeckEncoder::Tar
         int selectedRow = 0;
     };
 
-    void finishControlSetup();
     void pushLevel(Level level);
     void popLevel();
     void rebuildCurrentLevel();
@@ -246,9 +231,6 @@ class WDeckBrowser : public QWidget, public WBaseWidget, public DeckEncoder::Tar
     QWidget* m_pTracksPage;
     WDeckInfoPanel* m_pInfoPanel;
     WDeckDiagnostics* m_pDiagnostics;
-    /// The effect rack. Its status read-out moved to Diagnostics; what is left
-    /// here is the instrument.
-    WDeckRack* m_pRack;
     bool m_infoLayout = false;
     /// Preview waveforms for the info panel, read off the GUI thread.
     std::unique_ptr<PreviewWaveformCache> m_pPreviews;

@@ -1,8 +1,5 @@
 #include "network/prolink/prolinknetworkservice.h"
 
-#include <QDateTime>
-#include <limits>
-
 #include <QDir>
 #include <QFile>
 #include <QHostAddress>
@@ -312,10 +309,6 @@ ProLinkNetworkService::ProLinkNetworkService(QObject* parent)
             m_alignWhenTempoMatches = true;
         }
     });
-
-    // Poll from the start, network or not: the effect rack needs a beat length
-    // whether or not there is a CDJ to take it from.
-    startPolling();
 }
 
 /*static*/ const char* ProLinkNetworkService::kDeckGroup = "[Channel1]";
@@ -692,98 +685,6 @@ void ProLinkNetworkService::publishMaster() {
     m_pControls->masterBarPhase()->forceSet(-1.0);
 }
 
-void ProLinkNetworkService::publishEffectTempo() {
-    if (!m_pControls) {
-        return;
-    }
-    if (!m_pImpl->pSession) {
-        // No network at all. This deck can still be playing, so fall through
-        // with an empty player list rather than returning: its own tempo is a
-        // perfectly good one to run the rack at.
-        m_playingSince.remove(1);
-        m_playingSince.remove(2);
-        m_playingSince.remove(3);
-        m_playingSince.remove(4);
-    }
-    const ::rust::Vec<::prolink::Player> players = m_pImpl->pSession
-            ? (*m_pImpl->pSession)->players()
-            : ::rust::Vec<::prolink::Player>();
-
-    // Source codes are the ones [EffectTempo] source documents: 1-4 a Pro DJ
-    // Link player, 5 this deck.
-    constexpr int kOwnDeck = 5;
-    const qint64 now = QDateTime::currentMSecsSinceEpoch();
-
-    QHash<int, double> playing;
-    for (const ::prolink::Player& player : players) {
-        // The same test the phase meter follows, so the rack and the meter
-        // never disagree about who is playing. Cued, paused, searching and
-        // spun-down decks are excluded by it -- which is the whole point here,
-        // since a deck sitting on its cue point is the one whose tempo must
-        // not be taken.
-        if (!isWorthFollowing(player) || player.effective_bpm <= 0.0) {
-            continue;
-        }
-        const int number = static_cast<int>(player.number);
-        if (number >= 1 && number <= 4) {
-            playing.insert(number, player.effective_bpm);
-        }
-    }
-    // This deck counts as a candidate on the same terms as any other.
-    if (m_pDeckPlay && m_pDeckPlay->toBool() && m_pDeckBpm && m_pDeckBpm->get() > 0.0) {
-        playing.insert(kOwnDeck, m_pDeckBpm->get());
-    }
-
-    // Forget anything that stopped. Done before the pick rather than after, so
-    // a deck that pauses and restarts is correctly the youngest again rather
-    // than keeping the seniority it had before it stopped.
-    for (auto it = m_playingSince.begin(); it != m_playingSince.end();) {
-        if (playing.contains(it.key())) {
-            ++it;
-        } else {
-            it = m_playingSince.erase(it);
-        }
-    }
-    for (auto it = playing.constBegin(); it != playing.constEnd(); ++it) {
-        if (!m_playingSince.contains(it.key())) {
-            m_playingSince.insert(it.key(), now);
-        }
-    }
-
-    // Oldest wins, and keeps winning until it stops.
-    int chosen = 0;
-    qint64 oldest = std::numeric_limits<qint64>::max();
-    for (auto it = m_playingSince.constBegin(); it != m_playingSince.constEnd(); ++it) {
-        if (it.value() < oldest || (it.value() == oldest && it.key() < chosen)) {
-            oldest = it.value();
-            chosen = it.key();
-        }
-    }
-
-    const double bpm = chosen == 0 ? 0.0 : playing.value(chosen);
-    m_pControls->fxBpmSource()->forceSet(chosen);
-    m_pControls->fxBpm()->forceSet(bpm);
-
-    // Announced on a change, not on a poll. Which deck the effects are
-    // quantised to is invisible from the audio -- a delay following the wrong
-    // deck sounds like a broken delay, not like a delay following the wrong
-    // deck -- so the one place it can be checked after the fact is here.
-    // Half a BPM, because a pitch fader being nudged is not an event.
-    if (chosen != m_loggedTempoSource || std::abs(bpm - m_loggedTempoBpm) > 0.5) {
-        m_loggedTempoSource = chosen;
-        m_loggedTempoBpm = bpm;
-        if (chosen == 0) {
-            kLogger.info() << "effect tempo: no deck playing";
-        } else {
-            kLogger.info() << "effect tempo:"
-                           << (chosen == 5 ? QStringLiteral("this deck")
-                                           : QStringLiteral("player %1").arg(chosen))
-                           << "at" << bpm << "BPM"
-                           << "(oldest of" << m_playingSince.size() << "playing)";
-        }
-    }
-}
-
 void ProLinkNetworkService::publishMasterTrack(const MasterTrack& track) {
     if (track == m_publishedMasterTrack) {
         return;
@@ -881,7 +782,11 @@ void ProLinkNetworkService::start() {
     emit listeningChanged(true, QString());
     emit announceChanged(m_announcedNumber, m_announceDetail);
 
-    startPolling();
+    if (m_pTimer == nullptr) {
+        m_pTimer = new QTimer(this);
+        connect(m_pTimer, &QTimer::timeout, this, &ProLinkNetworkService::poll);
+    }
+    m_pTimer->start(kPollIntervalMs);
 }
 
 void ProLinkNetworkService::shutdown() {
@@ -1149,30 +1054,7 @@ void ProLinkNetworkService::fetchArtwork(const QByteArray& mac,
     }
 }
 
-void ProLinkNetworkService::startPolling() {
-    // Independent of whether a session ever opened. poll() publishes the
-    // effect tempo before it looks at the session, and this deck's own tempo
-    // is worth publishing with no network present at all.
-    if (m_pTimer == nullptr) {
-        m_pTimer = new QTimer(this);
-        connect(m_pTimer, &QTimer::timeout, this, &ProLinkNetworkService::poll);
-    }
-    if (!m_pTimer->isActive()) {
-        m_pTimer->start(kPollIntervalMs);
-    }
-}
-
 void ProLinkNetworkService::poll() {
-    // Before the session check, because it does not need one. This deck can be
-    // playing with no Pro DJ Link network at all -- nothing plugged into the
-    // ethernet port, or open() lost the race for UDP 50000 -- and its own
-    // tempo is a perfectly good one to run the rack at. publishEffectTempo()
-    // was written to handle exactly that and could never be reached to do it:
-    // the early return below skipped it, and the timer that calls poll() is
-    // only started after a successful open(). So with no network the rack got
-    // no beat length and every delay division was read as that many SECONDS.
-    publishEffectTempo();
-
     if (!m_pImpl->pSession) {
         return;
     }

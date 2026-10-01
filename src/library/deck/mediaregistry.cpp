@@ -215,8 +215,7 @@ MediaRegistry::~MediaRegistry() {
     // That is exactly what it did. glibc aborted inside malloc during
     // clearMedium()'s QSqlResult::savePrepare, part-way through
     // QObjectPrivate::deleteChildren -- so Mixxx segfaulted on every shutdown,
-    // never reached ~EffectsManager, and effects.xml silently stopped being
-    // written. The effect rack appeared not to persist for a day and a half
+    // before CoreServices::finalize() had saved anything, mixxx.cfg included,
     // because of a signal emitted from a destructor.
     if (m_pNetwork) {
         m_pNetwork->disconnect(this);

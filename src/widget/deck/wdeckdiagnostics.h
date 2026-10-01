@@ -4,11 +4,8 @@
 #include <QList>
 #include <QTextBrowser>
 #include <QTimer>
-#include <memory>
 
 #include "widget/deck/deckpage.h"
-
-class ControlProxy;
 
 namespace mixxx {
 namespace deck {
@@ -59,19 +56,6 @@ class WDeckDiagnostics : public QTextBrowser, public DeckPage {
     static QString runCommand(const QString& program, const QStringList& args);
     /// A history rendered with block characters, oldest to newest.
     static QString sparkline(const QList<double>& history, double max);
-
-    /// The effect-pedal bus, read straight off the controls. Every one of these
-    /// can be silently wrong and they all sound identical -- which is to say
-    /// silent -- so the page states each separately rather than leaving it to
-    /// be inferred.
-    std::unique_ptr<ControlProxy> m_pAuxConfigured;
-    std::unique_ptr<ControlProxy> m_pAuxMainMix;
-    std::unique_ptr<ControlProxy> m_pAuxVu;
-    std::unique_ptr<ControlProxy> m_pUnitRouted;
-    std::unique_ptr<ControlProxy> m_pUnitEnabled;
-    std::unique_ptr<ControlProxy> m_pMixMode;
-    std::unique_ptr<ControlProxy> m_pEffectLoaded;
-    std::unique_ptr<ControlProxy> m_pEffectOn;
 
     QTimer m_timer;
     QList<double> m_cpuHistory;

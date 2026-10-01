@@ -43,13 +43,6 @@ EffectSlot::EffectSlot(const QString& group,
     }
 
     m_pControlLoaded = std::make_unique<ControlObject>(ConfigKey(m_group, "loaded"));
-
-    // What this slot is putting out, 0..1, written from the audio thread by
-    // EngineEffectChain. Read-only from outside: a meter nobody can set is a
-    // meter that cannot lie about the audio.
-    m_pControlOutputLevel = std::make_unique<ControlObject>(
-            ConfigKey(m_group, "output_level"));
-    m_pControlOutputLevel->setReadOnly();
     m_pControlLoaded->setReadOnly();
 
     m_pControlNumParameters.insert(EffectParameterType::Knob,
@@ -126,17 +119,6 @@ EffectSlot::EffectSlot(const QString& group,
         addEffectParameterSlot(EffectParameterType::Button);
     }
 
-    m_pControlWet = std::make_unique<ControlPotmeter>(
-            ConfigKey(m_group, "wet"), 0.0, 1.0);
-    // Fully wet by default, which is what every chain did before this control
-    // existed, so nothing outside a WetOnly chain notices it.
-    m_pControlWet->setDefaultValue(1.0);
-    m_pControlWet->set(1.0);
-    connect(m_pControlWet.get(),
-            &ControlObject::valueChanged,
-            this,
-            &EffectSlot::updateEngineState);
-
     m_pControlMetaParameter = std::make_unique<ControlPotmeter>(
             ConfigKey(m_group, "meta"), 0.0, 1.0);
     // QObject::connect cannot connect to slots with optional parameters using function
@@ -171,8 +153,7 @@ void EffectSlot::addToEngine() {
             m_pBackendManager,
             m_pChain->getActiveChannels(),
             m_pEffectsManager->registeredInputChannels(),
-            m_pEffectsManager->registeredOutputChannels(),
-            m_pControlOutputLevel.get());
+            m_pEffectsManager->registeredOutputChannels());
 
     EffectsRequest* request = new EffectsRequest();
     request->type = EffectsRequest::ADD_EFFECT_TO_CHAIN;
@@ -206,7 +187,6 @@ void EffectSlot::updateEngineState() {
     pRequest->type = EffectsRequest::SET_EFFECT_PARAMETERS;
     pRequest->pTargetEffect = m_pEngineEffect;
     pRequest->SetEffectParameters.enabled = m_pControlEnabled->toBool();
-    pRequest->SetEffectParameters.wet = m_pControlWet->get();
     m_pMessenger->writeRequest(pRequest);
 
     for (const auto& parameterList : std::as_const(m_allParameters)) {
@@ -369,11 +349,6 @@ void EffectSlot::loadEffectInner(const EffectManifestPointer pManifest,
 
     m_pControlLoaded->forceSet(1.0);
 
-    // Restore the slot's blend from the preset. Presets written before per-slot
-    // wet existed carry no <Wet> element and read back as 1, so an old rack
-    // loads exactly as it used to rather than arriving silent.
-    m_pControlWet->set(pEffectPreset->wet());
-
     if (m_pEffectsManager->isAdoptMetaknobSettingEnabled()) {
         if (adoptMetaknobFromPreset) {
             // Update the ControlObject value, but do not sync the parameters
@@ -402,9 +377,6 @@ void EffectSlot::unloadEffect() {
 
     m_pControlLoaded->forceSet(0.0);
     m_pControlLoadedEffect->setAndConfirm(0.0);
-    // Nothing will write it once the effect is gone, and a meter frozen at the
-    // last thing it saw reads as a slot that is still working.
-    m_pControlOutputLevel->forceSet(0.0);
     for (const auto& pControlNumParameters : std::as_const(m_pControlNumParameters)) {
         pControlNumParameters->forceSet(0.0);
     }
@@ -584,14 +556,6 @@ void EffectSlot::syncSofttakeover() {
 
 double EffectSlot::getMetaParameter() const {
     return m_pControlMetaParameter->get();
-}
-
-double EffectSlot::getWet() const {
-    return m_pControlWet->get();
-}
-
-void EffectSlot::setWet(double wet) {
-    m_pControlWet->set(wet);
 }
 
 // This function is for the superknob to update individual effects' meta knobs

@@ -12,8 +12,7 @@ namespace deck {
 /// Before this, it said so in `WDeckBrowser`: each control's handler carried a
 /// chain of `if (m_stack.last().kind == …)` tests naming every non-list page,
 /// which meant three more branches in three more places every time a page was
-/// added, all of them far from the page they were about. The effect rack needs
-/// drag, long-press and horizontal scroll on top of that.
+/// added, all of them far from the page they were about.
 ///
 /// So the question is asked the other way round. The browser hands the gesture
 /// to whatever page is currently on the stack; a page that wants it takes it and
@@ -41,9 +40,9 @@ class DeckPage {
         return false;
     }
 
-    /// BACK. For pages with an inner mode -- adjusting a value, dragging a
-    /// module -- this is where that mode is left, so BACK does not throw away
-    /// the whole page from under it.
+    /// BACK. For pages with an inner mode -- adjusting a value, say -- this is
+    /// where that mode is left, so BACK does not throw away the whole page from
+    /// under it.
     virtual bool handleBack() {
         return false;
     }
