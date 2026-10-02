@@ -8,6 +8,7 @@
 #include <QSqlQuery>
 #include <QStackedWidget>
 #include <QVBoxLayout>
+#include <utility>
 
 #include "audio/types.h"
 #include "control/controlencoder.h"
@@ -20,6 +21,8 @@
 #include "library/deck/deckqueries.h"
 #include "library/deck/decktrackmodel.h"
 #include "library/deck/pdbingest.h"
+#include "library/deck/ramstore.h"
+#include "library/deck/sessionpurge.h"
 #include "library/queryutil.h"
 #include "library/library.h"
 #include "library/rekordbox/rekordboxanalysis.h"
@@ -68,6 +71,13 @@ const QString kDeckGroup = QStringLiteral("[Channel1]");
 /// Between the end of the path and the sort indicator. Wide enough that the
 /// indicator is plainly a thing of its own and not the next crumb.
 constexpr int kSortChipGap = 28;
+
+/// A folder stick's tags arrive in batches for a minute or so after it goes
+/// in; the list on screen re-reads at most this often while they do.
+constexpr int kInPlaceRefreshMs = 1500;
+/// And not while the encoder is turning: a re-read under a moving selection
+/// can swallow a detent, and nobody misses a title filling in a second later.
+constexpr qint64 kRefreshQuietMs = 1200;
 
 /// Categories of a medium, in the order the PRD lists them.
 struct CategorySpec {
@@ -303,6 +313,14 @@ WDeckBrowser::WDeckBrowser(QWidget* pParent, Library* pLibrary, UserSettingsPoin
         }
     }
 
+    // What Mixxx's own library remembers about the session's tracks goes at
+    // the first start of a boot: beats, cues and the waveform files of every
+    // copy played off a stick (docs/plain-usb-plan.md D1). Before anything is
+    // loaded, so nothing on the deck is purged from under it.
+    purgeSessionTracksIfNewBoot(m_pLibrary->trackCollectionManager(),
+            m_pConfig->getSettingsPath(),
+            {RamStore::root(), TrackCache::diskTierRoot(), QStringLiteral("/media")});
+
     // The search page. The results reuse the track view rather than a second
     // list, so a hit behaves exactly like any other track row -- long press to
     // load, tap to see more.
@@ -453,6 +471,13 @@ WDeckBrowser::WDeckBrowser(QWidget* pParent, Library* pLibrary, UserSettingsPoin
             &MediaRegistry::mediaChanged,
             this,
             &WDeckBrowser::onMediaChanged);
+    m_inPlaceRefresh.setSingleShot(true);
+    m_inPlaceRefresh.setInterval(kInPlaceRefreshMs);
+    connect(&m_inPlaceRefresh, &QTimer::timeout, this, &WDeckBrowser::refreshInPlace);
+    connect(m_pRegistry.get(),
+            &MediaRegistry::mediumUpdated,
+            this,
+            &WDeckBrowser::onMediumUpdated);
 
     // ---- the deck's controls -------------------------------------------
     m_pMove = std::make_unique<ControlEncoder>(ConfigKey("[Browser]", "move"), false);
@@ -736,6 +761,114 @@ void WDeckBrowser::onMediaChanged() {
     }
 }
 
+void WDeckBrowser::onMediumUpdated(const QString& mediumKey, const QList<quint32>& rbIds) {
+    // The rows themselves at once, whatever is on screen: a list left and come
+    // back to would otherwise show what the cache kept from before.
+    if (!rbIds.isEmpty()) {
+        QStringList numbers;
+        numbers.reserve(rbIds.size());
+        for (const quint32 rbId : rbIds) {
+            numbers.append(QString::number(rbId));
+        }
+        QSqlDatabase db = database();
+        QSqlQuery query(db);
+        // Spliced rather than bound: they are numbers formatted right here.
+        query.prepare(QStringLiteral("SELECT id FROM %1 WHERE medium = :medium AND rb_id IN (%2)")
+                              .arg(kLibraryTable, numbers.join(QLatin1Char(','))));
+        query.bindValue(QStringLiteral(":medium"), mediumKey);
+        if (query.exec()) {
+            QSet<TrackId> rows;
+            while (query.next()) {
+                rows.insert(TrackId(query.value(0)));
+            }
+            refreshCachedRows(rows);
+        } else {
+            LOG_FAILED_QUERY(query);
+        }
+    }
+    // One medium at a time is all that ever reads tags, so a second key simply
+    // replaces the first; the level on screen belongs to one medium anyway.
+    m_staleMediumKey = mediumKey;
+    m_inPlaceRefresh.start();
+}
+
+void WDeckBrowser::writeBackBpm(int trackRowId,
+        quint32 rekordboxId,
+        const QString& mediumKey,
+        double bpm) {
+    if (bpm <= 0.0) {
+        return;
+    }
+    QSqlDatabase db = database();
+    QSqlQuery query(db);
+    query.prepare(QStringLiteral("UPDATE %1 SET bpm = :bpm WHERE id = :id").arg(kLibraryTable));
+    query.bindValue(QStringLiteral(":bpm"), bpm);
+    query.bindValue(QStringLiteral(":id"), trackRowId);
+    if (!query.exec()) {
+        LOG_FAILED_QUERY(query);
+        return;
+    }
+    onMediumUpdated(mediumKey, {rekordboxId});
+}
+
+void WDeckBrowser::refreshCachedRows(const QSet<TrackId>& rows) {
+    // Only rows the cache already holds. One it has never shown is read fresh
+    // when it is, and pulling in the rest of a twenty-thousand-file stick as
+    // its tags arrive would only cost memory.
+    QSet<TrackId> held;
+    for (const TrackId& row : rows) {
+        if (m_trackSource->isCached(row)) {
+            held.insert(row);
+        }
+    }
+    if (!held.isEmpty()) {
+        m_trackSource->slotTracksAddedOrChanged(held);
+    }
+}
+
+void WDeckBrowser::refreshInPlace() {
+    if (m_staleMediumKey.isEmpty() || m_stack.isEmpty()) {
+        return;
+    }
+    if (m_lastSelectionMove.isValid() && m_lastSelectionMove.elapsed() < kRefreshQuietMs) {
+        m_inPlaceRefresh.start();
+        return;
+    }
+    const QString mediumKey = std::exchange(m_staleMediumKey, QString());
+    const Level& level = m_stack.last();
+    if (level.kind == Level::Kind::Sources || level.kind == Level::Kind::Diagnostics ||
+            level.medium.key() != mediumKey) {
+        return;
+    }
+    if (inTrackList()) {
+        // Same rows, new values: re-select the model and put the selection
+        // back on the track it was on, which is all a sort does too.
+        const int row = m_pTrackView->selectedRow();
+        const int idColumn = m_pTrackModel->fieldIndex(QStringLiteral("track_id"));
+        const int trackId = (row >= 0 && idColumn >= 0)
+                ? m_pTrackModel->index(row, idColumn).data(Qt::DisplayRole).toInt()
+                : -1;
+        m_pTrackModel->select();
+        restoreSelection(trackId);
+        updateInfoPanel();
+        return;
+    }
+    // A menu. Its counts can have moved -- Artists has some now that the tags
+    // say who they are -- and a rebuild keeps the row it was on.
+    m_stack.last().selectedRow = m_pMenuView->selectedRow();
+    rebuildCurrentLevel();
+}
+
+MediumInfo::Format WDeckBrowser::formatOf(const MediumId& medium) const {
+    if (m_pRegistry) {
+        const int index = m_pRegistry->indexOf(medium);
+        if (index >= 0) {
+            return m_pRegistry->media().at(index).format;
+        }
+    }
+    return MediumInfo::Format::Rekordbox;
+}
+
 void WDeckBrowser::showSources() {
     if (m_stack.isEmpty()) {
         Level level;
@@ -769,9 +902,19 @@ void WDeckBrowser::showSources() {
             row.dimmed = true;
             [[fallthrough]];
         case MediumInfo::State::Ready:
-            row.detail = tr("%1 tracks · %2 playlists")
-                                 .arg(medium.trackCount)
-                                 .arg(medium.playlistCount);
+            // A stick of loose files has folders where an export has
+            // playlists, and says so: "0 playlists" on a stick with three
+            // hundred tracks in it reads like something went wrong.
+            row.detail = medium.format == MediumInfo::Format::Folder
+                    ? tr("%1 · %2").arg(medium.trackCount == 1
+                                                ? tr("1 track")
+                                                : tr("%1 tracks").arg(medium.trackCount),
+                              medium.folderCount == 1
+                                      ? tr("1 folder")
+                                      : tr("%1 folders").arg(medium.folderCount))
+                    : tr("%1 tracks · %2 playlists")
+                              .arg(medium.trackCount)
+                              .arg(medium.playlistCount);
             break;
         }
         row.payload = QVariant::fromValue(medium.id.key());
@@ -827,8 +970,22 @@ void WDeckBrowser::showMediumMenu(const Level& level) {
     search.payload = QStringLiteral("search");
     rows.append(search);
 
+    // A stick of loose files is browsed the way its owner arranged it, so its
+    // folders come first. They are the same tree the Playlists row walks on an
+    // export -- directories became folders and playlists when it was read --
+    // so only the name and the place in the list differ.
+    const int mediumIndex = m_pRegistry->indexOf(level.medium);
+    const bool folders = mediumIndex >= 0 &&
+            m_pRegistry->media().at(mediumIndex).format == MediumInfo::Format::Folder;
+    if (folders) {
+        add(tr("Folders"),
+                QStringLiteral("playlists"),
+                m_pRegistry->media().at(mediumIndex).folderCount);
+    }
     add(tr("All tracks"), QStringLiteral("all"), trackCount(db, level.medium));
-    add(tr("Playlists"), QStringLiteral("playlists"), playlistCount(db, level.medium));
+    if (!folders) {
+        add(tr("Playlists"), QStringLiteral("playlists"), playlistCount(db, level.medium));
+    }
     add(tr("Genre"), QStringLiteral("genre"), categoryCount(db, level.medium, QStringLiteral("genre")));
     add(tr("Artists"), QStringLiteral("artist"), categoryCount(db, level.medium, QStringLiteral("artist")));
     add(tr("Last played"), QStringLiteral("lastplayed"), -1);
@@ -847,21 +1004,38 @@ void WDeckBrowser::showMediumMenu(const Level& level) {
 
 void WDeckBrowser::showPlaylists(const Level& level) {
     QSqlDatabase db = database();
+    const bool folders = formatOf(level.medium) == MediumInfo::Format::Folder;
     QList<MenuRow> rows;
     for (const PlaylistEntry& entry : playlistsIn(db, level.medium, level.parentRbId)) {
         MenuRow row;
         row.title = entry.name;
         if (entry.isFolder) {
             row.mark = MenuRow::Mark::Folder;
-            row.detail = tr("%1 playlists").arg(entry.childCount);
+            // A directory holds subdirectories and a list of its own files,
+            // so neither "playlists" nor "folders" is the right word for what
+            // is inside it.
+            if (folders) {
+                row.detail = entry.childCount == 1 ? tr("1 item")
+                                                   : tr("%1 items").arg(entry.childCount);
+            } else {
+                row.detail = tr("%1 playlists").arg(entry.childCount);
+            }
             row.payload = QStringLiteral("folder:%1").arg(entry.rbId);
         } else {
             row.coverPaths = entry.coverPaths;
             const int minutes = entry.durationSeconds / 60;
-            row.detail = tr("%1 tracks · %2 h %3 min")
-                                 .arg(entry.trackCount)
-                                 .arg(minutes / 60)
-                                 .arg(minutes % 60, 2, 10, QChar('0'));
+            // No running time until there is one to give: a folder stick's
+            // durations come with its tags, a few seconds after it goes in,
+            // and "0 h 00 min" beside forty tracks reads like a fault.
+            const QString tracks = entry.trackCount == 1
+                    ? tr("1 track")
+                    : tr("%1 tracks").arg(entry.trackCount);
+            row.detail = entry.durationSeconds > 0
+                    ? tr("%1 · %2 h %3 min")
+                              .arg(tracks)
+                              .arg(minutes / 60)
+                              .arg(minutes % 60, 2, 10, QChar('0'))
+                    : tracks;
             row.payload = QStringLiteral("playlist:%1").arg(entry.id);
         }
         rows.append(row);
@@ -1030,6 +1204,7 @@ void WDeckBrowser::runSearch() {
 
 void WDeckBrowser::onSelectionMoved(int row) {
     Q_UNUSED(row);
+    m_lastSelectionMove.restart();
     updateInfoPanel();
     if (inTrackList()) {
         m_prefetchDwell.start();
@@ -1254,6 +1429,18 @@ void WDeckBrowser::updateInfoPanel() {
     } else {
         m_pInfoPanel->setPreview(PreviewWaveform());
     }
+}
+
+QString WDeckBrowser::deckGroup() {
+    return kDeckGroup;
+}
+
+void WDeckBrowser::onDeckEmpty() {
+    // Set at load, before the deck has said yes. A file that would not decode
+    // left the marker on its row, claiming a track the deck does not have.
+    m_loadedTrackRowId = -1;
+    m_loadedTrackLogged = false;
+    onPlayingKeyChanged();
 }
 
 void WDeckBrowser::onPlayingKeyChanged() {
@@ -1540,6 +1727,31 @@ void WDeckBrowser::loadSelectedTrack() {
 
     m_loadedTrackRowId = trackRowId > 0 ? trackRowId : -1;
     m_loadedTrackLogged = false;
+
+    // A folder track comes with no tempo unless its tags had one, and Mixxx's
+    // analysis is about to find it. Written back to the row when it does, so
+    // the list shows it and the BPM menu can put it in a bucket -- the one
+    // thing this deck learns about a stick that is worth keeping on screen.
+    QObject::disconnect(m_bpmWriteBack);
+    if (trackRowId > 0 && formatOf(medium) == MediumInfo::Format::Folder) {
+        // Already known if the deck analysed this file earlier in the boot:
+        // the beats come back with the track, and nothing changes after the
+        // load to say so.
+        writeBackBpm(trackRowId, rekordboxId, medium.key(), pTrack->getBpm());
+        m_bpmWriteBack = connect(pTrack.get(),
+                &Track::bpmChanged,
+                this,
+                [this,
+                        trackRowId,
+                        rekordboxId,
+                        mediumKey = medium.key(),
+                        weakTrack = TrackWeakPointer(pTrack)]() {
+                    const TrackPointer pLoaded = weakTrack.lock();
+                    if (pLoaded) {
+                        writeBackBpm(trackRowId, rekordboxId, mediumKey, pLoaded->getBpm());
+                    }
+                });
+    }
     // What the deck is being handed, in the terms the deck draws from. A track
     // with beats but no waveform renders as a bare grid, which looks like a
     // rendering fault rather than a missing import.

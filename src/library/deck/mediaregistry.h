@@ -10,6 +10,7 @@
 
 #include <functional>
 
+#include "library/deck/folderscan.h"
 #include "library/deck/mediumid.h"
 #include "library/deck/pdbingest.h"
 #include "network/prolink/prolinkdefs.h"
@@ -25,11 +26,19 @@ class ProLinkKeySync;
 } // namespace prolink
 namespace deck {
 
-/// One source row: a rekordbox-prepared volume the deck can play from.
+/// One source row: a volume the deck can play from.
 struct MediumInfo {
     enum class Kind {
         Usb,
         Sd,
+    };
+    /// How the medium describes what is on it.
+    enum class Format {
+        /// A rekordbox export, read out of its `export.pdb`.
+        Rekordbox,
+        /// Loose files and no usable library: read out of its directory tree
+        /// (docs/plain-usb-plan.md). Local media only, for now.
+        Folder,
     };
     enum class State {
         Reading, ///< Being read. Selectable, not enterable; drawn dimmed.
@@ -50,6 +59,13 @@ struct MediumInfo {
     int slot = 0;
     int trackCount = 0;
     int playlistCount = 0;
+    /// Folder media only: the directories that hold music, which is what the
+    /// source row counts instead of playlists.
+    int folderCount = 0;
+    /// Settled when the medium has been read. Guessed until then from whether
+    /// there is an `export.pdb` at all; a pdb that turns out to be unreadable
+    /// makes it Folder after all.
+    Format format = Format::Rekordbox;
     State state = State::Reading;
     QString error;
 
@@ -211,6 +227,15 @@ class MediaRegistry : public QObject {
     void mediumAppeared(mixxx::deck::MediumInfo medium);
     void mediumVanished(mixxx::deck::MediumInfo medium);
     void mediumFailed(mixxx::deck::MediumInfo medium);
+    /// Something worth a toast that is none of the three above. Today: a
+    /// rekordbox library that could not be read, so the stick is being browsed
+    /// by its folders instead.
+    void mediumNotice(mixxx::deck::MediumInfo medium, const QString& text);
+    /// A medium's rows changed in place -- a folder medium's tags arriving in
+    /// the background. Not a change of shape, so nothing should rebuild a
+    /// level or move a selection over it; the list on screen just re-reads.
+    /// *rbIds* are the rows that changed, by their id within the medium.
+    void mediumUpdated(const QString& mediumKey, const QList<quint32>& rbIds);
 
   private slots:
     void onReadFinished();
@@ -291,8 +316,13 @@ class MediaRegistry : public QObject {
             const QString& localPath);
 #endif
 
-    /// Directories under /media whose child holds PIONEER/rekordbox/export.pdb.
+    /// Directories under /media the deck can read: every real mount -- a
+    /// stick of loose files is as much a medium as a rekordbox one -- and any
+    /// directory holding PIONEER/rekordbox/export.pdb, mounted or not.
     static QStringList findLocalMountPoints();
+    /// The local medium mounted at *mountPoint*, or -1. By mount point and
+    /// not by id, because the id also carries the stick's UUID.
+    int indexOfLocal(const QString& mountPoint) const;
     void startNextRead();
 
 #ifdef __PROLINK__
@@ -306,23 +336,50 @@ class MediaRegistry : public QObject {
     MediumId mediumOf(int player, mixxx::prolink::MediaSlot slot) const;
 #endif
 
-    /// What a worker produced. Copyable, because QFuture demands it.
-    struct ReadResult {
-        MediumId id;
-        IngestResult ingest;
-        bool ok = false;
-        QString error;
-    };
     /// One pending read. A local medium names a mount to read from; a remote
     /// one arrives with the bytes already in hand, because the network layer
     /// fetched them.
     struct PendingRead {
+        enum class Kind {
+            /// Read the whole medium: its pdb, or its directory tree.
+            Medium,
+            /// Read tags for some of a folder medium's tracks, already listed.
+            Tags,
+        };
+        Kind kind = Kind::Medium;
         MediumId id;
         QString mountPoint; ///< Local media only.
         QByteArray data;    ///< Remote media only.
         QString localRoot;
+        /// Folder media: what the files at the very top of the stick are
+        /// listed as -- its own name.
+        QString volumeName;
+        /// Tags only.
+        QList<FolderTagTarget> tagTargets;
+    };
+    /// What a worker produced. Copyable, because QFuture demands it.
+    struct ReadResult {
+        PendingRead::Kind kind = PendingRead::Kind::Medium;
+        MediumId id;
+        IngestResult ingest;
+        bool ok = false;
+        QString error;
+        MediumInfo::Format format = MediumInfo::Format::Rekordbox;
+        int folderCount = 0;
+        /// For a toast: why a stick with a pdb is being read as folders.
+        QString notice;
+        /// A folder medium's tracks, whose tags are read next, in chunks.
+        QList<FolderTagTarget> tagTargets;
+        /// Tags only: how many rows the batch changed, and which.
+        int tagsUpdated = 0;
+        QList<quint32> updatedRbIds;
     };
     static ReadResult readMedium(mixxx::DbConnectionPoolPtr pool, PendingRead pending);
+    /// The folder half of readMedium(): pass A, and the list pass B will read.
+    /// Also where a stick lands whose pdb cannot be read.
+    static ReadResult readFolderMedium(QSqlDatabase* pDatabase,
+            const PendingRead& pending,
+            ReadResult result);
     void enqueue(PendingRead pending);
 
     mixxx::DbConnectionPoolPtr m_dbConnectionPool;
@@ -332,6 +389,9 @@ class MediaRegistry : public QObject {
     QList<PendingRead> m_readQueue;
     QFutureWatcher<ReadResult> m_readWatcher;
     bool m_reading = false;
+    /// A tag read is waiting for a track copy to finish, and a retry is
+    /// already scheduled; see startNextRead().
+    bool m_tagRetryScheduled = false;
 
     /// /media gains and loses children as sticks come and go. Cheaper and more
     /// responsive than polling, and it catches a mount made by something other

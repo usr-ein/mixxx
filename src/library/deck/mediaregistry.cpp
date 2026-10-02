@@ -3,26 +3,28 @@
 #include <QDir>
 #include <algorithm>
 #include <utility>
+#include <QElapsedTimer>
 #include <QFile>
 #include <QFileInfo>
 #include <QSqlDatabase>
 #include <QSqlQuery>
+#include <QStorageInfo>
 #include <QUrl>
 #include <QtConcurrentRun>
 
 #include <QStandardPaths>
 
 #include "library/deck/deckqueries.h"
+#include "library/deck/folderlibrary.h"
 #include "library/deck/ramstore.h"
+#include "library/deck/trackcache.h"
 #include "library/deck/volumelabel.h"
 #include "network/prolink/prolinkpdb.h"
 #include "util/db/dbconnectionpooler.h"
 #ifdef __PROLINK__
-#include <QElapsedTimer>
 #include <QEventLoop>
 
 #include "library/deck/streamingfile.h"
-#include "library/deck/trackcache.h"
 #include "network/prolink/prolinkkeysync.h"
 #include "network/prolink/prolinknetworkservice.h"
 #include "track/keyutils.h"
@@ -37,6 +39,23 @@ const QString kMediaRoot = QStringLiteral("/media");
 const QString kPdbPath = QStringLiteral("PIONEER/rekordbox/export.pdb");
 /// The mount is still settling when the watcher fires; give it a moment.
 constexpr int kRescanDebounceMs = 400;
+
+/// A folder medium's tags are read this many files at a time. Small enough
+/// that a stick plugged in meanwhile, or a DJ loading a track, never waits on
+/// more than a second or two of somebody else's tag reads; large enough that
+/// the batch's one transaction is not mostly overhead.
+constexpr int kTagChunk = 40;
+/// How long tag reads wait for a track copy to get off the USB bus.
+constexpr int kTagYieldMs = 500;
+
+/// Whether *path* is where something is mounted, rather than a directory on
+/// the filesystem it sits in. dj-usb removes a slot's directory on eject, but
+/// only best-effort, and an empty leftover is not a stick.
+bool isMountPoint(const QString& path) {
+    const QStorageInfo info(path);
+    return info.isValid() && info.isReady() &&
+            QDir::cleanPath(info.rootPath()) == QDir::cleanPath(path);
+}
 
 #ifdef __PROLINK__
 /// How much of a track to pull before anything else.
@@ -243,13 +262,26 @@ QStringList MediaRegistry::findLocalMountPoints() {
     const QFileInfoList children = QDir(kMediaRoot)
                                            .entryInfoList(QDir::Dirs | QDir::NoDotAndDotDot);
     for (const QFileInfo& child : children) {
-        const QString pdb = QDir(child.absoluteFilePath()).filePath(kPdbPath);
-        if (QFileInfo::exists(pdb)) {
-            mountPoints.append(child.absoluteFilePath());
+        const QString path = child.absoluteFilePath();
+        // Any stick that is mounted, library or not: a stick of loose files
+        // was dropped here once, silently, and a DJ with one saw nothing at
+        // all. A rekordbox export still counts wherever it is, mounted or not,
+        // as it did before -- a development box keeps one in a plain folder.
+        if (QFileInfo::exists(QDir(path).filePath(kPdbPath)) || isMountPoint(path)) {
+            mountPoints.append(path);
         }
     }
     mountPoints.sort();
     return mountPoints;
+}
+
+int MediaRegistry::indexOfLocal(const QString& mountPoint) const {
+    for (int i = 0; i < m_media.size(); ++i) {
+        if (m_media.at(i).id.isLocal() && m_media.at(i).id.mountPoint() == mountPoint) {
+            return i;
+        }
+    }
+    return -1;
 }
 
 void MediaRegistry::rescanLocal() {
@@ -257,17 +289,35 @@ void MediaRegistry::rescanLocal() {
 
     bool changed = false;
 
-    // Gone: anything local we hold that is no longer mounted.
+    // Gone: anything local we hold that is no longer mounted -- or that is
+    // mounted, but is now a different stick. Slots are handed out in plug
+    // order, so a stick pulled and another pushed in between two scans lands at
+    // the same mount point, and only its UUID says it is not the same one.
     for (int i = m_media.size() - 1; i >= 0; --i) {
         const MediumInfo& medium = m_media.at(i);
         if (!medium.id.isLocal()) {
             continue;
         }
         if (mountPoints.contains(medium.id.mountPoint())) {
-            continue;
+            const QString held = medium.id.volumeId();
+            const QString now = held.isEmpty() ? QString() : volumeIdFor(medium.id.mountPoint());
+            // Either side unknown is no evidence of a swap: a sidecar written a
+            // moment after the mount would otherwise read as a new stick.
+            if (held.isEmpty() || now.isEmpty() || now == held) {
+                continue;
+            }
+            kLogger.info() << "a different stick is now at" << medium.id.mountPoint();
         }
         const MediumInfo gone = medium;
         m_media.removeAt(i);
+        // Whatever was still queued for it -- its tags, typically -- belongs to
+        // a stick that is not there any more.
+        m_readQueue.erase(std::remove_if(m_readQueue.begin(),
+                                  m_readQueue.end(),
+                                  [&gone](const PendingRead& pending) {
+                                      return pending.id == gone.id;
+                                  }),
+                m_readQueue.end());
         {
             const mixxx::DbConnectionPooler pooler(m_dbConnectionPool);
             QSqlDatabase database = mixxx::DbConnectionPooled(m_dbConnectionPool);
@@ -282,14 +332,19 @@ void MediaRegistry::rescanLocal() {
 
     // New: anything mounted we do not hold yet.
     for (const QString& mountPoint : mountPoints) {
-        const MediumId id = MediumId::local(mountPoint);
-        if (indexOf(id) >= 0) {
+        if (indexOfLocal(mountPoint) >= 0) {
             continue;
         }
+        const MediumId id = MediumId::local(mountPoint, volumeIdFor(mountPoint));
         MediumInfo medium;
         medium.id = id;
         medium.name = volumeLabelFor(mountPoint);
         medium.kind = MediumInfo::Kind::Usb;
+        // A guess until it has been read: the pdb may yet turn out unreadable.
+        // Made now because the insert toast says which it is.
+        medium.format = QFileInfo::exists(QDir(mountPoint).filePath(kPdbPath))
+                ? MediumInfo::Format::Rekordbox
+                : MediumInfo::Format::Folder;
         // "/media/DJ_USB_2" -> 2. Anything mounted elsewhere has no slot, which
         // is right: the number means a port on this deck, not an ordinal.
         const QString slotName = QFileInfo(mountPoint).fileName();
@@ -302,6 +357,7 @@ void MediaRegistry::rescanLocal() {
         pending.id = id;
         pending.mountPoint = mountPoint;
         pending.localRoot = mountPoint;
+        pending.volumeName = medium.name;
         m_readQueue.append(pending);
         changed = true;
         kLogger.info() << "medium found:" << medium.name << "at" << mountPoint;
@@ -326,10 +382,38 @@ void MediaRegistry::startNextRead() {
     // One at a time, local and remote alike: two parses would fight over one
     // USB bus or one network for no gain, and the ingest holds a write
     // transaction while it runs.
-    const PendingRead next = m_readQueue.takeFirst();
+    //
+    // Whole media before tags. A stick waiting to appear in SOURCES outranks
+    // the titles of one that is already browsable, so a second stick plugged in
+    // while the first one's tags are being read does not wait behind them.
+    int next = -1;
+    for (int i = 0; i < m_readQueue.size(); ++i) {
+        if (m_readQueue.at(i).kind == PendingRead::Kind::Medium) {
+            next = i;
+            break;
+        }
+    }
+    if (next < 0) {
+        // Only tags left, and tags give way to a track being copied off a
+        // stick: it is the same USB bus, and the copy is what the DJ who just
+        // pressed load is waiting on.
+        const TrackCache* pCache = TrackCache::instance();
+        if (pCache && pCache->isCopying()) {
+            if (!m_tagRetryScheduled) {
+                m_tagRetryScheduled = true;
+                QTimer::singleShot(kTagYieldMs, this, [this]() {
+                    m_tagRetryScheduled = false;
+                    startNextRead();
+                });
+            }
+            return;
+        }
+        next = 0;
+    }
+    const PendingRead pending = m_readQueue.takeAt(next);
     m_reading = true;
     m_readWatcher.setFuture(
-            QtConcurrent::run(&MediaRegistry::readMedium, m_dbConnectionPool, next));
+            QtConcurrent::run(&MediaRegistry::readMedium, m_dbConnectionPool, pending));
 }
 
 QString MediaRegistry::remoteCacheRoot(const MediumId& id) {
@@ -351,6 +435,7 @@ QString MediaRegistry::remoteCacheRoot(const MediumId& id) {
 MediaRegistry::ReadResult MediaRegistry::readMedium(
         mixxx::DbConnectionPoolPtr pool, PendingRead pending) {
     ReadResult result;
+    result.kind = pending.kind;
     result.id = pending.id;
 
     // A connection of this thread's own. A QSqlDatabase cannot be shared across
@@ -362,18 +447,43 @@ MediaRegistry::ReadResult MediaRegistry::readMedium(
         return result;
     }
 
+    // Pass B of a folder medium: a batch of its files' tags, written over what
+    // their names said.
+    if (pending.kind == PendingRead::Kind::Tags) {
+        const QList<TrackTagUpdate> updates = readFolderTags(pending.tagTargets);
+        result.tagsUpdated = updateTrackTags(database, pending.id, updates);
+        result.updatedRbIds.reserve(updates.size());
+        for (const TrackTagUpdate& update : updates) {
+            result.updatedRbIds.append(update.rbId);
+        }
+        result.ok = true;
+        return result;
+    }
+
     // A local medium is read off its mount; a remote one arrives with the bytes
     // already fetched. Past this line the two are the same thing, which is the
     // whole point of there being one ingest.
+    const bool local = !pending.mountPoint.isEmpty();
     QByteArray raw = pending.data;
-    if (raw.isEmpty()) {
+    if (raw.isEmpty() && local) {
         const QString pdbPath = QDir(pending.mountPoint).filePath(kPdbPath);
-        QFile pdbFile(pdbPath);
-        if (!pdbFile.open(QIODevice::ReadOnly)) {
-            result.error = QStringLiteral("cannot read %1").arg(pdbPath);
+        if (QFileInfo::exists(pdbPath)) {
+            QFile pdbFile(pdbPath);
+            if (pdbFile.open(QIODevice::ReadOnly)) {
+                raw = pdbFile.readAll();
+            }
+            if (raw.isEmpty()) {
+                result.notice = tr("rekordbox library unreadable, browsing folders");
+                kLogger.warning() << "cannot read" << pdbPath << "-- reading the folders instead";
+            }
+        }
+    }
+    if (raw.isEmpty()) {
+        if (!local) {
+            result.error = tr("empty database");
             return result;
         }
-        raw = pdbFile.readAll();
+        return readFolderMedium(&database, pending, std::move(result));
     }
 
     // Keep the bytes we ingested. A medium's pdb is the one input to all of
@@ -403,8 +513,18 @@ MediaRegistry::ReadResult MediaRegistry::readMedium(
 
     mixxx::prolink::PdbContents contents = mixxx::prolink::parsePdb(raw);
     if (!contents.ok) {
-        result.error = contents.error;
-        return result;
+        if (!local) {
+            result.error = contents.error;
+            return result;
+        }
+        // A stick whose library cannot be read is still a stick of music, and
+        // its files are right there. Browsed by folder rather than refused --
+        // that also covers a stick written by rekordbox 7 for Device Library
+        // Plus alone, whose classic pdb may be absent or empty of its tracks.
+        kLogger.warning() << "unreadable pdb on" << pending.mountPoint << "--" << contents.error
+                          << "-- reading the folders instead";
+        result.notice = tr("rekordbox library unreadable, browsing folders");
+        return readFolderMedium(&database, pending, std::move(result));
     }
 
     // Track locations are the root plus the medium-relative path the pdb
@@ -412,7 +532,40 @@ MediaRegistry::ReadResult MediaRegistry::readMedium(
     // that root is the mount; for a remote medium it is where its files will be
     // mirrored once fetched.
     result.ingest = writeMedium(database, contents, pending.id, pending.localRoot);
+    result.format = MediumInfo::Format::Rekordbox;
     result.ok = true;
+    return result;
+}
+
+MediaRegistry::ReadResult MediaRegistry::readFolderMedium(QSqlDatabase* pDatabase,
+        const PendingRead& pending,
+        ReadResult result) {
+    result.format = MediumInfo::Format::Folder;
+    QElapsedTimer elapsed;
+    elapsed.start();
+
+    // Pass A: the walk and the tree, from names, sizes and dates alone. No file
+    // is opened, which is what makes a stick browsable within seconds of going
+    // in; its tags follow in pass B.
+    const FolderListing listing = walkFolderMedium(pending.mountPoint);
+    const FolderLibrary library = buildFolderLibrary(listing, pending.volumeName);
+    if (library.contents.tracks.isEmpty()) {
+        result.error = tr("no music found");
+        return result;
+    }
+    result.ingest = writeMedium(*pDatabase, library.contents, pending.id, pending.mountPoint);
+    result.folderCount = library.directoryCount;
+    result.ok = true;
+    result.tagTargets.reserve(library.contents.tracks.size());
+    for (const mixxx::prolink::PdbTrack& track : library.contents.tracks) {
+        FolderTagTarget target;
+        target.rbId = track.id;
+        target.path = pending.mountPoint + track.filePath;
+        result.tagTargets.append(target);
+    }
+    kLogger.info() << "read" << pending.mountPoint << "as folders:" << result.ingest.trackCount
+                   << "tracks in" << result.folderCount << "folders, in" << elapsed.elapsed()
+                   << "ms" << (listing.truncated ? "(stopped at the cap)" : "");
     return result;
 }
 
@@ -421,8 +574,21 @@ void MediaRegistry::onReadFinished() {
     const ReadResult result = m_readWatcher.result();
 
     const int index = indexOf(result.id);
+    if (result.kind == PendingRead::Kind::Tags) {
+        // Rows changed in place. Nothing changed shape, so this is not
+        // mediaChanged: that rebuilds the source list and would make the
+        // browser treat a stick's tags arriving like a stick arriving.
+        if (index >= 0 && result.tagsUpdated > 0) {
+            emit mediumUpdated(result.id.key(), result.updatedRbIds);
+        }
+        startNextRead();
+        return;
+    }
+
     if (index >= 0) {
         MediumInfo& medium = m_media[index];
+        medium.format = result.format;
+        medium.folderCount = result.folderCount;
         if (result.ok) {
             medium.state = MediumInfo::State::Ready;
             medium.trackCount = result.ingest.trackCount;
@@ -434,6 +600,19 @@ void MediaRegistry::onReadFinished() {
             medium.error = result.error;
             kLogger.warning() << "medium failed:" << medium.name << result.error;
             emit mediumFailed(medium);
+        }
+        if (!result.notice.isEmpty()) {
+            emit mediumNotice(medium, result.notice);
+        }
+        // Pass B, a chunk at a time, behind anything already waiting. Each
+        // chunk is its own read so that the queue can put a newly plugged-in
+        // stick, or a track copy, ahead of the rest.
+        for (int start = 0; start < result.tagTargets.size(); start += kTagChunk) {
+            PendingRead tags;
+            tags.kind = PendingRead::Kind::Tags;
+            tags.id = result.id;
+            tags.tagTargets = result.tagTargets.mid(start, kTagChunk);
+            m_readQueue.append(tags);
         }
         emit mediaChanged();
     }
@@ -460,9 +639,12 @@ MediumId MediaRegistry::mediumOf(int player, mixxx::prolink::MediaSlot slot) con
         // Ours. The other deck is playing off a stick in this one, which it
         // reached over LINK, so the medium is a mount point and not a network
         // address -- and the tracks on it were ingested when the stick went in.
+        // Looked up by mount point rather than rebuilt from it: a local id
+        // carries the stick's UUID too, which the serve status does not.
         for (const auto& served : m_pNetwork->serveStatus().media) {
             if (served.slot == slot && !served.localPath.isEmpty()) {
-                return MediumId::local(served.localPath);
+                const int index = indexOfLocal(served.localPath);
+                return index >= 0 ? m_media.at(index).id : MediumId();
             }
         }
         return MediumId();
@@ -845,17 +1027,30 @@ void MediaRegistry::announceLoadedTrack(const MediumId& medium, quint32 rekordbo
     int player = 0;
     mixxx::prolink::MediaSlot slot = mixxx::prolink::MediaSlot::Usb;
     if (medium.isLocal()) {
-        player = m_pNetwork->announcedNumber();
         // Which slot we are serving it in, rather than an assumption: two
         // sticks are served as USB and SD, and naming the wrong one sends a
         // peer looking in an empty slot.
-        for (const mixxx::prolink::server::ServedSlot& served :
+        //
+        // **And nothing at all when we are not serving it.** This used to fall
+        // back to the USB slot, which names a track that is not there -- or,
+        // worse, a different track in whatever stick *is* being served as USB.
+        // A folder medium is never served (docs/plain-usb-plan.md D5), so for
+        // one of those this is the only right answer.
+        bool served = false;
+        for (const mixxx::prolink::server::ServedSlot& candidate :
                 m_pNetwork->serveStatus().media) {
-            if (!served.localPath.isEmpty() && medium.key().contains(served.localPath)) {
-                slot = served.slot;
+            if (!candidate.localPath.isEmpty() && medium.mountPoint() == candidate.localPath) {
+                slot = candidate.slot;
+                served = true;
                 break;
             }
         }
+        if (!served) {
+            kLogger.debug() << "not serving" << medium.key() << "-- announcing nothing loaded";
+            announceNothingLoaded();
+            return;
+        }
+        player = m_pNetwork->announcedNumber();
     } else {
         QByteArray mac;
         if (!addressOf(medium, &mac, &slot)) {

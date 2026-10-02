@@ -6,6 +6,7 @@
 
 #include "library/deck/mediaregistry.h"
 #include "skin/legacy/skincontext.h"
+#include "track/track_decl.h"
 #include "widget/wbasewidget.h"
 
 namespace mixxx {
@@ -30,20 +31,30 @@ class WDeckToast : public QWidget, public WBaseWidget {
 
     void setup(const QDomNode& node, const SkinContext& context);
 
+  public slots:
+    /// A track could not be loaded. Said here, in the corner, instead of the
+    /// modal dialog Mixxx raises -- which on a deck with no mouse blocks the
+    /// whole interface until somebody finds the button with a finger.
+    void onLoadFailed(TrackPointer pTrack, const QString& reason);
+
   private slots:
     void onAppeared(mixxx::deck::MediumInfo medium);
     void onVanished(mixxx::deck::MediumInfo medium);
     void onFailed(mixxx::deck::MediumInfo medium);
+    void onNotice(mixxx::deck::MediumInfo medium, const QString& text);
 
   private:
-    /// One line, or two when it has something to explain.
-    void show(const MediumInfo& medium, const QString& text, bool wide);
+    /// One line, or two when it has something to explain. A toast with a
+    /// *key* -- a medium's -- replaces one still up with the same key.
+    void show(const QString& text, bool wide, const QString& key = QString());
     void reposition();
     void expire();
 
     struct Toast {
         QWidget* pWidget = nullptr;
         qint64 expiresAt = 0;
+        QString text;
+        QString key;
     };
     QList<Toast> m_toasts;
     QTimer m_tick;

@@ -10,6 +10,7 @@ namespace {
 /// Where pi_config/dj-usb leaves the label it already read at mount time.
 const QString kSidecarDir = QStringLiteral("/run/dj-usb");
 const QString kByLabelDir = QStringLiteral("/dev/disk/by-label");
+const QString kByUuidDir = QStringLiteral("/dev/disk/by-uuid");
 
 /// What to call a stick that has no label. The slot is all we know, and
 /// "DJ_USB_1" is a mount point rather than a name a DJ would recognise.
@@ -93,6 +94,36 @@ QString volumeLabelFor(const QString& mountPoint) {
     }
 
     return fallbackName(slot);
+}
+
+QString volumeIdFor(const QString& mountPoint) {
+    const QString slot = QFileInfo(mountPoint).fileName();
+
+    // 1. The sidecar. Unlike the label's, an empty one is not an answer to
+    // stop at: a filesystem with no UUID has nothing for by-uuid either, so
+    // falling through costs one directory listing and changes nothing.
+    QFile sidecar(QDir(kSidecarDir).filePath(slot + QStringLiteral(".uuid")));
+    if (sidecar.open(QIODevice::ReadOnly | QIODevice::Text)) {
+        const QString id = QString::fromUtf8(sidecar.readAll()).trimmed();
+        if (!id.isEmpty()) {
+            return id;
+        }
+    }
+
+    // 2. The by-uuid symlinks, resolved the way the label's are.
+    const QString device = deviceForMountPoint(mountPoint);
+    if (device.isEmpty()) {
+        return QString();
+    }
+    const QFileInfo deviceInfo(device);
+    const QFileInfoList links = QDir(kByUuidDir).entryInfoList(
+            QDir::AllEntries | QDir::System | QDir::Hidden | QDir::NoDotAndDotDot);
+    for (const QFileInfo& link : links) {
+        if (link.canonicalFilePath() == deviceInfo.canonicalFilePath()) {
+            return link.fileName();
+        }
+    }
+    return QString();
 }
 
 } // namespace deck

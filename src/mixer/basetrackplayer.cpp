@@ -1,6 +1,5 @@
 #include "mixer/basetrackplayer.h"
 
-#include <QMessageBox>
 #include <QMetaMethod>
 
 #include "control/controlencoder.h"
@@ -553,17 +552,23 @@ void BaseTrackPlayerImpl::slotLoadFailed(TrackPointer pTrack, const QString& rea
     }
     m_pChannelToCloneFrom = nullptr;
 
-    // Alert user.
-    // The QMessageBox blocks the event loop (and the GUI since it's modal dialog),
-    // though if a controller's Load button was pressed repeatedly we may get
-    // multiple identical messages for the same track.
-    // Avoid this and show only one message per track track at a time.
+    // Alert user -- but not with a dialog.
+    //
+    // Upstream raises a modal QMessageBox here, which blocks the GUI thread
+    // until it is dismissed. On the deck there is no mouse, the encoder cannot
+    // reach it, and a stick of loose files is exactly where an undecodable
+    // file comes from. So the failure is a signal, and the deck's toast says
+    // it in the corner while everything else keeps working.
+    //
+    // The guard below is upstream's, and only ever mattered while its dialog
+    // spun an event loop of its own; with no dialog it never fires. Repeats do
+    // not stack anyway: the toast keeps one message up rather than copies.
     if (pTrack && m_pPrevFailedTrackId == pTrack->getId()) {
         return;
     } else if (pTrack) {
         m_pPrevFailedTrackId = pTrack->getId();
     }
-    QMessageBox::warning(nullptr, tr("Couldn't load track."), reason);
+    emit loadFailed(pTrack, reason);
     m_pPrevFailedTrackId = TrackId();
 }
 

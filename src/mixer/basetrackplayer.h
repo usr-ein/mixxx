@@ -57,6 +57,8 @@ class BaseTrackPlayer : public BasePlayer {
     void trackUnloaded(TrackPointer pUnloadedTrack);
     void loadingTrack(TrackPointer pNewTrack, TrackPointer pOldTrack);
     void playerEmpty();
+    /// A track could not be loaded; *reason* says why, in words for a person.
+    void loadFailed(TrackPointer pTrack, const QString& reason);
     void noVinylControlInputConfigured();
     void trackRatingChanged(int rating);
     void trackMenuChangeRequest(bool show);

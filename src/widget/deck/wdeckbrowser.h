@@ -1,9 +1,11 @@
 #pragma once
 
 #include <QColor>
+#include <QElapsedTimer>
 #include <QLabel>
 #include <QTimer>
 #include <QList>
+#include <QSet>
 #include <QWidget>
 #include <memory>
 
@@ -16,6 +18,7 @@
 #include "preferences/usersettings.h"
 #include "skin/legacy/skincontext.h"
 #include "track/track_decl.h"
+#include "track/trackid.h"
 #include "widget/wbasewidget.h"
 
 class ControlEncoder;
@@ -89,11 +92,25 @@ class WDeckBrowser : public QWidget, public WBaseWidget {
 
     void setup(const QDomNode& node, const SkinContext& context);
 
+    /// The deck this browser loads into.
+    static QString deckGroup();
+
+  public slots:
+    /// The deck has nothing on it any more -- ejected, or a track that would
+    /// not load. Takes the loaded marker off the row it was on.
+    void onDeckEmpty();
+
   signals:
     void loadTrackToPlayer(TrackPointer pTrack, const QString& group, bool play);
 
   private slots:
     void onMediaChanged();
+    /// A medium's rows changed in place -- a folder stick's tags arriving.
+    /// The rows are re-read at once; the list on screen is re-selected later,
+    /// coalesced, and not while the DJ is turning the encoder.
+    void onMediumUpdated(const QString& mediumKey, const QList<quint32>& rbIds);
+    /// The coalesced half of onMediumUpdated(): re-read what is on screen.
+    void refreshInPlace();
     void onActivated(int row);
     void onReselected(int row);
     void onBack();
@@ -292,6 +309,26 @@ class WDeckBrowser : public QWidget, public WBaseWidget {
     TrackWeakPointer m_pendingCoverTrack;
     /// Armed by guardCoverArt() for the track on the deck, and only that one.
     QMetaObject::Connection m_coverGuard;
+    /// Writes the BPM Mixxx's analysis finds back to the row of the folder
+    /// track on the deck, so the list shows it and the BPM menu can bucket it.
+    /// Re-armed on every load; see loadSelectedTrack().
+    QMetaObject::Connection m_bpmWriteBack;
+    void writeBackBpm(int trackRowId, quint32 rekordboxId, const QString& mediumKey, double bpm);
+
+    /// The medium whose rows changed in place since the last refresh, and the
+    /// timer that coalesces those changes into one re-read of the screen.
+    QString m_staleMediumKey;
+    QTimer m_inPlaceRefresh;
+    /// Rows written behind the track cache's back -- tags, a BPM -- re-read
+    /// into it. It keeps a copy of every row it has shown and refreshes none
+    /// of them by itself, so a re-select alone shows the old values.
+    void refreshCachedRows(const QSet<TrackId>& rows);
+    /// When the selection last moved. A refresh re-reads the list under the
+    /// selection, so it waits until the DJ has stopped scrolling.
+    QElapsedTimer m_lastSelectionMove;
+    /// The format of the medium a level belongs to, or Rekordbox if it is not
+    /// (or no longer) one we hold.
+    MediumInfo::Format formatOf(const MediumId& medium) const;
 
     // The deck's controls. Rotate, push, back, and the two SORT meanings.
     std::unique_ptr<ControlEncoder> m_pMove;

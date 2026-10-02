@@ -1,5 +1,6 @@
 #pragma once
 
+#include <QAtomicInt>
 #include <QHash>
 #include <QObject>
 #include <QSet>
@@ -87,6 +88,19 @@ class TrackCache : public QObject {
     /// when that is actually true.
     bool hasPinnedFrom(const MediumId& medium) const;
 
+    /// Whether a copy off a stick is running right now.
+    ///
+    /// What background reads of a stick ask before starting -- a folder
+    /// medium's tags (MediaRegistry) -- because they share the USB bus with the
+    /// copy, and the copy is the thing a DJ is waiting on.
+    bool isCopying() const {
+        return m_copiesInFlight.loadRelaxed() > 0;
+    }
+
+    /// Where the disk tier lives. Shared with the boot-time purge, which has to
+    /// forget the library rows of tracks that were played from here.
+    static QString diskTierRoot();
+
     /// For the diagnostics page.
     qint64 bytesInRam() const {
         return m_ramBytes;
@@ -144,6 +158,8 @@ class TrackCache : public QObject {
     qint64 m_diskBytes = 0;
     qint64 m_diskBytesWritten = 0;
     qint64 m_clock = 0;
+    /// Copies running, on any thread: the prefetch pool's and ensureLocal()'s.
+    QAtomicInt m_copiesInFlight;
 };
 
 } // namespace deck

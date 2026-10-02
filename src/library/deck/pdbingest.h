@@ -72,5 +72,40 @@ IngestResult writeMedium(QSqlDatabase& database,
         const MediumId& medium,
         const QString& localRoot);
 
+/// What a file's own tags say about a track, for a medium that has no database
+/// to say it (docs/plain-usb-plan.md 4.3). Empty and zero mean "the tag had
+/// nothing", never "clear the field".
+struct TrackTagUpdate {
+    quint32 rbId = 0;
+    QString title;
+    QString artist;
+    QString album;
+    QString genre;
+    QString year;
+    QString label;
+    QString comment;
+    /// As the tag spells it. Turned into a key id here, the same way a pdb's
+    /// key text is.
+    QString key;
+    int trackNumber = 0;
+    int durationSeconds = 0;
+    int bitrate = 0;
+    int sampleRate = 0;
+    double bpm = 0.0;
+};
+
+/// Fill in a medium's rows from tags, **in place**.
+///
+/// UPDATE by `(medium, rb_id)`, never INSERT OR REPLACE: a replace deletes the
+/// row and inserts a new one with a new `deck_library.id`, and that id is what
+/// the playlist tables and the play log point at. A field is only overwritten
+/// when the tag has something for it, so what the file name said survives a
+/// file with no tags.
+///
+/// Returns how many rows changed.
+int updateTrackTags(QSqlDatabase& database,
+        const MediumId& medium,
+        const QList<TrackTagUpdate>& updates);
+
 } // namespace deck
 } // namespace mixxx

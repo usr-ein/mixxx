@@ -35,6 +35,11 @@ TrackCache* TrackCache::instance() {
     return s_pInstance;
 }
 
+QString TrackCache::diskTierRoot() {
+    return QDir(QStandardPaths::writableLocation(QStandardPaths::CacheLocation))
+            .filePath(QStringLiteral("trimixxx/tracks"));
+}
+
 TrackCache::TrackCache(QObject* pParent)
         : QObject(pParent) {
     s_pInstance = this;
@@ -46,8 +51,7 @@ TrackCache::TrackCache(QObject* pParent)
 
     m_tier1Root = RamStore::path(QStringLiteral("cache"));
     m_tier1Cap = RamStore::budget(kTier1Share);
-    m_tier2Root = QDir(QStandardPaths::writableLocation(QStandardPaths::CacheLocation))
-                          .filePath(QStringLiteral("trimixxx/tracks"));
+    m_tier2Root = diskTierRoot();
     // Wiped at startup: tier 2 holds only what could not be re-read at the time
     // it was written, and none of that is true any more.
     QDir(m_tier2Root).removeRecursively();
@@ -133,7 +137,9 @@ QString TrackCache::ensureLocal(const MediumId& medium, const QString& sourcePat
         return QString();
     }
 
+    m_copiesInFlight.ref();
     const qint64 size = copyFile(sourcePath, local);
+    m_copiesInFlight.deref();
     if (size < 0) {
         kLogger.warning() << "could not cache" << sourcePath;
         return QString();
@@ -159,7 +165,9 @@ void TrackCache::prefetch(const MediumId& medium, const QString& sourcePath) {
     // is that the bytes are here, not that anyone is told.
     const QString local = localPathFor(medium, sourcePath);
     QtConcurrent::run(&m_copyPool, [this, medium, sourcePath, local]() {
+        m_copiesInFlight.ref();
         const qint64 size = copyFile(sourcePath, local);
+        m_copiesInFlight.deref();
         QMetaObject::invokeMethod(
                 this,
                 [this, medium, local, size]() {

@@ -30,8 +30,10 @@ const mixxx::Logger kLogger("PlayerManager");
 const QString kAppGroup = QStringLiteral("[App]");
 const QString kLegacyGroup = QStringLiteral("[Master]");
 
-// Utilize half of the available cores for adhoc analysis of tracks
-const int kNumberOfAnalyzerThreads = math_max(1, QThread::idealThreadCount() / 2);
+// One analysis at a time: only the track on the deck is ever analysed
+// (docs/plain-usb-plan.md D2), and a track is analysed on one thread however
+// many there are -- a second worker would only ever sit idle.
+const int kNumberOfAnalyzerThreads = 1;
 
 const QRegularExpression kDeckRegex(QStringLiteral("^\\[Channel(\\d+)\\]$"));
 const QRegularExpression kSamplerRegex(QStringLiteral("^\\[Sampler(\\d+)\\]$"));
@@ -175,16 +177,19 @@ void PlayerManager::bindToLibrary(Library* pLibrary) {
     m_pTrackAnalysisScheduler = pLibrary->createTrackAnalysisScheduler(
             kNumberOfAnalyzerThreads,
             AnalyzerModeFlags::WithWaveform);
-
-    connect(m_pTrackAnalysisScheduler.get(), &TrackAnalysisScheduler::trackProgress,
-            this, &PlayerManager::onTrackAnalysisProgress);
-    connect(m_pTrackAnalysisScheduler.get(), &TrackAnalysisScheduler::finished,
-            this, &PlayerManager::onTrackAnalysisFinished);
+    connectTrackAnalysisScheduler();
 
     // Connect the player to the analyzer queue so that loaded tracks are
     // analyzed.
     foreach(Deck* pDeck, m_decks) {
-        connect(pDeck, &BaseTrackPlayer::newTrackLoaded, this, &PlayerManager::slotAnalyzeTrack);
+        connect(pDeck,
+                &BaseTrackPlayer::newTrackLoaded,
+                this,
+                &PlayerManager::slotAnalyzeDeckTrack);
+        connect(pDeck,
+                &BaseTrackPlayer::trackUnloaded,
+                this,
+                &PlayerManager::slotDeckTrackUnloaded);
     }
 
     // Connect the player to the analyzer queue so that loaded tracks are
@@ -363,7 +368,11 @@ void PlayerManager::addDeckInner() {
         connect(pDeck,
                 &BaseTrackPlayer::newTrackLoaded,
                 this,
-                &PlayerManager::slotAnalyzeTrack);
+                &PlayerManager::slotAnalyzeDeckTrack);
+        connect(pDeck,
+                &BaseTrackPlayer::trackUnloaded,
+                this,
+                &PlayerManager::slotDeckTrackUnloaded);
     }
 
     m_players[handleGroup.handle()] = pDeck;
@@ -728,10 +737,64 @@ void PlayerManager::slotLoadTrackIntoNextAvailableSampler(TrackPointer pTrack) {
     pSampler->slotLoadTrack(pTrack, false);
 }
 
+void PlayerManager::connectTrackAnalysisScheduler() {
+    connect(m_pTrackAnalysisScheduler.get(), &TrackAnalysisScheduler::trackProgress,
+            this, &PlayerManager::onTrackAnalysisProgress);
+    connect(m_pTrackAnalysisScheduler.get(), &TrackAnalysisScheduler::finished,
+            this, &PlayerManager::onTrackAnalysisFinished);
+}
+
+void PlayerManager::replaceTrackAnalysisScheduler() {
+    m_analyzingTrackId = TrackId();
+    if (!m_pTrackAnalysisScheduler || !m_pLibrary) {
+        return;
+    }
+    kLogger.info() << "abandoning the analysis of a track that is no longer on the deck";
+    // Assigning releases the old one through its deleter, which stops it and
+    // lets it delete itself once its worker has wound down -- the worker
+    // checks between chunks, so that is a fraction of a second, and none of
+    // it on this thread.
+    m_pTrackAnalysisScheduler = m_pLibrary->createTrackAnalysisScheduler(
+            kNumberOfAnalyzerThreads,
+            AnalyzerModeFlags::WithWaveform);
+    connectTrackAnalysisScheduler();
+}
+
+void PlayerManager::slotAnalyzeDeckTrack(TrackPointer track) {
+    VERIFY_OR_DEBUG_ASSERT(track) {
+        return;
+    }
+    // Only what is on the deck is ever analysed (docs/plain-usb-plan.md D2):
+    // on a Raspberry Pi an analysis is a core's worth of work for tens of
+    // seconds, and spending it on a track nobody is going to play is spending
+    // it against the one that is playing.
+    if (m_analyzingTrackId.isValid()) {
+        if (m_analyzingTrackId == track->getId()) {
+            // The same track loaded again while its analysis is still running.
+            // Scheduling it twice would analyse it twice.
+            return;
+        }
+        replaceTrackAnalysisScheduler();
+    }
+    if (analyzeTrack(track)) {
+        m_analyzingTrackId = track->getId();
+    }
+}
+
+void PlayerManager::slotDeckTrackUnloaded(TrackPointer track) {
+    if (track && m_analyzingTrackId.isValid() && track->getId() == m_analyzingTrackId) {
+        replaceTrackAnalysisScheduler();
+    }
+}
+
 void PlayerManager::slotAnalyzeTrack(TrackPointer track) {
     VERIFY_OR_DEBUG_ASSERT(track) {
         return;
     }
+    analyzeTrack(track);
+}
+
+bool PlayerManager::analyzeTrack(const TrackPointer& track) {
     // A track that arrived with a grid **and** a waveform has been analysed
     // already -- by rekordbox, and imported from the ANLZ files beside it.
     //
@@ -745,17 +808,20 @@ void PlayerManager::slotAnalyzeTrack(TrackPointer track) {
     // For an ordinary Mixxx library this changes nothing: a track with both is
     // one whose analysis is already complete, and scheduling it was a no-op.
     if (track->getBeats() && track->getWaveform() && track->getWaveformSummary()) {
-        return;
+        return false;
     }
-    if (m_pTrackAnalysisScheduler) {
-        if (m_pTrackAnalysisScheduler->scheduleTrack(track->getId())) {
-            m_pTrackAnalysisScheduler->resume();
-        }
-        // The first progress signal will suspend a running batch analysis
-        // until all loaded tracks have been analyzed. Emit it once just now
-        // before any signals from the analyzer queue arrive.
-        emit trackAnalyzerProgress(track->getId(), kAnalyzerProgressUnknown);
+    if (!m_pTrackAnalysisScheduler) {
+        return false;
     }
+    const bool scheduled = m_pTrackAnalysisScheduler->scheduleTrack(track->getId());
+    if (scheduled) {
+        m_pTrackAnalysisScheduler->resume();
+    }
+    // The first progress signal will suspend a running batch analysis
+    // until all loaded tracks have been analyzed. Emit it once just now
+    // before any signals from the analyzer queue arrive.
+    emit trackAnalyzerProgress(track->getId(), kAnalyzerProgressUnknown);
+    return scheduled;
 }
 
 void PlayerManager::slotSaveEjectedTrack(TrackPointer track) {
@@ -771,10 +837,17 @@ void PlayerManager::slotSaveEjectedTrack(TrackPointer track) {
 }
 
 void PlayerManager::onTrackAnalysisProgress(TrackId trackId, AnalyzerProgress analyzerProgress) {
+    if (trackId == m_analyzingTrackId && analyzerProgress >= kAnalyzerProgressDone) {
+        m_analyzingTrackId = TrackId();
+    }
     emit trackAnalyzerProgress(trackId, analyzerProgress);
 }
 
 void PlayerManager::onTrackAnalysisFinished() {
+    // Everything scheduled is done, failed ones included -- a file that would
+    // not open reports "unknown" progress rather than done, and would
+    // otherwise be remembered as running for ever.
+    m_analyzingTrackId = TrackId();
     emit trackAnalyzerIdle();
 }
 

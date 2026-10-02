@@ -30,6 +30,15 @@ namespace deck {
 /// and falls back to the slot: `USB 1`, `USB 2`.
 QString volumeLabelFor(const QString& mountPoint);
 
+/// The filesystem UUID of what is mounted at *mountPoint*, or empty.
+///
+/// What tells two sticks in the same port apart (see MediumId::local). The
+/// same two sources as the label, in the same order: the `.uuid` sidecar
+/// dj-usb writes beside the `.label` one, then the `/dev/disk/by-uuid`
+/// symlinks. A FAT stick's "UUID" is its 32-bit volume serial, `1A2B-3C4D`,
+/// which is unique enough for this.
+QString volumeIdFor(const QString& mountPoint);
+
 /// The block device behind a mount point, e.g. `/dev/sda1`, or empty.
 /// Exposed for the tests, and for the diagnostics page.
 QString deviceForMountPoint(const QString& mountPoint);

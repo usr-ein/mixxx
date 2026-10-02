@@ -1007,8 +1007,11 @@ add_library(mixxx-lib STATIC EXCLUDE_FROM_ALL
   src/library/rekordbox/rekordboxwaveform.cpp
   src/library/deck/deckqueries.cpp
   src/library/deck/decktrackmodel.cpp
+  src/library/deck/folderlibrary.cpp
+  src/library/deck/folderscan.cpp
   src/library/deck/mediaregistry.cpp
   src/library/deck/pdbingest.cpp
+  src/library/deck/sessionpurge.cpp
   src/library/deck/previewwaveform.cpp
   src/library/deck/previewwaveformcache.cpp
   src/library/deck/streamingfile.cpp
@@ -2200,6 +2203,7 @@ if(BUILD_TESTING)
     src/test/enginemicrophonetest.cpp
     src/test/enginesynctest.cpp
     src/test/fileinfo_test.cpp
+    src/test/folderlibrary_test.cpp
     src/test/frametest.cpp
     src/test/globaltrackcache_test.cpp
     src/test/hotcuecontrol_test.cpp

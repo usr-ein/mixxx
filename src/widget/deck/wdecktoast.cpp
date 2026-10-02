@@ -6,6 +6,7 @@
 #include <QVBoxLayout>
 
 #include "library/deck/trackcache.h"
+#include "track/track.h"
 #include "util/logger.h"
 
 namespace {
@@ -67,6 +68,7 @@ WDeckToast::WDeckToast(QWidget* pParent)
         connect(pRegistry, &MediaRegistry::mediumAppeared, this, &WDeckToast::onAppeared);
         connect(pRegistry, &MediaRegistry::mediumVanished, this, &WDeckToast::onVanished);
         connect(pRegistry, &MediaRegistry::mediumFailed, this, &WDeckToast::onFailed);
+        connect(pRegistry, &MediaRegistry::mediumNotice, this, &WDeckToast::onNotice);
     });
 }
 
@@ -76,7 +78,14 @@ void WDeckToast::setup(const QDomNode& node, const SkinContext& context) {
 }
 
 void WDeckToast::onAppeared(mixxx::deck::MediumInfo medium) {
-    show(medium, tr("%1 inserted").arg(medium.name), false);
+    // A stick of loose files says so, because it browses differently -- by its
+    // folders -- and because a DJ who meant to bring a rekordbox stick finds
+    // out now rather than three menus in.
+    if (medium.format == MediumInfo::Format::Folder) {
+        show(tr("%1 inserted — browsing folders").arg(medium.name), true, medium.id.key());
+        return;
+    }
+    show(tr("%1 inserted").arg(medium.name), false, medium.id.key());
 }
 
 void WDeckToast::onVanished(mixxx::deck::MediumInfo medium) {
@@ -103,10 +112,10 @@ void WDeckToast::onVanished(mixxx::deck::MediumInfo medium) {
             for (int number : fed) {
                 numbers.append(QString::number(number));
             }
-            show(medium,
-                    tr("%1 removed — player %2 is still being fed from cache.")
+            show(tr("%1 removed — player %2 is still being fed from cache.")
                             .arg(medium.name, numbers.join(QStringLiteral(", "))),
-                    true);
+                    true,
+                    medium.id.key());
             return;
         }
     }
@@ -118,23 +127,62 @@ void WDeckToast::onVanished(mixxx::deck::MediumInfo medium) {
     // nothing.
     TrackCache* pCache = TrackCache::instance();
     if (pCache && pCache->hasPinnedFrom(medium.id)) {
-        show(medium,
-                tr("%1 removed — current track is cached and stays playable.")
+        show(tr("%1 removed — current track is cached and stays playable.")
                         .arg(medium.name),
-                true);
+                true,
+                medium.id.key());
         return;
     }
-    show(medium, tr("%1 ejected").arg(medium.name), false);
+    show(tr("%1 ejected").arg(medium.name), false, medium.id.key());
 }
 
 void WDeckToast::onFailed(mixxx::deck::MediumInfo medium) {
-    show(medium,
-            tr("%1 — %2").arg(medium.name, medium.error),
+    show(tr("%1 — %2").arg(medium.name, medium.error), true, medium.id.key());
+}
+
+void WDeckToast::onNotice(mixxx::deck::MediumInfo medium, const QString& text) {
+    show(tr("%1 — %2").arg(medium.name, text), true, medium.id.key());
+}
+
+void WDeckToast::onLoadFailed(TrackPointer pTrack, const QString& reason) {
+    // The title if there is one, else the file: a track that would not load
+    // may well be one whose tags would not read either.
+    QString what = pTrack ? pTrack->getTitle() : QString();
+    if (what.isEmpty() && pTrack) {
+        what = pTrack->getFileInfo().fileName();
+    }
+    kLogger.warning() << "could not load" << what << "--" << reason;
+    show(what.isEmpty() ? tr("Couldn't load that track")
+                        : tr("Couldn't load %1").arg(what),
             true);
 }
 
-void WDeckToast::show(const MediumInfo& medium, const QString& text, bool wide) {
-    Q_UNUSED(medium);
+void WDeckToast::show(const QString& text, bool wide, const QString& key) {
+    const qint64 expiresAt = QDateTime::currentMSecsSinceEpoch() + kLifetimeMs;
+    // A stick's news replaces its earlier news. What it turned out to be
+    // arrives a moment after it went in, and "inserted — browsing folders"
+    // stacked over "no music found" leaves one of the two wrong on screen.
+    if (!key.isEmpty()) {
+        for (Toast& toast : m_toasts) {
+            auto* pLabel = qobject_cast<QLabel*>(toast.pWidget);
+            if (toast.key != key || !pLabel) {
+                continue;
+            }
+            pLabel->setText(text);
+            pLabel->setFixedWidth(wide ? kWideWidth : kWidth);
+            toast.text = text;
+            toast.expiresAt = expiresAt;
+            reposition();
+            kLogger.info() << text;
+            return;
+        }
+    }
+    // The same words as the newest toast -- Load pressed again on a file that
+    // will not decode -- keep that one up longer instead of stacking a copy.
+    if (!m_toasts.isEmpty() && m_toasts.last().text == text) {
+        m_toasts.last().expiresAt = expiresAt;
+        return;
+    }
     while (m_toasts.size() >= kMaxToasts) {
         Toast oldest = m_toasts.takeFirst();
         if (oldest.pWidget) {
@@ -157,7 +205,9 @@ void WDeckToast::show(const MediumInfo& medium, const QString& text, bool wide) 
 
     Toast toast;
     toast.pWidget = pToast;
-    toast.expiresAt = QDateTime::currentMSecsSinceEpoch() + kLifetimeMs;
+    toast.expiresAt = expiresAt;
+    toast.text = text;
+    toast.key = key;
     m_toasts.append(toast);
 
     pToast->show();

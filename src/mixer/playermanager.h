@@ -212,6 +212,13 @@ class PlayerManager : public PlayerManagerInterface {
 
   private slots:
     void slotAnalyzeTrack(TrackPointer track);
+    /// A deck loaded a track. The deck's track, and only the deck's track, is
+    /// analysed: whatever was being analysed for the track it replaced is
+    /// abandoned (docs/plain-usb-plan.md D2).
+    void slotAnalyzeDeckTrack(TrackPointer track);
+    /// A deck let go of a track -- ejected, or replaced. Its analysis, if one
+    /// is running, goes with it.
+    void slotDeckTrackUnloaded(TrackPointer track);
 
     void onTrackAnalysisProgress(TrackId trackId, AnalyzerProgress analyzerProgress);
     void onTrackAnalysisFinished();
@@ -276,6 +283,16 @@ class PlayerManager : public PlayerManagerInterface {
     parented_ptr<ControlProxy> m_pAutoDjEnabled;
 
     TrackAnalysisScheduler::Pointer m_pTrackAnalysisScheduler;
+    /// Schedule *track* for analysis unless it has nothing left to analyse.
+    /// Returns whether it was scheduled.
+    bool analyzeTrack(const TrackPointer& track);
+    /// Abandon whatever the scheduler is doing, by putting a new one in its
+    /// place: TrackAnalysisScheduler::stop() makes its workers exit for good,
+    /// so a stopped scheduler can never analyse anything again.
+    void replaceTrackAnalysisScheduler();
+    void connectTrackAnalysisScheduler();
+    /// The deck's track being analysed, if any.
+    TrackId m_analyzingTrackId;
 
     TrackId m_secondLastEjectedTrackId;
     TrackId m_lastEjectedTrackId;

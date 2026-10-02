@@ -2,6 +2,11 @@
 
 #include <mutex>
 
+#if defined(__LINUX__)
+#include <sys/resource.h>
+#include <unistd.h>
+#endif
+
 #include "analyzer/analyzerbeats.h"
 #include "analyzer/analyzerebur128.h"
 #include "analyzer/analyzergain.h"
@@ -21,6 +26,16 @@
 namespace {
 
 mixxx::Logger kLogger("AnalyzerThread");
+
+#if defined(__LINUX__)
+/// How far below everything else an analysis runs. Qt's own LowPriority,
+/// which the scheduler asks for, does nothing at all under Linux's default
+/// scheduler -- only IdlePriority changes anything there, and that one would
+/// starve the analysis of the track the DJ is about to cue whenever the GUI is
+/// busy drawing it. A nice value is the middle: the analysis gets the CPU the
+/// audio engine and the waveform are not using, and none they are.
+constexpr int kAnalyzerNiceness = 10;
+#endif
 
 // NOTE(uklotzde, 2018-11-23): The parameterization for the analyzers
 // has not been touched while transforming the code from single- to
@@ -88,6 +103,13 @@ AnalyzerThread::AnalyzerThread(
 }
 
 void AnalyzerThread::doRun() {
+#if defined(__LINUX__)
+    // Per thread, which is what Linux's nice value is despite the name of the
+    // call: PRIO_PROCESS with a thread id renices that thread alone.
+    if (::setpriority(PRIO_PROCESS, static_cast<id_t>(::gettid()), kAnalyzerNiceness) != 0) {
+        kLogger.warning() << "could not lower this analyzer thread's priority";
+    }
+#endif
     std::unique_ptr<AnalysisDao> pAnalysisDao;
     // The thread-local database connection  must not be closed
     // before returning from this function.

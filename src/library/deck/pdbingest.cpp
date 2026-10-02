@@ -391,8 +391,13 @@ IngestResult writeMedium(QSqlDatabase& database,
         // chronologically as text, so the Date added category needs no parsing.
         insertTrack.bindValue(QStringLiteral(":datetime_added"), track.dateAdded);
         insertTrack.bindValue(QStringLiteral(":timesplayed"), track.playCount);
+        // Empty stays empty: a track off a plain folder stick has no analysis,
+        // and the bare mount point in its place had every reader of this
+        // column trying to open /media/DJ_USB_1 as an ANLZ file.
         insertTrack.bindValue(QStringLiteral(":analyze_path"),
-                QString(localRoot + track.analyzePath));
+                track.analyzePath.isEmpty()
+                        ? QString()
+                        : QString(localRoot + track.analyzePath));
         insertTrack.bindValue(QStringLiteral(":color"), colourForId(track.colorId));
         // Kept as the *medium-relative* path: it is what has to be asked for
         // over the network, and the local location is derivable from it.
@@ -610,6 +615,94 @@ IngestResult writeMedium(QSqlDatabase& database,
                        << result.historyCount << "history entries for" << medium.key();
     }
     return result;
+}
+
+int updateTrackTags(QSqlDatabase& database,
+        const MediumId& medium,
+        const QList<TrackTagUpdate>& updates) {
+    if (updates.isEmpty()) {
+        return 0;
+    }
+    // One transaction per batch, for the reason writeMedium() gives: a journal
+    // write and an fsync per row would hold the GUI thread out of the database
+    // for as long as the batch takes.
+    ScopedTransaction transaction(database);
+
+    // COALESCE with a NULL keeps what is there, so "the tag had nothing" is a
+    // NULL binding -- never an empty string, which would erase a title the file
+    // name had supplied.
+    QSqlQuery query(database);
+    query.prepare(QStringLiteral(
+            "UPDATE %1 SET "
+            " title = COALESCE(:title, title),"
+            " artist = COALESCE(:artist, artist),"
+            " album = COALESCE(:album, album),"
+            " genre = COALESCE(:genre, genre),"
+            " year = COALESCE(:year, year),"
+            " label = COALESCE(:label, label),"
+            " comment = COALESCE(:comment, comment),"
+            " tracknumber = COALESCE(:tracknumber, tracknumber),"
+            " duration = COALESCE(:duration, duration),"
+            " bitrate = COALESCE(:bitrate, bitrate),"
+            " samplerate = COALESCE(:samplerate, samplerate),"
+            " bpm = COALESCE(:bpm, bpm),"
+            " key = COALESCE(:key, key),"
+            " key_id = COALESCE(:key_id, key_id),"
+            " camelot_order = COALESCE(:camelot_order, camelot_order) "
+            "WHERE medium = :medium AND rb_id = :rb_id")
+                          .arg(kLibraryTable));
+    VERIFY_OR_DEBUG_ASSERT(query.lastError().type() == QSqlError::NoError) {
+        LOG_FAILED_QUERY(query) << "could not prepare the tag update";
+        return 0;
+    }
+
+    const auto text = [](const QString& value) {
+        const QString trimmed = value.trimmed();
+        return trimmed.isEmpty() ? QVariant() : QVariant(trimmed);
+    };
+    const auto positive = [](auto value) {
+        return value > 0 ? QVariant(value) : QVariant();
+    };
+
+    int changed = 0;
+    for (const TrackTagUpdate& update : updates) {
+        query.bindValue(QStringLiteral(":title"), text(update.title));
+        query.bindValue(QStringLiteral(":artist"), text(update.artist));
+        query.bindValue(QStringLiteral(":album"), text(update.album));
+        query.bindValue(QStringLiteral(":genre"), text(update.genre));
+        query.bindValue(QStringLiteral(":year"), text(update.year));
+        query.bindValue(QStringLiteral(":label"), text(update.label));
+        query.bindValue(QStringLiteral(":comment"), text(update.comment));
+        query.bindValue(QStringLiteral(":tracknumber"),
+                update.trackNumber > 0 ? QVariant(QString::number(update.trackNumber))
+                                       : QVariant());
+        query.bindValue(QStringLiteral(":duration"), positive(update.durationSeconds));
+        query.bindValue(QStringLiteral(":bitrate"), positive(update.bitrate));
+        query.bindValue(QStringLiteral(":samplerate"), positive(update.sampleRate));
+        query.bindValue(QStringLiteral(":bpm"), positive(update.bpm));
+        // The key the same way the pdb ingest does it: the text as written,
+        // and the id and wheel position parsed out of it. A spelling nothing
+        // recognises leaves all three alone.
+        const auto chromaticKey = KeyUtils::guessKeyFromText(update.key.trimmed());
+        if (chromaticKey != mixxx::track::io::key::INVALID) {
+            query.bindValue(QStringLiteral(":key"), update.key.trimmed());
+            query.bindValue(QStringLiteral(":key_id"), static_cast<int>(chromaticKey));
+            query.bindValue(QStringLiteral(":camelot_order"), camelot::order(chromaticKey));
+        } else {
+            query.bindValue(QStringLiteral(":key"), QVariant());
+            query.bindValue(QStringLiteral(":key_id"), QVariant());
+            query.bindValue(QStringLiteral(":camelot_order"), QVariant());
+        }
+        query.bindValue(QStringLiteral(":medium"), medium.key());
+        query.bindValue(QStringLiteral(":rb_id"), update.rbId);
+        if (!query.exec()) {
+            LOG_FAILED_QUERY(query);
+            continue;
+        }
+        changed += query.numRowsAffected() > 0 ? 1 : 0;
+    }
+    transaction.commit();
+    return changed;
 }
 
 } // namespace deck

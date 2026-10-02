@@ -1090,6 +1090,18 @@ QWidget* LegacySkinParser::parseDeckBrowser(const QDomElement& node) {
     // has no LibraryView, and Library::slotLoadTrackToPlayer is the same entry
     // point the track table uses.
     pBrowser->Init();
+    // Only the player knows when its deck goes empty -- and it ignores the
+    // failure of a load that a newer one has already replaced, which a
+    // track_loaded watcher could not tell apart.
+    if (m_pPlayerManager) {
+        if (BaseTrackPlayer* pDeck = m_pPlayerManager->getPlayer(
+                    mixxx::deck::WDeckBrowser::deckGroup())) {
+            connect(pDeck,
+                    &BaseTrackPlayer::playerEmpty,
+                    pBrowser,
+                    &mixxx::deck::WDeckBrowser::onDeckEmpty);
+        }
+    }
     return pBrowser;
 }
 
@@ -1097,6 +1109,18 @@ QWidget* LegacySkinParser::parseDeckToast(const QDomElement& node) {
     auto* pToast = new mixxx::deck::WDeckToast(m_pParent);
     commonWidgetSetup(node, pToast);
     pToast->setup(node, *m_pContext);
+    // A track that will not load is said here rather than in Mixxx's modal
+    // dialog, which the players no longer raise -- see slotLoadFailed().
+    if (m_pPlayerManager) {
+        for (int i = 0; i < m_pPlayerManager->numberOfDecks(); ++i) {
+            if (BaseTrackPlayer* pDeck = m_pPlayerManager->getDeckBase(i)) {
+                connect(pDeck,
+                        &BaseTrackPlayer::loadFailed,
+                        pToast,
+                        &mixxx::deck::WDeckToast::onLoadFailed);
+            }
+        }
+    }
     // Deliberately NOT given the keyboard event filter: it takes no input at
     // all, and installing one on a widget that is transparent to the mouse
     // invites the question of why.
