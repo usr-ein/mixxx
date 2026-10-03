@@ -151,6 +151,12 @@ class WOverview : public WWidget, public TrackDropTarget {
     UserSettingsPointer m_pConfig;
 
     Type m_type;
+    /// The Filtered overview as stacked bars, like the scrolling waveform's
+    /// <SignalStacked>: highs at the centre, mids on top, bass outermost, each
+    /// as thick as there is of it. From the skin's optional <SignalStacked>;
+    /// without it the Filtered overview layers the bands over each other, as
+    /// stock.
+    bool m_stacked = false;
     int m_actualCompletion;
     bool m_pixmapDone;
     float m_waveformPeak;

@@ -129,6 +129,7 @@ void WOverview::setup(const QDomNode& node, const SkinContext& context) {
     m_playedOverlayColor = m_signalColors.getPlayedOverlayColor();
     m_lowColor = m_signalColors.getLowColor();
     m_dimBrightThreshold = m_signalColors.getDimBrightThreshold();
+    m_stacked = context.selectBool(node, QStringLiteral("SignalStacked"), false);
 
     m_labelBackgroundColor = context.selectColor(node, "LabelBackgroundColor");
     if (!m_labelBackgroundColor.isValid()) {
@@ -1468,6 +1469,47 @@ void WOverview::drawNextPixmapPartLMH(QPainter* pPainter,
     QPen highColorPen(QBrush(highColor), 1);
 
     int currentCompletion = 0;
+    if (m_stacked) {
+        // Stacked bars: a band's outer edge is everything inside it plus
+        // itself, so bass reaches the full depth of the stack, mids
+        // high + mid, highs their own. Drawn at a third of the scale, since a
+        // stack of three bands runs to 3 * 255 and the image is +-255 tall, and
+        // outermost first so each shows as its own band. The left channel is
+        // drawn above the axis and the right below, as stock.
+        const auto edge = [&pWaveform](int index, int depth) {
+            int sum = pWaveform->getHigh(index);
+            if (depth >= 1) {
+                sum += pWaveform->getMid(index);
+            }
+            if (depth >= 2) {
+                sum += pWaveform->getLow(index);
+            }
+            return (sum + 1) / 3;
+        };
+        const QPen* pens[3] = {&highColorPen, &midColorPen, &lowColorPen};
+        for (int depth = 2; depth >= 0; --depth) {
+            pPainter->setPen(*pens[depth]);
+            for (currentCompletion = m_actualCompletion;
+                    currentCompletion < nextCompletion;
+                    currentCompletion += 2) {
+                const int top = edge(currentCompletion, depth);
+                const int bottom = edge(currentCompletion + 1, depth);
+                if (top || bottom) {
+                    pPainter->drawLine(QPoint(currentCompletion / 2, -top),
+                            QPoint(currentCompletion / 2, bottom));
+                }
+                if (depth == 2) {
+                    // The whole stack is what normalizing has to fit.
+                    m_waveformPeak = math_max3(m_waveformPeak,
+                            static_cast<float>(top),
+                            static_cast<float>(bottom));
+                }
+            }
+        }
+        m_actualCompletion = nextCompletion;
+        return;
+    }
+
     for (currentCompletion = m_actualCompletion;
             currentCompletion < nextCompletion;
             currentCompletion += 2) {
