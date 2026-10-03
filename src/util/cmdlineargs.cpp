@@ -218,6 +218,17 @@ bool CmdlineArgs::parse(const QStringList& arguments, CmdlineArgs::ParseMode mod
     parser.addOption(resourcePath);
     parser.addOption(resourcePathDeprecated);
 
+    // A deck keeps its logs on a tmpfs, so a session's steady stream of log
+    // writes stays off the SD card: its ~/.xinitrc passes --log-path /tmp/mixxx.
+    const QCommandLineOption logPath(QStringLiteral("log-path"),
+            forUserFeedback ? QCoreApplication::translate("CmdlineArgs",
+                                      "Directory where Mixxx writes and rotates "
+                                      "mixxx.log, instead of the settings "
+                                      "directory. Created if missing.")
+                            : QString(),
+            QStringLiteral("path"));
+    parser.addOption(logPath);
+
     const QCommandLineOption timelinePath(QStringLiteral("timeline-path"),
             forUserFeedback ? QCoreApplication::translate("CmdlineArgs",
                                       "Path the debug statistics time line is written to")
@@ -420,6 +431,10 @@ bool CmdlineArgs::parse(const QStringList& arguments, CmdlineArgs::ParseMode mod
             m_settingsPath.append("/");
         }
         m_settingsPathSet = true;
+    }
+
+    if (parser.isSet(logPath)) {
+        m_logPath = parser.value(logPath);
     }
 
     if (parser.isSet(resourcePath)) {

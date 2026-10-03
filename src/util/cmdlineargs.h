@@ -68,6 +68,10 @@ class CmdlineArgs final {
     void setSettingsPath(const QString& newSettingsPath) {
         m_settingsPath = newSettingsPath;
     }
+    /// Where mixxx.log goes; empty means the settings directory.
+    const QString& getLogPath() const {
+        return m_logPath;
+    }
     const QString& getResourcePath() const { return m_resourcePath; }
     const QString& getTimelinePath() const { return m_timelinePath; }
 
@@ -112,6 +116,7 @@ class CmdlineArgs final {
     qint64 m_logMaxFileSize;
     QString m_locale;
     QString m_settingsPath;
+    QString m_logPath;
     QString m_resourcePath;
     QString m_timelinePath;
     QString m_styleName;

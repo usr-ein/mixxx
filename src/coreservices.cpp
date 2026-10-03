@@ -428,8 +428,16 @@ void CoreServices::initializeLogging() {
     if (m_cmdlineArgs.getDebugAssertBreak()) {
         logFlags.setFlag(mixxx::LogFlag::DebugAssertBreak);
     }
+    // --log-path, or beside mixxx.cfg as stock Mixxx does. Created here because
+    // the logger writes nothing at all to a directory that does not exist.
+    QString logDirPath = m_cmdlineArgs.getLogPath();
+    if (logDirPath.isEmpty()) {
+        logDirPath = m_pSettingsManager->settings()->getSettingsPath();
+    } else {
+        QDir().mkpath(logDirPath);
+    }
     mixxx::Logging::initialize(
-            m_pSettingsManager->settings()->getSettingsPath(),
+            logDirPath,
             m_cmdlineArgs.getLogLevel(),
             m_cmdlineArgs.getLogFlushLevel(),
             logFlags);
