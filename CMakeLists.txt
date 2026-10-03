@@ -1358,6 +1358,7 @@ add_library(mixxx-lib STATIC EXCLUDE_FROM_ALL
   src/widget/woverview.cpp
   src/widget/wprolinkphasemeter.cpp
   src/widget/deck/deckdelegates.cpp
+  src/widget/deck/decklevels.cpp
   src/widget/deck/decklistview.cpp
   src/widget/deck/deckmenumodel.cpp
   src/widget/deck/wdeckbrowser.cpp
@@ -2189,6 +2190,7 @@ if(BUILD_TESTING)
     src/test/cratestorage_test.cpp
     src/test/cue_test.cpp
     src/test/cuecontrol_test.cpp
+    src/test/decklevels_test.cpp
     src/test/dbconnectionpool_test.cpp
     src/test/dbidtest.cpp
     src/test/directorydaotest.cpp

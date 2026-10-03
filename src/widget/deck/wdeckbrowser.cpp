@@ -343,7 +343,7 @@ WDeckBrowser::WDeckBrowser(QWidget* pParent, Library* pLibrary, UserSettingsPoin
     pSearchLayout->addWidget(m_pKeyboard);
     m_pStack->addWidget(m_pSearchPage);
 
-    m_pDiagnostics = new WDeckDiagnostics(m_pStack);
+    m_pDiagnostics = new WDeckDiagnostics(m_pConfig->getSettingsPath(), m_pStack);
     m_pStack->addWidget(m_pDiagnostics);
 
     connect(m_pKeyboard, &WDeckKeyboard::keyPressed, this, [this](const QString& c) {
