@@ -56,6 +56,11 @@ constexpr int kMasterSettleMs = 1500;
 /// one is considered, or one error is chased by a burst of overlapping seeks.
 constexpr int kPhaseHoldMs = 1500;
 
+/// The player range. A CDJ-3000 rig goes up to six; a mixer is 33 and
+/// rekordbox is 17 and up.
+constexpr int kFirstPlayer = 1;
+constexpr int kLastPlayer = 6;
+
 /// Is this deck one to line the phase meter up against?
 ///
 /// **Two questions, and the second one used to be skipped for the master.**
@@ -77,7 +82,25 @@ constexpr int kPhaseHoldMs = 1500;
 /// A deck we have no status for at all is judged on its beats alone. Fresh
 /// beats *are* playing — they stop when the platter does — so this is the same
 /// answer arrived at by the only route left.
-bool isWorthFollowing(const ::prolink::Player& player) {
+///
+/// **And it has to be somebody else's deck.** The monitor hears every beat on
+/// UDP 50001, ours included: our beats are broadcast, and a socket bound to
+/// 0.0.0.0 gets its own host's broadcasts back. Status is filtered for our
+/// number and beats were not, so as soon as this deck played it appeared in its
+/// own player table -- with beats and no status, which is the one combination
+/// the rule above waves through. Alone on the network the meter drew our own
+/// phase above our own phase, labelled with our own number; beside a CDJ
+/// numbered higher it drew us instead of the CDJ; and SYNC chased our own echo,
+/// nudging the playhead by the network's latency every second and a half.
+///
+/// Only players, too. A mixer broadcasts beats all the time as a metronome and
+/// sends no CDJ status, and rekordbox sits above the player range: neither is a
+/// deck anyone is mixing against.
+bool isWorthFollowing(const ::prolink::Player& player, int ours) {
+    if (static_cast<int>(player.number) == ours || player.number < kFirstPlayer ||
+            player.number > kLastPlayer) {
+        return false;
+    }
     if (player.bar_phase < 0.0) {
         return false;
     }
@@ -316,19 +339,45 @@ ProLinkNetworkService::ProLinkNetworkService(QObject* parent)
 void ProLinkNetworkService::setLoadedTrack(int sourcePlayer,
         MediaSlot slot,
         quint32 rekordboxId) {
-    if (!m_pImpl->pSession) {
+    // Kept, and stated again on every poll by publishPlayback(), rather than
+    // handed to the session once. **Once was lost more often than not.** The
+    // session drops the call until it holds a player number, which takes about
+    // five seconds after start(); and it builds a new virtual CDJ -- with
+    // nothing loaded -- every time it rebinds, which on the deck is every time
+    // the link cable goes in after boot. Either way the status went on stating
+    // a tempo and a playing deck with no track, and a CDJ neither follows nor
+    // draws a phase for that.
+    m_loadedTrack.sourcePlayer = sourcePlayer;
+    m_loadedTrack.slot = slot;
+    m_loadedTrack.rekordboxId = rekordboxId;
+}
+
+void ProLinkNetworkService::publishLoadedTrack() {
+    // Our own number is looked up now rather than when the track was loaded:
+    // it is not known for the first seconds, and a rebind may change it.
+    int player = m_loadedTrack.sourcePlayer;
+    if (player == kThisPlayer) {
+        player = static_cast<int>((*m_pImpl->pSession)->device_number());
+    }
+    if (player <= 0 || m_loadedTrack.rekordboxId == 0) {
+        (*m_pImpl->pSession)->set_loaded_track(0, ::prolink::Slot::None, 0);
         return;
     }
     (*m_pImpl->pSession)
-            ->set_loaded_track(static_cast<quint8>(qBound(0, sourcePlayer, 255)),
-                    toRustSlot(slot),
-                    rekordboxId);
+            ->set_loaded_track(static_cast<quint8>(qBound(0, player, 255)),
+                    toRustSlot(m_loadedTrack.slot),
+                    m_loadedTrack.rekordboxId);
 }
 
 void ProLinkNetworkService::publishPlayback() {
     if (!m_pControls) {
         return;
     }
+
+    // Restated every poll for the same reason as the loaded track: a rebuilt
+    // session starts unsynced, and the button did not change to say otherwise.
+    publishLoadedTrack();
+    (*m_pImpl->pSession)->set_synced(m_pControls->syncEnabled()->get() > 0.0);
 
     const double fileBpm = m_pDeckFileBpm->get();
     const double duration = m_pDeckDuration->get();
@@ -585,11 +634,7 @@ void ProLinkNetworkService::publishMaster() {
     }
 
     if (!m_pImpl->pSession) {
-        m_pControls->isMaster()->forceSet(0.0);
-        m_pControls->masterDevice()->forceSet(0.0);
-        m_pControls->masterBpm()->forceSet(0.0);
-        m_pControls->masterBarPhase()->forceSet(-1.0);
-        publishMasterTrack(MasterTrack());
+        clearMaster();
         return;
     }
 
@@ -658,7 +703,7 @@ void ProLinkNetworkService::publishMaster() {
     // way.
     const ::prolink::Player* pShow = nullptr;
     for (const ::prolink::Player& player : players) {
-        if (!isWorthFollowing(player)) {
+        if (!isWorthFollowing(player, ours)) {
             continue;
         }
         if (player.is_master) {
@@ -683,6 +728,14 @@ void ProLinkNetworkService::publishMaster() {
     m_pControls->masterDevice()->forceSet(0.0);
     m_pControls->masterBpm()->forceSet(0.0);
     m_pControls->masterBarPhase()->forceSet(-1.0);
+}
+
+void ProLinkNetworkService::clearMaster() {
+    m_pControls->isMaster()->forceSet(0.0);
+    m_pControls->masterDevice()->forceSet(0.0);
+    m_pControls->masterBpm()->forceSet(0.0);
+    m_pControls->masterBarPhase()->forceSet(-1.0);
+    publishMasterTrack(MasterTrack());
 }
 
 void ProLinkNetworkService::publishMasterTrack(const MasterTrack& track) {
@@ -797,6 +850,20 @@ void ProLinkNetworkService::shutdown() {
     m_pImpl->stop();
     if (s_pListening == this) {
         s_pListening = nullptr;
+    }
+    // **The published master goes with the session.** Only poll() ever
+    // rewrote these, and the timer that drives it was stopped above, so a
+    // refresh -- or a restart that then failed to bind -- left the meter
+    // drawing the last master it had seen, frozen, under that deck's number;
+    // MASTER lit for a claim the closed session no longer held; and SYNC
+    // following a tempo nobody was playing.
+    //
+    // Checked against instance() rather than m_pControls, because this also
+    // runs from the destructor, and the controls may have gone first.
+    m_masterSince.invalidate();
+    m_alignWhenTempoMatches = false;
+    if (m_pControls && ProLinkControls::instance() == m_pControls) {
+        clearMaster();
     }
     m_listening = false;
     m_announcedNumber = 0;

@@ -11,20 +11,20 @@ class ControlProxy;
 class QDomNode;
 class SkinContext;
 
-/// Two bars showing where the Pro DJ Link tempo master is in its bar, and where
-/// this deck is in its own.
+/// Two bars showing where the Pro DJ Link deck we are mixing against is in its
+/// bar, and where this deck is in its own.
 ///
-///     |---|---|---|---|      master
+///     |---|---|---|---|      them
 ///     --|---|---|---|--      us
 ///
 /// The point is the offset between them. A DJ beatmatching by ear is judging
 /// exactly this, and a CDJ shows it on its own display; without it, Mixxx is the
 /// only device on the network flying blind.
 ///
-/// **What each row is built from is not the same, and that matters.** The master
+/// **What each row is built from is not the same, and that matters.** The top
 /// row comes off the network: beat packets on UDP 50001 arrive *on* each beat
 /// and carry the beat's position in the bar, so both the phase and the bar
-/// alignment are the master's own. Our row is derived from the playhead —
+/// alignment are the other deck's own. Our row is derived from the playhead —
 /// `beat_distance` for the sub-beat and the elapsed track time for which beat of
 /// the bar. Deriving it from *position* rather than counting `beat_active`
 /// pulses is what makes a loop behave: a one-beat loop replays the same beat,
@@ -32,6 +32,20 @@ class SkinContext;
 /// Absolute bar alignment is still arbitrary — nothing in the engine names a
 /// downbeat — so beat alignment is trustworthy and bar alignment is a display
 /// convenience.
+///
+/// # States
+///
+/// Which deck the top row follows is decided by ProLinkNetworkService, not
+/// here: it publishes `[ProLink] master_bar_phase`, `-1` when there is nobody to
+/// follow. So the meter has two states and no others:
+///
+///  * **Nobody to follow** (`master_bar_phase < 0`): both rows idle, `-` in
+///    place of a player number. Our own ticks are not drawn on their own: a
+///    comparison with one side missing reads as a meter that is working, and
+///    one walking across an otherwise empty meter looked like it was following
+///    something that was not there.
+///  * **Following player N**: both rows drawn, N over the top row. Our row is
+///    blank if this deck has no grid to place it on.
 class WProLinkPhaseMeter : public WWidget {
     Q_OBJECT
 
@@ -53,25 +67,16 @@ class WProLinkPhaseMeter : public WWidget {
             const QString& label);
     /// The player number, over the ticks rather than beside them.
     void drawOverlayLabel(QPainter* pPainter, const QRectF& rect, const QString& label);
-    /// Attach to the `[ProLink]` controls, if they exist yet.
-    ///
-    /// **They may well not.** A ControlProxy resolves its control once, in its
-    /// constructor, and a control created afterwards is never picked up — the
-    /// proxy just reads 0.0 for the rest of the session. The three this widget
-    /// wants are created by ProLinkNetworkService, which is created by the
-    /// MediaRegistry, which is created by WDeckBrowser — another widget in this
-    /// same skin, built *after* the header this meter sits in. So on a cold
-    /// start all three resolved to null, the log said so three times, and the
-    /// master row has been frozen at phase zero ever since.
-    void attachToProLink();
 
     const QString m_group;
 
+    /// `[ProLink]`. Created by ProLinkControls, from CoreServices, before any
+    /// skin is parsed -- so unlike when ProLinkNetworkService made them, they
+    /// exist by the time this widget does and need no retrying.
     std::unique_ptr<ControlProxy> m_pMasterDevice;
     std::unique_ptr<ControlProxy> m_pMasterBarPhase;
-    std::unique_ptr<ControlProxy> m_pMasterBpm;
+    /// This deck.
     std::unique_ptr<ControlProxy> m_pBeatDistance;
-    std::unique_ptr<ControlProxy> m_pPlay;
     std::unique_ptr<ControlProxy> m_pBpm;
     std::unique_ptr<ControlProxy> m_pFileBpm;
     std::unique_ptr<ControlProxy> m_pDuration;
@@ -83,7 +88,7 @@ class WProLinkPhaseMeter : public WWidget {
     QColor m_masterColour{0xff, 0x66, 0x00};
     QColor m_ourColour{0x44, 0xcc, 0xff};
 
-    /// Repaints since the last attempt to attach. Retrying on every frame would
-    /// be three failed lookups a frame, forever, on a deck that has no network.
-    int m_sinceAttach = 0;
+    /// Whether the last paint had nobody to follow. While it stays that way
+    /// nothing on the meter moves, and the repaint timer skips the frame.
+    bool m_idle = false;
 };

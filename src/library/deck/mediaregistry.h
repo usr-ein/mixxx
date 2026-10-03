@@ -410,6 +410,10 @@ class MediaRegistry : public QObject {
     /// only thing that shows media now and the old ProLinkFeature no longer has
     /// a UI to hang off.
     std::unique_ptr<mixxx::prolink::ProLinkNetworkService> m_pNetwork;
+    /// What announceLoadedTrack() was last asked to say, so it can be asked
+    /// again when what we serve changes.
+    MediumId m_announcedMedium;
+    quint32 m_announcedRekordboxId = 0;
     /// KEY SYNC. Owned here for one reason: it needs a key resolved out of the
     /// medium databases, and this is what holds those.
     std::unique_ptr<mixxx::prolink::ProLinkKeySync> m_pKeySync;

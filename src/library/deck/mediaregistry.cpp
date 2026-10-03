@@ -192,6 +192,20 @@ MediaRegistry::MediaRegistry(mixxx::DbConnectionPoolPtr dbConnectionPool, QObjec
             &mixxx::prolink::ProLinkNetworkService::previewFetched,
             this,
             &MediaRegistry::onPreviewFetched);
+    // What the network is told is loaded depends on what we are serving, and
+    // that is not known for the first seconds of a session -- nor after a
+    // rebind, nor until a stick has been mounted and offered. A track loaded in
+    // that window was announced as nothing at all, and stayed that way: no CDJ
+    // would follow us or draw our phase until the next load. So it is asked
+    // again whenever the answer could have changed.
+    connect(m_pNetwork.get(),
+            &mixxx::prolink::ProLinkNetworkService::serveStatusChanged,
+            this,
+            [this]() {
+                if (m_announcedRekordboxId != 0) {
+                    announceLoadedTrack(m_announcedMedium, m_announcedRekordboxId);
+                }
+            });
     m_pKeySync = std::make_unique<mixxx::prolink::ProLinkKeySync>();
     connect(m_pNetwork.get(),
             &mixxx::prolink::ProLinkNetworkService::masterTrackChanged,
@@ -1014,6 +1028,10 @@ QString MediaRegistry::startStreaming(const MediumId& medium,
 }
 
 void MediaRegistry::announceLoadedTrack(const MediumId& medium, quint32 rekordboxId) {
+    // Kept so it can be asked again when what we serve changes: see the
+    // serveStatusChanged connection in the constructor.
+    m_announcedMedium = medium;
+    m_announcedRekordboxId = rekordboxId;
     if (!m_pNetwork || rekordboxId == 0) {
         kLogger.debug() << "nothing to announce as loaded -- rekordbox id" << rekordboxId
                         << "for" << medium.key();
@@ -1050,7 +1068,10 @@ void MediaRegistry::announceLoadedTrack(const MediumId& medium, quint32 rekordbo
             announceNothingLoaded();
             return;
         }
-        player = m_pNetwork->announcedNumber();
+        // Not announcedNumber(), which is 0 for the first seconds of a session
+        // and may change on a rebind: the service resolves this to whatever
+        // number we hold each time it publishes.
+        player = mixxx::prolink::ProLinkNetworkService::kThisPlayer;
     } else {
         QByteArray mac;
         if (!addressOf(medium, &mac, &slot)) {
@@ -1059,7 +1080,7 @@ void MediaRegistry::announceLoadedTrack(const MediumId& medium, quint32 rekordbo
         }
         player = playerNumberFor(mac);
     }
-    if (player <= 0) {
+    if (player == 0) {
         // Nothing to attribute the track to. Saying nothing is right: a track
         // id without a player is meaningless to every other device.
         announceNothingLoaded();

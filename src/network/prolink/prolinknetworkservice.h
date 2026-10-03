@@ -84,6 +84,10 @@ class ProLinkNetworkService : public QObject {
         return m_serveStatus;
     }
 
+    /// The source player setLoadedTrack() takes for a track on a medium we
+    /// serve ourselves.
+    static constexpr int kThisPlayer = -1;
+
   public slots:
     /// Drop any held browse connection so the next request reconnects.
     void refresh();
@@ -131,9 +135,13 @@ class ProLinkNetworkService : public QObject {
 
     /// Say which track this deck has loaded, and whose medium it came from.
     ///
-    /// A player number of zero means nothing is loaded. See
-    /// `MediaRegistry::announceLoadedTrack` for why a tempo without this is
-    /// ignored by every other player.
+    /// A player number of zero means nothing is loaded, and `kThisPlayer`
+    /// means our own medium, under whatever number we hold when it is
+    /// published. See `MediaRegistry::announceLoadedTrack` for why a tempo
+    /// without this is ignored by every other player.
+    ///
+    /// Remembered rather than passed straight through, and safe to call before
+    /// start(): see publishLoadedTrack().
     void setLoadedTrack(int sourcePlayer, MediaSlot slot, quint32 rekordboxId);
 
     /// Fetch a track's artwork into `localPath`.
@@ -216,6 +224,22 @@ class ProLinkNetworkService : public QObject {
     /// what the phase-meter widget reads. Read-only, because nothing in Mixxx
     /// may tell a CDJ what phase it is at.
     void publishMaster();
+
+    /// Publish that there is no master and we are not it. For a session that
+    /// has stopped, which has no players to say so.
+    void clearMaster();
+
+    /// State the track setLoadedTrack() was last given. Every poll, because
+    /// the session forgets it: see setLoadedTrack().
+    void publishLoadedTrack();
+
+    /// What setLoadedTrack() was last given.
+    struct LoadedTrack {
+        int sourcePlayer = 0;
+        MediaSlot slot = MediaSlot::Empty;
+        quint32 rekordboxId = 0;
+    };
+    LoadedTrack m_loadedTrack;
 
     /// What `masterTrackChanged` last carried, so it is emitted on a change
     /// rather than thirty times a second.

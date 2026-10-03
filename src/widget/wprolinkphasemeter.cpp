@@ -32,41 +32,36 @@ constexpr int kBeatWidth = 5;
 
 WProLinkPhaseMeter::WProLinkPhaseMeter(QWidget* pParent, const QString& group)
         : WWidget(pParent), m_group(group) {
-    attachToProLink();
-    m_pBeatDistance =
-            std::make_unique<ControlProxy>(m_group, QStringLiteral("beat_distance"), this);
-    m_pPlay = std::make_unique<ControlProxy>(m_group, QStringLiteral("play"), this);
-    m_pBpm = std::make_unique<ControlProxy>(m_group, QStringLiteral("bpm"), this);
-    m_pFileBpm = std::make_unique<ControlProxy>(m_group, QStringLiteral("file_bpm"), this);
-    m_pDuration = std::make_unique<ControlProxy>(m_group, QStringLiteral("duration"), this);
-    m_pPlayPosition =
-            std::make_unique<ControlProxy>(m_group, QStringLiteral("playposition"), this);
+    const auto proLink = [this](const char* item) {
+        return std::make_unique<ControlProxy>(
+                QStringLiteral("[ProLink]"), QString::fromLatin1(item), this);
+    };
+    m_pMasterDevice = proLink("master_device");
+    m_pMasterBarPhase = proLink("master_bar_phase");
+    const auto deck = [this](const char* item) {
+        return std::make_unique<ControlProxy>(m_group, QString::fromLatin1(item), this);
+    };
+    m_pBeatDistance = deck("beat_distance");
+    m_pBpm = deck("bpm");
+    m_pFileBpm = deck("file_bpm");
+    m_pDuration = deck("duration");
+    m_pPlayPosition = deck("playposition");
 
-    // Polled rather than driven by valueChanged: the master's phase moves
+    // Polled rather than driven by valueChanged: the other deck's phase moves
     // continuously and the marker has to move with it, so there is a repaint
-    // every frame regardless of whether any single control changed.
+    // every frame regardless of whether any single control changed -- except
+    // while there is nobody to follow, when nothing on the meter moves at all.
     auto* pTimer = new QTimer(this);
-    connect(pTimer, &QTimer::timeout, this, [this]() { update(); });
+    connect(pTimer, &QTimer::timeout, this, [this]() {
+        if (m_idle && m_pMasterBarPhase->get() < 0.0) {
+            return;
+        }
+        update();
+    });
     pTimer->start(kRepaintIntervalMs);
 }
 
 WProLinkPhaseMeter::~WProLinkPhaseMeter() = default;
-
-void WProLinkPhaseMeter::attachToProLink() {
-    m_sinceAttach = 0;
-    // NoWarnIfMissing because missing is the expected state until the browser
-    // has been built: without it this logs three warnings every retry, once a
-    // second, for as long as the deck is up with no network.
-    const auto proxy = [this](const char* item) {
-        return std::make_unique<ControlProxy>(QStringLiteral("[ProLink]"),
-                QString::fromLatin1(item),
-                this,
-                ControlFlag::NoWarnIfMissing);
-    };
-    m_pMasterDevice = proxy("master_device");
-    m_pMasterBarPhase = proxy("master_bar_phase");
-    m_pMasterBpm = proxy("master_bpm");
-}
 
 void WProLinkPhaseMeter::setup(const QDomNode& node, const SkinContext& context) {
     // hasNodeSelectString takes a QString, so the colours are read as text and
@@ -160,27 +155,21 @@ void WProLinkPhaseMeter::paintEvent(QPaintEvent* pEvent) {
     painter.setRenderHint(QPainter::Antialiasing);
     painter.fillRect(rect(), QColor(0x0c, 0x0c, 0x0c));
 
-    // Once a second until they turn up. The controls appear partway through
-    // skin construction, so "not there yet" is a normal early state rather than
-    // a permanent one, and a proxy resolved to null stays null.
-    if (!m_pMasterBarPhase->valid() && ++m_sinceAttach > 30) {
-        attachToProLink();
-    }
-
-    const int masterDevice = static_cast<int>(m_pMasterDevice->get());
-    // -1 while nothing is master; a proxy that has not resolved reads 0.0, and
-    // 0.0 is a real phase. So an unresolved proxy must not be drawn as one.
+    // -1 when there is nobody to follow. A proxy that never resolved reads
+    // 0.0, which is a real phase, so it must not be drawn as one.
     const double masterPhase =
             m_pMasterBarPhase->valid() ? m_pMasterBarPhase->get() : -1.0;
+    m_idle = masterPhase < 0.0;
 
     // Our own bar phase, from the *playhead* rather than from counting beats,
     // and through the same helper the network publisher uses -- so the row
-    // drawn here and the bar a CDJ is told we are in cannot drift apart.
+    // drawn here and the bar a CDJ is told we are in cannot drift apart. Only
+    // when there is something to compare it to: see the class comment.
     const double fileBpm = m_pFileBpm->get();
     const double duration = m_pDuration->get();
-    const bool ourTrackRunning = m_pBpm->get() > 0.0 && fileBpm > 0.0 && duration > 0.0;
+    const bool ourGrid = m_pBpm->get() > 0.0 && fileBpm > 0.0 && duration > 0.0;
     double ourPhase = -1.0;
-    if (ourTrackRunning) {
+    if (!m_idle && ourGrid) {
         ourPhase = mixxx::prolink::barPhaseOf(
                 mixxx::prolink::beatPositionOf(m_pPlayPosition->get(),
                         duration,
@@ -201,9 +190,10 @@ void WProLinkPhaseMeter::paintEvent(QPaintEvent* pEvent) {
     // Only the top row is labelled, with the number of the player it is
     // following. The bottom row is always this deck, so saying so costs width
     // and tells nobody anything.
-    const QString masterLabel =
-            masterDevice > 0 ? QString::number(masterDevice) : QStringLiteral("-");
+    const int masterDevice = static_cast<int>(m_pMasterDevice->get());
+    const QString masterLabel = !m_idle && masterDevice > 0
+            ? QString::number(masterDevice)
+            : QStringLiteral("-");
     paintRow(&painter, masterRect, masterPhase, m_masterColour, masterLabel);
     paintRow(&painter, ourRect, ourPhase, m_ourColour, QString());
-
 }
