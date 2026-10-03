@@ -21,6 +21,9 @@ class WaveformRenderBeat : public WaveformRendererAbstract {
   private:
     QColor m_beatColor;
     QColor m_downbeatColor;
+    /// Beats and downbeats alike, in pixels before the skin's scale: the
+    /// skin's optional <BeatWidth>, 0 when unset (one pixel, as stock).
+    double m_beatWidth = 0.0;
     QVector<QLineF> m_beats;
     QVector<QLineF> m_downbeats;
     std::unique_ptr<ControlProxy> m_pIntroStartPosition;

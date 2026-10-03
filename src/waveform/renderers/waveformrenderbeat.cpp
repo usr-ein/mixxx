@@ -34,6 +34,10 @@ void WaveformRenderBeat::setup(const QDomNode& node, const SkinContext& context)
     m_beatColor = QColor(context.selectString(node, "BeatColor"));
     m_beatColor = WSkinColor::getCorrectColor(m_beatColor).toRgb();
 
+    // Optional, in pixels before the skin's scale. Unset, the lines are one
+    // pixel wide and antialiased, as stock.
+    m_beatWidth = context.selectDouble(node, QStringLiteral("BeatWidth"), 0.0);
+
     // Optional. When unset, every beat is drawn in BeatColor as before.
     m_downbeatColor = QColor(context.selectString(node, "DownbeatColor"));
     if (m_downbeatColor.isValid()) {
@@ -123,10 +127,15 @@ void WaveformRenderBeat::draw(QPainter* painter, QPaintEvent* /*event*/) {
 
     PainterScope PainterScope(painter);
 
-    painter->setRenderHint(QPainter::Antialiasing);
+    // A width from the skin is drawn without antialiasing. Positions are
+    // snapped to whole device pixels below, so the lines come out exactly that
+    // many pixels wide instead of smeared across one more.
+    const bool skinWidth = m_beatWidth > 0.0;
+    painter->setRenderHint(QPainter::Antialiasing, !skinWidth);
+    const double lineWidth = (skinWidth ? m_beatWidth : 1.0) * std::max(1.0, scaleFactor());
 
     QPen beatPen(m_beatColor);
-    beatPen.setWidthF(std::max(1.0, scaleFactor()));
+    beatPen.setWidthF(lineWidth);
     painter->setPen(beatPen);
 
     const Qt::Orientation orientation = m_waveformRenderer->getOrientation();
@@ -166,7 +175,7 @@ void WaveformRenderBeat::draw(QPainter* painter, QPaintEvent* /*event*/) {
 
     if (downbeatCount > 0) {
         QPen downbeatPen(m_downbeatColor);
-        downbeatPen.setWidthF(std::max(1.0, scaleFactor()));
+        downbeatPen.setWidthF(lineWidth);
         painter->setPen(downbeatPen);
         painter->drawLines(m_downbeats.constData(), downbeatCount);
     }
