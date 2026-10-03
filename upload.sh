@@ -40,12 +40,25 @@ docker buildx build --platform linux/arm64 --target export \
 # Where apt put it, rather than assuming /usr/bin/mixxx.
 MIXXX_BIN="$(ssh "$HOST" 'command -v mixxx')"
 
-scp "${DIST}/mixxx" "$HOST":/tmp/mixxx
+# Staged under a name nothing else on the deck uses. Not /tmp/mixxx: that is
+# the deck's log directory (~/.xinitrc runs Mixxx with --log-path /tmp/mixxx),
+# and scp into a directory quietly drops the file inside it -- the install then
+# refuses the directory, after the library check had already passed because
+# ldd's failure was lost in the pipe.
+STAGED=/tmp/mixxx.upload
+
+scp "${DIST}/mixxx" "$HOST":"$STAGED"
 
 # Check the deck actually has every library the new binary asks for, before it
-# replaces a working Mixxx. Cheaper to find out here than mid-set.
-if ssh "$HOST" 'ldd /tmp/mixxx' | grep -F 'not found'; then
-	ssh "$HOST" 'rm -f /tmp/mixxx'
+# replaces a working Mixxx. Cheaper to find out here than mid-set. ldd failing
+# outright -- not a file, not a binary -- stops the upload as well, rather than
+# reading as "nothing missing".
+if ! LIBS="$(ssh "$HOST" "ldd $STAGED")"; then
+	echo "==> ldd could not read $STAGED on $HOST, not installing" >&2
+	exit 1
+fi
+if grep -F 'not found' <<<"$LIBS"; then
+	ssh "$HOST" "rm -f $STAGED"
 	echo "==> libraries above are missing on $HOST, not installing" >&2
 	exit 1
 fi
@@ -53,7 +66,7 @@ fi
 # Keep apt's binary aside on first run, so a bad build can be undone with a copy
 # instead of a reinstall: sudo cp -a /usr/bin/mixxx.apt /usr/bin/mixxx
 ssh "$HOST" "test -e ${MIXXX_BIN}.apt || sudo cp -a ${MIXXX_BIN} ${MIXXX_BIN}.apt"
-ssh "$HOST" "sudo install -m 0755 /tmp/mixxx ${MIXXX_BIN} && rm -f /tmp/mixxx"
+ssh "$HOST" "sudo install -m 0755 $STAGED ${MIXXX_BIN} && rm -f $STAGED"
 
 # Same restart the config upload uses: Mixxx is started by the tty1 autologin.
 ssh "$HOST" 'sudo systemctl restart getty@tty1.service'
