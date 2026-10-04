@@ -51,6 +51,22 @@ ProLinkKeySync::ProLinkKeySync(QObject* pParent)
             this,
             &ProLinkKeySync::onEnabledChanged);
 
+    // **Resume, don't forget** (rule 3). The controls outlive this object --
+    // a skin reload rebuilds it -- so an engaged latch is picked up from them.
+    const auto held = KeyUtils::keyFromNumericValue(m_pControls->keySyncTarget()->get());
+    if (m_pControls->keySyncEnabled()->get() > 0.0 &&
+            held != mixxx::track::io::key::INVALID) {
+        KeySync::Link link;
+        link.otherIsMaster = true;
+        link.masterKey = held;
+        m_state.engage(link);
+        applyToDeck();
+    } else if (m_pControls->keySyncEnabled()->get() > 0.0) {
+        // Lit with nothing held: a state nothing can explain. Put the button
+        // back rather than leave a lit KEY SYNC that does nothing.
+        m_pControls->keySyncEnabled()->set(0.0);
+    }
+
     // **After the load, not during it.** `file_key` is set inside
     // BaseTrackPlayer's load handler, and the same handler then resets the
     // pitch (SpeedAutoReset): re-applying when the key changed was undone a few
@@ -108,6 +124,9 @@ void ProLinkKeySync::onEnabledChanged(double value) {
     if (!wanted) {
         m_state.release();
         m_heldSteps.store(kNoShift);
+        if (m_pControls) {
+            m_pControls->keySyncTarget()->forceSet(0.0);
+        }
         // No shift: the key is the track's own, plus whatever the fader does
         // with keylock off. Not whatever pitch_adjust was before the sync:
         // nothing else on this deck moves it.
@@ -127,6 +146,9 @@ void ProLinkKeySync::onEnabledChanged(double value) {
             m_pControls->keySyncEnabled()->set(0.0);
         }
         return;
+    }
+    if (m_pControls) {
+        m_pControls->keySyncTarget()->forceSet(static_cast<double>(m_state.target()));
     }
     // Owner decision 12: engaging turns master tempo on. A latched key is a
     // key; with keylock off the deck's key would move with every tempo change

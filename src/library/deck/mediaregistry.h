@@ -431,6 +431,7 @@ class MediaRegistry : public QObject {
     /// this header does not have to pull in the key protobuf.
     int m_publishedMasterKeyId = 0;
     bool m_publishedOtherIsMaster = false;
+    bool m_masterKeyPublished = false;
     QList<mixxx::prolink::ProLinkDevice> m_devices;
 
     /// Local paths we asked to be streamed. What tells a progress signal for a

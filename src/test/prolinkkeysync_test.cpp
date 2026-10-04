@@ -138,3 +138,22 @@ TEST_F(ProLinkKeySyncTest, RefusedWithNothingToSyncTo) {
     EXPECT_EQ(0.0, m_pEnabled->get());
     EXPECT_NEAR(0.0, pitchAdjust(), 1e-9);
 }
+
+// A skin reload rebuilds the shell while the controls live on: an engaged
+// latch has to be picked up, so the press that lets go still lets go.
+TEST_F(ProLinkKeySyncTest, ARebuiltShellResumesAndCanStillRelease) {
+    setFileKey(D_MINOR);
+    m_pKeySync->setLink(true, F_SHARP_MINOR);
+    m_pEnabled->set(1.0);
+    QCoreApplication::processEvents();
+    ASSERT_NE(0.0, pitchAdjust());
+
+    m_pKeySync = std::make_unique<mixxx::prolink::ProLinkKeySync>();
+    // Still holding the key: a load is pitched into it.
+    loadTrackInKey(C_MINOR);
+    EXPECT_NEAR(stepsFrom(C_MINOR, F_SHARP_MINOR), pitchAdjust(), 1e-9);
+
+    m_pEnabled->set(0.0);
+    QCoreApplication::processEvents();
+    EXPECT_NEAR(0.0, pitchAdjust(), 1e-9);
+}

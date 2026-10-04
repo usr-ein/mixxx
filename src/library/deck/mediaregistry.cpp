@@ -723,11 +723,16 @@ void MediaRegistry::resolveMasterKey() {
         }
     }
     const bool otherIsMaster = m_masterPlayer != 0;
-    if (otherIsMaster == m_publishedOtherIsMaster && keyId == m_publishedMasterKeyId) {
+    // The first answer is always published: a registry rebuilt with the skin
+    // starts from (false, 0), and the controls it publishes to outlived the
+    // last one, still saying what that one said.
+    if (m_masterKeyPublished && otherIsMaster == m_publishedOtherIsMaster &&
+            keyId == m_publishedMasterKeyId) {
         // Nothing moved. Worth checking, because this runs on every change to
         // the media list and most of those have nothing to do with the master.
         return;
     }
+    m_masterKeyPublished = true;
     m_publishedOtherIsMaster = otherIsMaster;
     m_publishedMasterKeyId = keyId;
     const auto key = KeyUtils::keyFromNumericValue(keyId);

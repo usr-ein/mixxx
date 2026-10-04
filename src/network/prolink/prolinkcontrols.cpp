@@ -58,6 +58,9 @@ ProLinkControls::ProLinkControls() {
     m_pKeySyncAvailable = std::make_unique<ControlObject>(key("key_sync_available"));
     m_pKeySyncAvailable->setReadOnly();
     m_pKeySyncAvailable->forceSet(0.0);
+    m_pKeySyncTarget = std::make_unique<ControlObject>(key("key_sync_target"));
+    m_pKeySyncTarget->setReadOnly();
+    m_pKeySyncTarget->forceSet(0.0);
 
     // Persistent: read from mixxx.cfg, which is where a rig's measured value
     // lives (the fork never writes the file back, so it is set there).

@@ -98,6 +98,16 @@ class ProLinkControls {
     ControlObject* keySyncAvailable() const {
         return m_pKeySyncAvailable.get();
     }
+    /// The key KEY SYNC is holding, as a ChromaticKey, or 0 while released.
+    /// Read-only.
+    ///
+    /// Kept here rather than only in ProLinkKeySync because that lives with
+    /// the skin and these controls do not: a skin reload rebuilt it released
+    /// while `key_sync_enabled` stayed lit and the deck stayed shifted, and
+    /// the press that should have let go found nothing to release.
+    ControlObject* keySyncTarget() const {
+        return m_pKeySyncTarget.get();
+    }
 
     /// How much later this deck is heard than Mixxx's own latency accounts
     /// for, in milliseconds, against a CDJ's beat packets. From mixxx.cfg
@@ -118,6 +128,7 @@ class ProLinkControls {
     std::unique_ptr<ControlObject> m_pFollowing;
     std::unique_ptr<ControlPushButton> m_pKeySyncEnabled;
     std::unique_ptr<ControlObject> m_pKeySyncAvailable;
+    std::unique_ptr<ControlObject> m_pKeySyncTarget;
     std::unique_ptr<ControlObject> m_pPhaseTrimMs;
 };
 
