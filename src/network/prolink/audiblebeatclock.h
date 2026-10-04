@@ -30,6 +30,10 @@ namespace prolink {
 /// `[ProLink] phase_trim_ms`, measured once with a two-channel recording of
 /// both decks on the same kick: positive when this deck is heard later.
 ///
+/// The beat is found on the track's grid itself, and numbered so that the
+/// rekordbox downbeat -- imported as the intro cue -- is beat 1 of a bar; see
+/// barPhaseOf().
+///
 /// GUI thread only.
 class AudibleBeatClock {
   public:
@@ -40,12 +44,13 @@ class AudibleBeatClock {
     BeatPosition now() const;
 
   private:
+    const QString m_group;
     QSharedPointer<VisualPlayPosition> m_pVisualPlayPosition;
     std::unique_ptr<ControlProxy> m_pPlayPosition;
-    std::unique_ptr<ControlProxy> m_pBeatDistance;
     std::unique_ptr<ControlProxy> m_pDuration;
-    std::unique_ptr<ControlProxy> m_pFileBpm;
     std::unique_ptr<ControlProxy> m_pBpm;
+    /// Where the intro cue is, which is rekordbox's first downbeat.
+    std::unique_ptr<ControlProxy> m_pIntroStart;
     std::unique_ptr<ControlProxy> m_pRateRatio;
     std::unique_ptr<ControlProxy> m_pTrimMs;
 };
