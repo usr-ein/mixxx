@@ -45,7 +45,10 @@ class SkinContext;
 ///    one walking across an otherwise empty meter looked like it was following
 ///    something that was not there.
 ///  * **Following player N**: both rows drawn, N over the top row. Our row is
-///    blank if this deck has no grid to place it on.
+///    blank if this deck has no grid to place it on. A deck that is not
+///    playing is held where its status says it stands, to the nearest beat,
+///    and moves when its jog wheel moves it -- a CDJ sends no beats while
+///    paused, and its status says no finer than the beat.
 class WProLinkPhaseMeter : public WWidget {
     Q_OBJECT
 

@@ -47,11 +47,14 @@ class ProLinkControls {
     ControlObject* masterDevice() const {
         return m_pMasterDevice.get();
     }
-    /// The tempo master's effective tempo, `0` when there is none.
+    /// The tempo SYNC follows: the master's, paused or not, else a playing
+    /// deck's. `0` when there is none.
     ControlObject* masterBpm() const {
         return m_pMasterBpm.get();
     }
-    /// Where the tempo master is in its bar, `0..1`, or `-1` for no master.
+    /// Where the deck the phase meter follows is in its bar, `0..1`, or `-1`
+    /// for none. The master first, held where its status says it stands while
+    /// it is paused; see ProLinkNetworkService::publishMaster().
     ///
     /// `-1` rather than `0`, because a master sitting exactly on its downbeat
     /// is a real and common state and must not read as an absent one.

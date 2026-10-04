@@ -169,9 +169,9 @@ class ProLinkNetworkService : public QObject {
     ///
     /// *masterPlayer* is the player number of the deck holding it, or **0 when
     /// that deck is us or nobody holds it**. It is not `[ProLink] master_device`
-    /// and must not be confused with it: that one falls back to any playing
-    /// deck, because a phase meter with nothing to draw is worse than one
-    /// drawing the deck you are actually mixing against. This one is literal,
+    /// and must not be confused with it: that one falls back to other decks,
+    /// because a phase meter with nothing to draw is worse than one drawing
+    /// the deck you are actually mixing against. This one is literal,
     /// because KEY SYNC is about the master and only about the master.
     ///
     /// The other three name the track: which player's medium it came from,
@@ -313,6 +313,14 @@ class ProLinkNetworkService : public QObject {
     QElapsedTimer m_driftReport;
     /// Since the last phase correction; see kPhaseHoldMs.
     QElapsedTimer m_phaseHold;
+    /// Whether the deck publishMaster() last drew is playing, its phase
+    /// interpolated from beats as they arrive. False for one drawn where its
+    /// status says it stands, which SYNC must not correct against; see
+    /// phaseErrorBeats().
+    bool m_masterPhaseLive = false;
+    /// Set once publishPlayback() has warned that the deck has a tempo but no
+    /// `file_bpm`, so it says so once rather than thirty times a second.
+    bool m_warnedNoFileBpm = false;
     /// Since this deck's claim on tempo master began, so a handover is not
     /// mistaken for a rival claim; see kMasterSettleMs. Invalid while we are
     /// not claiming it.

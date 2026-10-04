@@ -1757,6 +1757,19 @@ void Track::updateStreamInfoFromSource(
     auto locked = lockMutex(&m_qMutex);
     bool updated = m_record.updateStreamInfoFromSource(streamInfo);
 
+    // **The BPM is the grid's tempo over the track's duration** (see
+    // setBeatsWhileLocked()), so beats set before the duration was known stored
+    // no BPM at all: getBpmInRange() of an empty range is invalid. The deck
+    // browser does exactly that, on purpose -- it applies rekordbox's grid
+    // before the audio is opened, because the file may still be arriving --
+    // and nothing recomputed the BPM once the duration came in. So `file_bpm`
+    // read 0 for every rekordbox track the deck loaded, while `bpm`, which reads
+    // the grid at the playhead, looked fine: the phase meter had no row for
+    // this deck and the network was told no tempo at all.
+    const bool bpmUpdated = updated && m_pBeats &&
+            compareAndSet(m_record.refMetadata().refTrackInfo().ptrBpm(),
+                    getBeatsPointerBpm(m_pBeats, getDuration()));
+
     const bool importBeats = m_pBeatsImporterPending && !m_pBeatsImporterPending->isEmpty();
     const bool importCueInfos = m_pCueInfoImporterPending && !m_pCueInfoImporterPending->isEmpty();
 
@@ -1765,6 +1778,9 @@ void Track::updateStreamInfoFromSource(
         if (updated) {
             markDirtyAndUnlock(&locked);
             emit durationChanged();
+            if (bpmUpdated) {
+                emit bpmChanged();
+            }
         }
         return;
     }
@@ -1786,6 +1802,10 @@ void Track::updateStreamInfoFromSource(
     }
 
     if (!beatsImported && !cuesImported) {
+        if (bpmUpdated) {
+            markDirtyAndUnlock(&locked);
+            emit bpmChanged();
+        }
         return;
     }
 
@@ -1794,6 +1814,9 @@ void Track::updateStreamInfoFromSource(
     } else {
         markDirtyAndUnlock(&locked);
         emit durationChanged();
+        if (bpmUpdated) {
+            emit bpmChanged();
+        }
     }
     if (cuesImported) {
         emit cuesUpdated();

@@ -61,52 +61,8 @@ constexpr int kPhaseHoldMs = 1500;
 constexpr int kFirstPlayer = 1;
 constexpr int kLastPlayer = 6;
 
-/// Is this deck one to line the phase meter up against?
-///
-/// **Two questions, and the second one used to be skipped for the master.**
-///
-///  1. *Is there a phase to draw?* `bar_phase` is negative for a player that
-///     has sent no beat or whose last beat has gone stale, so this one
-///     question covers both.
-///  2. *Is it playing?* Asked of the status packet, which a deck sends every
-///     ~200 ms whatever it is doing — including while paused, which is the
-///     whole point. Beats are the other way round: they simply stop, and
-///     "stopped" is indistinguishable from "the packet was dropped" until
-///     three seconds have passed.
-///
-/// The master was exempt from both, and that is the bug this exists to close:
-/// a CDJ that holds tempo master and is then paused goes on saying it is
-/// master, so the meter went on drawing a deck standing still — and a beat
-/// phase extrapolated from a beat that never came kept the ticks walking.
-///
-/// A deck we have no status for at all is judged on its beats alone. Fresh
-/// beats *are* playing — they stop when the platter does — so this is the same
-/// answer arrived at by the only route left.
-///
-/// **And it has to be somebody else's deck.** The monitor hears every beat on
-/// UDP 50001, ours included: our beats are broadcast, and a socket bound to
-/// 0.0.0.0 gets its own host's broadcasts back. Status is filtered for our
-/// number and beats were not, so as soon as this deck played it appeared in its
-/// own player table -- with beats and no status, which is the one combination
-/// the rule above waves through. Alone on the network the meter drew our own
-/// phase above our own phase, labelled with our own number; beside a CDJ
-/// numbered higher it drew us instead of the CDJ; and SYNC chased our own echo,
-/// nudging the playhead by the network's latency every second and a half.
-///
-/// Only players, too. A mixer broadcasts beats all the time as a metronome and
-/// sends no CDJ status, and rekordbox sits above the player range: neither is a
-/// deck anyone is mixing against.
-bool isWorthFollowing(const ::prolink::Player& player, int ours) {
-    if (static_cast<int>(player.number) == ours || player.number < kFirstPlayer ||
-            player.number > kLastPlayer) {
-        return false;
-    }
-    if (player.bar_phase < 0.0) {
-        return false;
-    }
-    if (!player.has_status) {
-        return true;
-    }
+/// Whether a deck's status says its playhead is moving on its own.
+bool isMoving(const ::prolink::Player& player) {
     switch (player.play_state) {
     case ::prolink::PlayState::Playing:
     case ::prolink::PlayState::Looping:
@@ -114,14 +70,87 @@ bool isWorthFollowing(const ::prolink::Player& player, int ours) {
         return true;
     case ::prolink::PlayState::Emergency:
         // The medium was pulled and the deck is looping what it had. Still
-        // making sound, still on the grid, and still a deck a DJ is mixing
-        // against -- the emergency is the medium's, not the music's.
+        // making sound and still on the grid -- the emergency is the medium's,
+        // not the music's.
         return true;
     default:
-        // Paused, cued, searching, spun down, loading, nothing loaded. All of
-        // them are a deck that is not keeping time for anybody.
+        // Paused, cued, searching, spun down, loading, nothing loaded.
         return false;
     }
+}
+
+/// Where a deck sits on the phase meter, if anywhere.
+struct Placement {
+    /// In its bar, `0..1`, or negative for nothing to draw.
+    double barPhase = -1.0;
+    /// Drawn from beats as they arrive: the phase moves, and it is precise
+    /// enough for SYNC to correct our own phase against. False for a deck
+    /// drawn where its status says it stands.
+    bool live = false;
+};
+
+/// Where to draw *player* on the phase meter.
+///
+/// **A playing deck from its beats, a stopped one from its status.** Beats are
+/// the precise source -- they arrive on the beat, and the phase is
+/// interpolated between them -- but they stop with the platter. Status keeps
+/// coming every ~200 ms whatever the deck is doing, and it names the beat the
+/// playhead is in, and it follows the playhead while paused: a paused
+/// CDJ-2000NXS in the corpus, its playhead wound back, reports beat 225, 224,
+/// 223, 222 in consecutive packets. So a paused master
+/// is still drawn, held where it stands to the nearest beat, and it moves when
+/// the DJ moves it. It used to vanish, and with it the one thing a DJ cueing it
+/// up wanted to see.
+///
+/// Never the beat phase for a deck whose status says it is stopped: that phase
+/// is extrapolated from a beat that never came, and drawing it is what once
+/// kept the ticks walking for a CDJ standing still.
+///
+/// A deck we have no status for at all is judged on its beats alone. Fresh
+/// beats *are* playing -- they stop when the platter does.
+///
+/// **And it has to be somebody else's deck.** The monitor hears every beat on
+/// UDP 50001, ours included: our beats are broadcast, and a socket bound to
+/// 0.0.0.0 gets its own host's broadcasts back. Status is filtered for our
+/// number and beats were not, so as soon as this deck played it appeared in its
+/// own player table -- with beats and no status. Alone on the network the
+/// meter drew our own phase above our own phase, labelled with our own number;
+/// beside a CDJ numbered higher it drew us instead of the CDJ; and SYNC chased
+/// our own echo, nudging the playhead by the network's latency every second and
+/// a half.
+///
+/// Only players, too. A mixer broadcasts beats all the time as a metronome and
+/// sends no CDJ status, and rekordbox sits above the player range: neither is a
+/// deck anyone is mixing against.
+Placement placementOf(const ::prolink::Player& player, int ours) {
+    if (static_cast<int>(player.number) == ours || player.number < kFirstPlayer ||
+            player.number > kLastPlayer) {
+        return {};
+    }
+    if (!player.has_status) {
+        return {player.bar_phase, player.bar_phase >= 0.0};
+    }
+    if (isMoving(player) && player.bar_phase >= 0.0) {
+        return {player.bar_phase, true};
+    }
+    // Stopped, or playing without a fresh beat yet: the first beat after PLAY
+    // is up to a beat away. Status places it, still.
+    return {player.bar_position, false};
+}
+
+/// A deck's tempo with its pitch fader applied, negative when not known.
+///
+/// From its beats where there are any, and from its status otherwise: a paused
+/// deck has sent none for a while, and one that has not played since we joined
+/// has never sent one, but status states the tempo either way.
+double tempoOf(const ::prolink::Player& player) {
+    if (player.effective_bpm > 0.0) {
+        return player.effective_bpm;
+    }
+    if (player.has_status && player.track_bpm > 0.0) {
+        return player.track_bpm * (1.0 + player.pitch_percent / 100.0);
+    }
+    return -1.0;
 }
 
 mixxx::prolink::MediaSlot toMixxxSlot(::prolink::Slot slot) {
@@ -385,9 +414,23 @@ void ProLinkNetworkService::publishPlayback() {
         // No track, or one with no grid. Saying nothing is right: a tempo we
         // cannot state is not a tempo of zero, and a stale one would leave
         // followers locked to a ghost.
+        //
+        // **Unless the deck has a tempo all the same**, which is a track whose
+        // BPM never reached `file_bpm` -- the state every rekordbox track
+        // the browser loaded was in, silently, until Track learnt to recompute
+        // its BPM once the duration is known. Said once, because it takes this
+        // deck off the network and its row off the phase meter, and nothing
+        // else would say so.
+        if (m_pDeckBpm->get() > 0.0 && !m_warnedNoFileBpm) {
+            m_warnedNoFileBpm = true;
+            kLogger.warning() << "the deck has a tempo of" << m_pDeckBpm->get()
+                              << "BPM but file_bpm is" << fileBpm << "and duration"
+                              << duration << "-- telling the network nothing";
+        }
         (*m_pImpl->pSession)->clear_playback();
         return;
     }
+    m_warnedNoFileBpm = false;
     // The fader as a percentage, derived from the two tempos rather than read
     // off `rate`: rate has to be combined with the range and the direction, and
     // getting any of the three wrong is a pitch that is silently inverted.
@@ -483,6 +526,14 @@ void ProLinkNetworkService::followMaster() {
 }
 
 bool ProLinkNetworkService::phaseErrorBeats(double* pBeats) const {
+    // **Only against a deck that is playing.** A stopped one is drawn where its
+    // status says it stands, to the nearest beat: a place to show, not a phase
+    // to lock to. Measuring a playing deck against it reads as an error that
+    // grows without bound, and correcting it would drag our playhead every
+    // second and a half towards a deck standing still.
+    if (!m_masterPhaseLive) {
+        return false;
+    }
     const double masterPhase = m_pControls->masterBarPhase()->get();
     const double duration = m_pDeckDuration->get();
     const double fileBpm = m_pDeckFileBpm->get();
@@ -698,39 +749,47 @@ void ProLinkNetworkService::publishMaster() {
     // then they stop being: the master becomes us, the top row would be our own
     // phase drawn above our own phase, and the meter goes blank or useless at
     // exactly the moment a DJ has just declared they are the one being
-    // followed. So the master is preferred, and any other playing deck is the
-    // fallback -- which is the deck whose beats are worth lining up with either
-    // way.
+    // followed. So the master comes first, paused or not, then any other
+    // playing deck, then any other deck that has a place on its grid at all --
+    // one being cued up is still the deck the next mix lines up against. Ties
+    // go to the lowest player number.
     const ::prolink::Player* pShow = nullptr;
+    Placement shown;
+    int shownRank = 0;
     for (const ::prolink::Player& player : players) {
-        if (!isWorthFollowing(player, ours)) {
+        const Placement placement = placementOf(player, ours);
+        if (placement.barPhase < 0.0) {
             continue;
         }
-        if (player.is_master) {
+        const int rank = player.is_master ? 3 : (placement.live ? 2 : 1);
+        if (rank > shownRank) {
             pShow = &player;
-            break;
-        }
-        if (pShow == nullptr) {
-            pShow = &player;
+            shown = placement;
+            shownRank = rank;
         }
     }
+    m_masterPhaseLive = pShow != nullptr && shown.live;
     if (pShow != nullptr) {
         m_pControls->masterDevice()->forceSet(pShow->number);
-        // The tempo actually playing, with the pitch fader applied. The
-        // library reports a negative for "not known", which the widget must
-        // not draw as a tempo.
-        m_pControls->masterBpm()->forceSet(pShow->effective_bpm);
-        m_pControls->masterBarPhase()->forceSet(pShow->bar_phase);
+        // The tempo SYNC follows, with the pitch fader applied. The master's
+        // whether or not it is playing -- a paused master's tempo is still the
+        // tempo -- and otherwise only a playing deck's: a stopped deck that is
+        // merely the best thing to draw is not a tempo anybody asked to follow.
+        // Negative for "not known", which must not be taken for a tempo.
+        const bool followable = pShow->is_master || shown.live;
+        m_pControls->masterBpm()->forceSet(followable ? tempoOf(*pShow) : 0.0);
+        m_pControls->masterBarPhase()->forceSet(shown.barPhase);
         return;
     }
-    // Nobody holds master. Not the same as a master at phase zero, which is
-    // why the phase goes to -1 rather than to 0.
+    // Nobody to draw. Not the same as a deck at phase zero, which is why the
+    // phase goes to -1 rather than to 0.
     m_pControls->masterDevice()->forceSet(0.0);
     m_pControls->masterBpm()->forceSet(0.0);
     m_pControls->masterBarPhase()->forceSet(-1.0);
 }
 
 void ProLinkNetworkService::clearMaster() {
+    m_masterPhaseLive = false;
     m_pControls->isMaster()->forceSet(0.0);
     m_pControls->masterDevice()->forceSet(0.0);
     m_pControls->masterBpm()->forceSet(0.0);

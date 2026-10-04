@@ -4,6 +4,7 @@
 #include "sources/soundsourceproxy.h"
 #include "test/mixxxtest.h"
 #include "test/soundsourceproviderregistration.h"
+#include "track/beats.h"
 #include "track/track.h"
 
 // Test for updating track metadata and cover art from files.
@@ -145,6 +146,25 @@ TEST_F(TrackUpdateTest, parseModifiedDirtyAgain) {
     EXPECT_TRUE(pTrack->isDirty());
     EXPECT_NE(trackMetadataBefore, trackMetadataAfter);
     EXPECT_EQ(coverInfoBefore, coverInfoAfter);
+}
+
+// The deck browser applies rekordbox's grid before anything has opened the
+// audio, so the track has no duration yet -- and its BPM is the grid's tempo
+// over its duration, so none was stored. Opening the audio supplies the
+// duration, and the BPM has to follow: `file_bpm` is read from it, and every
+// rekordbox track the deck loaded read 0 there.
+TEST_F(TrackUpdateTest, bpmFollowsAGridSetBeforeTheDuration) {
+    auto pTrack = newTestTrack();
+    ASSERT_EQ(0.0, pTrack->getDuration());
+    ASSERT_TRUE(pTrack->trySetBeats(mixxx::Beats::fromConstTempo(
+            mixxx::audio::SampleRate(44100),
+            mixxx::audio::kStartFramePos,
+            mixxx::Bpm(128.0))));
+    EXPECT_EQ(mixxx::Bpm::kValueUndefined, pTrack->getBpm());
+
+    ASSERT_NE(nullptr, SoundSourceProxy(pTrack).openAudioSource());
+    EXPECT_GT(pTrack->getDuration(), 0.0);
+    EXPECT_DOUBLE_EQ(128.0, pTrack->getBpm());
 }
 
 // TODO: Add tests for SoundSourceProxy::UpdateTrackFromSourceMode::Newer
