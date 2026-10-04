@@ -34,9 +34,10 @@ if [ -n "$DECK_CODENAME" ] && [ "$DECK_CODENAME" != "$CODENAME" ]; then
 fi
 
 # This checkout's own build tree in Docker's cache: see checkout-id.sh.
+# shellcheck disable=SC2046 # the build args are words, on purpose
 docker buildx build --platform linux/arm64 --target export \
 	--build-arg BASE="debian:${CODENAME}" \
-	--build-arg CHECKOUT_ID="$(./checkout-id.sh)" \
+	$(./checkout-id.sh --build-args) \
 	--output "type=local,dest=${DIST}" .
 
 # Where apt put it, rather than assuming /usr/bin/mixxx.

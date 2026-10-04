@@ -88,6 +88,12 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
 ENV RUSTUP_HOME=/opt/rustup CARGO_HOME=/opt/cargo PATH=/opt/cargo/bin:$PATH
 RUN curl --proto '=https' --tlsv1.2 -sSf https://sh.rustup.rs \
       | sh -s -- -y --no-modify-path --default-toolchain none
+# And the toolchain rust-toolchain.toml names, in a layer keyed on that file
+# alone. Without it, cargo found no toolchain at build time and rustup fetched
+# one into the build's own layer: 1.5 GB downloaded, and left behind in
+# Docker's disk, by every build.
+COPY lib/prolink/rust-toolchain.toml /opt/rust-toolchain/rust-toolchain.toml
+RUN cd /opt/rust-toolchain && rustup toolchain install
 
 COPY . /src
 
@@ -116,25 +122,41 @@ COPY . /src
 # cargo registry is source only. This is the one that matters.
 #
 # So is which checkout this is (./checkout-id.sh): empty for the main one, its
-# own for each git worktree. ninja rebuilds by mtime, so two checkouts taking
-# turns in one tree each ship the other's object files, and nothing errors.
-# ccache is shared -- it hashes contents -- so a worktree's first build is
-# mostly cache hits. Declared here, not with the other ARGs: every RUN after
-# an ARG sees it, and the dependency layers above must not rebuild per checkout.
+# own for each git worktree. ccache is shared -- it hashes contents.
+#
+# The tree builds from its own copy of the sources, /build/src, which
+# tree-sync.sh brings level with /src by content: a changed file is copied in
+# with a fresh timestamp, an identical one is left alone. ninja and moc go by
+# timestamps, and the ones in /src are git's, set when it wrote each file --
+# so a fresh worktree looked all new, and a checkout of older code looked
+# already built, and shipped whatever the tree had compiled last. By content,
+# a tree rebuilds exactly what changed since its own last build.
+#
+# A worktree's first build starts from a copy of the main checkout's tree
+# (SEED_ID: checkout-id.sh), when that one is complete: moc alone is minutes
+# in a new tree. The main checkout's own build mounts an empty one there
+# ("-none") rather than its tree twice.
+#
+# Declared here, not with the other ARGs: every RUN after an ARG sees it, and
+# the dependency layers above must not rebuild per checkout.
 ARG CHECKOUT_ID=
+ARG SEED_ID=-none
 RUN --mount=type=cache,target=/build,sharing=locked,id=mixxx-build-${BASE}${CHECKOUT_ID} \
+    --mount=type=cache,target=/seed,sharing=shared,readonly,id=mixxx-build-${BASE}${SEED_ID} \
     --mount=type=cache,target=/ccache,sharing=locked \
     --mount=type=cache,target=/opt/cargo/registry,sharing=locked \
     export CCACHE_DIR=/ccache \
-    && cmake -S /src -B /build -G Ninja \
+    && /src/tree-sync.sh /src /build /seed \
+    && cmake -S /build/src -B /build/out -G Ninja \
         -DCMAKE_BUILD_TYPE=RelWithDebInfo \
         -DBUILD_TESTING=OFF \
         -DINSTALL_USER_UDEV_RULES=OFF \
         -DCMAKE_C_COMPILER_LAUNCHER=ccache \
         -DCMAKE_CXX_COMPILER_LAUNCHER=ccache \
-    && cmake --build /build --target mixxx --parallel "${MIXXX_BUILD_JOBS}" \
-    && strip -o /mixxx /build/mixxx \
-    && if [ "$WITH_DEBUG" = "1" ]; then cp /build/mixxx /mixxx.debug; else : > /mixxx.debug; fi
+    && cmake --build /build/out --target mixxx --parallel "${MIXXX_BUILD_JOBS}" \
+    && touch /build/.complete \
+    && strip -o /mixxx /build/out/mixxx \
+    && if [ "$WITH_DEBUG" = "1" ]; then cp /build/out/mixxx /mixxx.debug; else : > /mixxx.debug; fi
 
 # Export stage: `--output` copies just the binary out to the host.
 FROM scratch AS export
@@ -156,7 +178,7 @@ COPY --from=build /mixxx.debug /mixxx.debug
 # Unit tests, for the parts of the tree that can be checked without hardware.
 #
 #   docker build --target unittest --build-arg GTEST_FILTER='Library*' \
-#       --build-arg CHECKOUT_ID="$(./checkout-id.sh)" .
+#       $(./checkout-id.sh --build-args) .
 #
 # **The Pro DJ Link tests are not here any more.** The protocol moved to
 # lib/prolink and its tests moved with it -- 659 of them, including a replay of
@@ -193,20 +215,24 @@ RUN apt-get update && apt-get install -y --no-install-recommends libgmock-dev \
 # off, and flipping that setting back and forth in a shared tree would make
 # every alternate build a near-full rebuild. The ccache is shared, so most
 # object files are hits anyway.
-# Each checkout's own test tree, as for /build (declared here for the same reason).
+# Each checkout's own test tree, kept and seeded as /build is (see there).
 ARG CHECKOUT_ID=
+ARG SEED_ID=-none
 RUN --mount=type=cache,target=/build-test,sharing=locked,id=mixxx-build-test-${BASE}${CHECKOUT_ID} \
+    --mount=type=cache,target=/seed,sharing=shared,readonly,id=mixxx-build-test-${BASE}${SEED_ID} \
     --mount=type=cache,target=/ccache,sharing=locked \
     --mount=type=cache,target=/opt/cargo/registry,sharing=locked \
     export CCACHE_DIR=/ccache \
-    && cmake -S /src -B /build-test -G Ninja \
+    && /src/tree-sync.sh /src /build-test /seed \
+    && cmake -S /build-test/src -B /build-test/out -G Ninja \
         -DCMAKE_BUILD_TYPE=RelWithDebInfo \
         -DBUILD_TESTING=ON \
         -DINSTALL_USER_UDEV_RULES=OFF \
         -DCMAKE_C_COMPILER_LAUNCHER=ccache \
         -DCMAKE_CXX_COMPILER_LAUNCHER=ccache \
-    && cmake --build /build-test --target mixxx-test --parallel "${BUILD_JOBS}" \
-    && QT_QPA_PLATFORM=offscreen /build-test/mixxx-test --gtest_filter="${GTEST_FILTER}"
+    && cmake --build /build-test/out --target mixxx-test --parallel "${BUILD_JOBS}" \
+    && touch /build-test/.complete \
+    && QT_QPA_PLATFORM=offscreen /build-test/out/mixxx-test --gtest_filter="${GTEST_FILTER}"
 
 # The protocol's own tests, in the same container the binary is built in.
 #
