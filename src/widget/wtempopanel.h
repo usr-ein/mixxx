@@ -55,14 +55,15 @@ class WTempoPanel : public WWidget {
     std::unique_ptr<ControlProxy> m_pBpm;
     std::unique_ptr<ControlProxy> m_pRateRatio;
     std::unique_ptr<ControlProxy> m_pRateRange;
-    std::unique_ptr<ControlProxy> m_pFileBpm;
     /// Where the tempo fader physically is, in the same -1..1 as `rate`,
     /// published by the mapping. See the skin's `[TriMixxx],tempo_fader`.
     std::unique_ptr<ControlProxy> m_pTempoFader;
     std::unique_ptr<ControlProxy> m_pRateDir;
-    /// Whether this deck holds Pro DJ Link tempo master, and so whether the
-    /// fader is a control rather than a disconnected stick.
-    std::unique_ptr<ControlProxy> m_pIsMaster;
+    /// Whether Pro DJ Link SYNC is following a deck, and so whether the fader
+    /// is connected to nothing.
+    std::unique_ptr<ControlProxy> m_pFollowing;
+    /// `rate`, which equals the fader's position exactly once it leads.
+    std::unique_ptr<ControlProxy> m_pRate;
 
     /// The seven-segment face, for the tempo only. The smaller text stays in the
     /// UI font: Digital-7 has digits and almost nothing else, so "WIDE" would

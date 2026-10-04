@@ -46,16 +46,10 @@ constexpr int kBoxRadius = 4;
 /// same as centre. The skin seeds the control at -2 for exactly this.
 constexpr double kFaderUnknown = -1.5;
 
-/// How close the fader has to get before it counts as having caught the tempo,
-/// as a fraction of the fader's travel.
-///
-/// Mixxx's own soft-takeover threshold, which is what actually decides when the
-/// fader takes over -- 3/128 of the parameter's range, and the parameter runs
-/// 0..1 across a `rate` of -1..1, so it is twice that in rate units. Deriving
-/// it rather than picking a number is what keeps the read-out honest: the
-/// hardware tempo disappears at the moment the fader is really in control, not
-/// a little before or after it.
-constexpr double kTakeoverRate = 2.0 * 3.0 / 128.0;
+/// How far apart the fader and `rate` may be and still be "the same". The
+/// mapping writes `rate` from exactly the number it publishes as tempo_fader,
+/// so once the fader leads the two are equal; this only absorbs rounding.
+constexpr double kSameRate = 1e-6;
 } // namespace
 
 WTempoPanel::WTempoPanel(QWidget* pParent, const QString& group)
@@ -63,7 +57,6 @@ WTempoPanel::WTempoPanel(QWidget* pParent, const QString& group)
     m_pBpm = std::make_unique<ControlProxy>(group, QStringLiteral("bpm"), this);
     m_pRateRatio = std::make_unique<ControlProxy>(group, QStringLiteral("rate_ratio"), this);
     m_pRateRange = std::make_unique<ControlProxy>(group, QStringLiteral("rateRange"), this);
-    m_pFileBpm = std::make_unique<ControlProxy>(group, QStringLiteral("file_bpm"), this);
     // Where the fader physically is, published by the mapping. The direction
     // preference is Mixxx's own and lives outside the deck's group, because it
     // is a preference about every deck rather than about this one.
@@ -76,11 +69,12 @@ WTempoPanel::WTempoPanel(QWidget* pParent, const QString& group)
     // is where the *preference* lives -- resolved to nothing, fell back to +1,
     // and drew the fader running the opposite way to the tempo it was chasing.
     m_pRateDir = std::make_unique<ControlProxy>(group, QStringLiteral("rate_dir"), this);
-    // Whether the fader is ours to use. See the read-out's own comment.
-    m_pIsMaster = std::make_unique<ControlProxy>(QStringLiteral("[ProLink]"),
-            QStringLiteral("is_master"),
+    // Whether SYNC is following a deck, so the fader is connected to nothing.
+    m_pFollowing = std::make_unique<ControlProxy>(QStringLiteral("[ProLink]"),
+            QStringLiteral("following"),
             this,
             ControlFlag::NoWarnIfMissing);
+    m_pRate = std::make_unique<ControlProxy>(group, QStringLiteral("rate"), this);
 
     // Polled: three controls, and a repaint ten times a second is cheaper than
     // wiring three valueChanged signals to the same update().
@@ -172,36 +166,28 @@ void WTempoPanel::paintEvent(QPaintEvent* pEvent) {
 
     // What the fader is asking for, while it is not yet the thing being obeyed.
     //
-    // Drawn only when the two differ by more than soft-takeover's own
-    // threshold, which is precisely "the fader has not caught it yet": at the
-    // moment it does, the number it was aiming at becomes the number already on
-    // screen and a second copy of it would be noise.
-    // **Only while this deck holds tempo master**, which is the only time the
-    // fader is a thing the DJ can act with.
+    // The mapping owns the fader (TriMixxx.scripts.js, "Tempo fader"): it
+    // writes `rate` from exactly the number it publishes as tempo_fader, so the
+    // fader is leading precisely when the two are equal. Any other `rate` was
+    // put there by something else -- SYNC, a range change -- and the fader has
+    // to come back to it: that is when this number is drawn, smaller and
+    // dimmer, to aim at.
     //
-    // Following a master, the fader is disconnected because the tempo is coming
-    // off the wire, and it will still be disconnected when the master next
-    // changes it -- so where it happens to be sitting is not a target, it is
-    // noise. The moment mastership is taken it becomes the opposite: the tempo
-    // is this deck's to set, the fader is the only thing that can set it, and
-    // soft-takeover is standing between the two until it is met. That is the
-    // gap this number exists to close, and it does not exist anywhere else.
+    // **Never while SYNC follows a deck**: the fader is connected to nothing
+    // then, and where it sits is not a target (owner decision 6). In B and C
+    // it is shown whenever the fader has not caught the tempo.
     QString faderText;
     const double faderRate = m_pTempoFader->get();
-    const double fileBpm = m_pFileBpm->get();
-    const bool ourFader = m_pIsMaster->valid() && m_pIsMaster->get() > 0.0;
-    if (ourFader && faderRate > kFaderUnknown && fileBpm > 0.0) {
-        // Mixxx's own arithmetic, with Mixxx's own direction preference, so the
-        // number the fader is aiming at is the number it will produce.
+    const bool following = m_pFollowing->valid() && m_pFollowing->get() > 0.0;
+    const double rateRatio = ratio;
+    if (!following && faderRate > kFaderUnknown && bpm > 0.0 && rateRatio > 0.0 &&
+            std::abs(faderRate - m_pRate->get()) > kSameRate) {
+        // Mixxx's own arithmetic: the deck's tempo at this point of the grid
+        // (bpm over rate_ratio, which is local_bpm on a variable grid), times
+        // the ratio the fader would give, with the deck's own direction.
         const double dir = m_pRateDir->valid() ? m_pRateDir->get() : 1.0;
-        const double faderBpm = fileBpm * (1.0 + faderRate * range * dir);
-        // In BPM, from a threshold expressed in fader travel: the same distance
-        // means different tempos at ±6% and at WIDE, and it is the tempo the
-        // read-out is in.
-        const double caught = fileBpm * range * kTakeoverRate;
-        if (std::abs(faderBpm - bpm) > caught) {
-            faderText = QStringLiteral("%1").arg(faderBpm, 0, 'f', 2);
-        }
+        const double faderBpm = (bpm / rateRatio) * (1.0 + faderRate * range * dir);
+        faderText = QStringLiteral("%1").arg(faderBpm, 0, 'f', 2);
     }
 
     QFont faderFont(m_tempoFamily);
