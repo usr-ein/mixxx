@@ -293,12 +293,13 @@ class ProLinkNetworkService : public QObject {
     /// here.
     bool phaseErrorBeats(double* pBeats) const;
 
-    /// Nudge the playhead so our beat lands on the master's.
+    /// Move the playhead by *beats* so our beat lands on the followed deck's.
     ///
-    /// Once, when SYNC is engaged. Continuous phase correction would be a
-    /// control loop fighting the pitch fader; a DJ pressing SYNC wants one
-    /// jump, and then a matched tempo keeps it there.
-    void alignPhaseToMaster();
+    /// *beats* is phaseErrorBeats()'s answer: within half a beat either way.
+    /// Called once when SYNC is engaged or the deck starts playing, and again
+    /// whenever the phase has slipped past kPhaseSlipBeats -- SYNC holds the
+    /// phase for as long as it is lit, not only at the moment it is pressed.
+    void alignPhaseToMaster(double beats);
 
     /// The deck the browser and the network both mean by "this deck".
     static const char* kDeckGroup;
@@ -388,6 +389,8 @@ class ProLinkNetworkService : public QObject {
     std::unique_ptr<ControlProxy> m_pDeckDuration;
     std::unique_ptr<ControlProxy> m_pDeckPlayPosition;
     std::unique_ptr<ControlProxy> m_pDeckBeatDistance;
+    /// `phase_nudge_beats`, the engine's exact move by a number of beats.
+    std::unique_ptr<ControlProxy> m_pDeckPhaseNudge;
     QList<ProLinkDevice> m_devices;
     QHash<quint32, Pending> m_pending;
     bool m_listening = false;

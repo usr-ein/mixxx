@@ -1,6 +1,7 @@
 #include "engine/enginebuffer.h"
 
 #include <QtDebug>
+#include <algorithm>
 
 #include "control/controllinpotmeter.h"
 #include "control/controlpotmeter.h"
@@ -180,6 +181,20 @@ EngineBuffer::EngineBuffer(const QString& group,
     m_pTrackLoaded = new ControlObject(ConfigKey(m_group, "track_loaded"), false);
     m_pTrackLoaded->setReadOnly();
 
+    // Not ignoring no-ops: two nudges of the same size in a row are two moves.
+    m_pPhaseNudge = new ControlObject(ConfigKey(m_group, "phase_nudge_beats"), false);
+    connect(m_pPhaseNudge,
+            &ControlObject::valueChanged,
+            this,
+            [this](double beats) {
+                // Accumulated rather than replaced, so a nudge written before
+                // the previous one was processed is not lost.
+                if (beats != 0.0) {
+                    m_pendingPhaseNudgeBeats.fetch_add(beats);
+                }
+            },
+            Qt::DirectConnection);
+
     // Quantization Controller for enabling and disabling the
     // quantization (alignment) of loop in/out positions and (hot)cues with
     // beats.
@@ -313,6 +328,7 @@ EngineBuffer::~EngineBuffer() {
     delete m_pSampleRate;
 
     delete m_pTrackLoaded;
+    delete m_pPhaseNudge;
     delete m_pTrackSamples;
     delete m_pTrackSampleRate;
 
@@ -1304,8 +1320,42 @@ void EngineBuffer::processSyncRequests() {
     }
 }
 
+void EngineBuffer::processPhaseNudge() {
+    const double beats = m_pendingPhaseNudgeBeats.exchange(0.0);
+    if (beats == 0.0) {
+        return;
+    }
+    // A user seek waiting to be processed wins: the nudge was worked out
+    // against a position the deck is about to leave.
+    if (m_queuedSeek.getValue().seekType != SEEK_NONE) {
+        return;
+    }
+    if (m_pLoopingControl->isLoopingEnabled() || m_bSlipEnabledProcessing ||
+            m_scratching_old) {
+        return;
+    }
+    const TrackPointer pTrack = m_pCurrentTrack;
+    const mixxx::BeatsPointer pBeats = pTrack ? pTrack->getBeats() : mixxx::BeatsPointer();
+    if (!pBeats || !m_playPos.isValid()) {
+        return;
+    }
+    // On the grid, so a fraction of a beat is a fraction of *this* beat even
+    // where the tempo varies -- and exact: quantize is not consulted.
+    auto target = pBeats->findNBeatsFromPosition(m_playPos, beats);
+    if (!target.isValid()) {
+        return;
+    }
+    target = std::clamp(target, mixxx::audio::kStartFramePos, m_trackEndPositionOld);
+    if (target != m_playPos) {
+        setNewPlaypos(target);
+        m_previousBufferSeek = true;
+    }
+}
+
 void EngineBuffer::processSeek(bool paused) {
     m_previousBufferSeek = false;
+
+    processPhaseNudge();
 
     const QueuedSeek queuedSeek = m_queuedSeek.getValue();
 

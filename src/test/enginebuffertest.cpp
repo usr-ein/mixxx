@@ -75,6 +75,85 @@ TEST_F(EngineBufferTest, TrackLoadResetsPitch) {
     ASSERT_NEAR(0.0, ControlObject::get(ConfigKey(m_sGroup1, "pitch_adjust")), 1e-10);
 }
 
+namespace {
+/// The fake track loadFakeTrack() builds is ten seconds long.
+constexpr double kFakeTrackSeconds = 10.0;
+} // namespace
+
+// Pro DJ Link SYNC moves the playhead a fraction of a beat to land on another
+// deck's beat. Through `playposition` that does nothing while the deck plays
+// with quantize on: the seek becomes phase-preserving and, with no other deck
+// playing, is matched against the deck's own phase from before the seek. This
+// pins both halves: the trap, and the control that does not fall into it.
+TEST_F(EngineBufferTest, PhaseNudgeMovesThePlayheadWithQuantizeOn) {
+    m_pTrack1->trySetBeats(mixxx::Beats::fromConstTempo(
+            m_pTrack1->getSampleRate(), mixxx::audio::kStartFramePos, mixxx::Bpm(120)));
+    ControlObject::set(ConfigKey(m_sGroup1, "quantize"), 1.0);
+    ControlObject::set(ConfigKey(m_sGroup1, "play"), 1.0);
+    ProcessBuffer();
+    ProcessBuffer();
+    // How far one buffer moves the deck through its beat, measured rather than
+    // assumed, so this does not depend on the buffer size.
+    const auto oneBuffer = [this]() {
+        const double before = ControlObject::get(ConfigKey(m_sGroup1, "beat_distance"));
+        ProcessBuffer();
+        return ControlObject::get(ConfigKey(m_sGroup1, "beat_distance")) - before;
+    };
+    const double step = oneBuffer();
+    ASSERT_GT(step, 0.0);
+
+    // The trap: a quarter of a beat further on, written as a position.
+    const double duration = kFakeTrackSeconds;
+    const double quarterBeatSeconds = 0.25 * 60.0 / 120.0;
+    const double before = ControlObject::get(ConfigKey(m_sGroup1, "beat_distance"));
+    ControlObject::set(ConfigKey(m_sGroup1, "playposition"),
+            ControlObject::get(ConfigKey(m_sGroup1, "playposition")) +
+                    quarterBeatSeconds / duration);
+    ProcessBuffer();
+    EXPECT_NEAR(before + step,
+            ControlObject::get(ConfigKey(m_sGroup1, "beat_distance")),
+            1e-3);
+
+    // The control: the same quarter beat, as a nudge.
+    const double beforeNudge = ControlObject::get(ConfigKey(m_sGroup1, "beat_distance"));
+    ControlObject::set(ConfigKey(m_sGroup1, "phase_nudge_beats"), 0.25);
+    ProcessBuffer();
+    EXPECT_NEAR(beforeNudge + step + 0.25,
+            ControlObject::get(ConfigKey(m_sGroup1, "beat_distance")),
+            1e-3);
+
+    // And backwards, by the same amount twice in a row: two nudges, not one.
+    ControlObject::set(ConfigKey(m_sGroup1, "phase_nudge_beats"), -0.1);
+    ProcessBuffer();
+    const double afterFirst = ControlObject::get(ConfigKey(m_sGroup1, "beat_distance"));
+    ControlObject::set(ConfigKey(m_sGroup1, "phase_nudge_beats"), -0.1);
+    ProcessBuffer();
+    EXPECT_NEAR(afterFirst + step - 0.1,
+            ControlObject::get(ConfigKey(m_sGroup1, "beat_distance")),
+            1e-3);
+}
+
+// A nudge inside an active loop would jump out of it: it is dropped instead.
+TEST_F(EngineBufferTest, PhaseNudgeIsDroppedInsideALoop) {
+    m_pTrack1->trySetBeats(mixxx::Beats::fromConstTempo(
+            m_pTrack1->getSampleRate(), mixxx::audio::kStartFramePos, mixxx::Bpm(120)));
+    ControlObject::set(ConfigKey(m_sGroup1, "play"), 1.0);
+    ProcessBuffer();
+    ControlObject::set(ConfigKey(m_sGroup1, "beatloop_4_activate"), 1.0);
+    ProcessBuffer();
+    ASSERT_GT(ControlObject::get(ConfigKey(m_sGroup1, "loop_enabled")), 0.0);
+    const double stepBefore = ControlObject::get(ConfigKey(m_sGroup1, "beat_distance"));
+    ProcessBuffer();
+    const double step = ControlObject::get(ConfigKey(m_sGroup1, "beat_distance")) - stepBefore;
+
+    const double before = ControlObject::get(ConfigKey(m_sGroup1, "beat_distance"));
+    ControlObject::set(ConfigKey(m_sGroup1, "phase_nudge_beats"), 0.25);
+    ProcessBuffer();
+    EXPECT_NEAR(before + step,
+            ControlObject::get(ConfigKey(m_sGroup1, "beat_distance")),
+            1e-3);
+}
+
 TEST_F(EngineBufferTest, PitchRoundtrip) {
     ControlObject::set(ConfigKey(m_sGroup1, "keylock"), 0.0);
     ControlObject::set(ConfigKey(m_sGroup1, "keylockMode"),

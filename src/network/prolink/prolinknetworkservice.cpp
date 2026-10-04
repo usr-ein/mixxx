@@ -349,6 +349,7 @@ ProLinkNetworkService::ProLinkNetworkService(QObject* parent)
     m_pDeckDuration = deck("duration");
     m_pDeckPlayPosition = deck("playposition");
     m_pDeckBeatDistance = deck("beat_distance");
+    m_pDeckPhaseNudge = deck("phase_nudge_beats");
 
     // **Dropping in on the beat.** Pressing SYNC aligns the phase once, but a
     // track loaded afterwards starts wherever its cue happens to sit -- tempo
@@ -519,7 +520,7 @@ void ProLinkNetworkService::followMaster() {
                 (pending || std::abs(error) > kPhaseSlipBeats)) {
             m_alignWhenTempoMatches = false;
             m_phaseHold.start();
-            alignPhaseToMaster();
+            alignPhaseToMaster(error);
         }
     }
     reportPhaseDrift();
@@ -591,66 +592,23 @@ void ProLinkNetworkService::reportPhaseDrift() {
                     << "beat distance" << m_pDeckBeatDistance->get();
 }
 
-void ProLinkNetworkService::alignPhaseToMaster() {
-    if (!m_pControls) {
-        return;
-    }
-
-    const double masterPhase = m_pControls->masterBarPhase()->get();
-    const double duration = m_pDeckDuration->get();
-    const double fileBpm = m_pDeckFileBpm->get();
-    const double effectiveBpm = m_pDeckBpm->get();
-    if (masterPhase < 0.0 || duration <= 0.0 || fileBpm <= 0.0 || effectiveBpm <= 0.0) {
-        // Said out loud: a silent decline here is a SYNC button that matches
-        // the tempo, leaves the deck half a beat out, and reports nothing.
-        kLogger.debug() << "no phase to align to -- master phase" << masterPhase
-                        << "duration" << duration << "file bpm" << fileBpm
-                        << "effective bpm" << effectiveBpm;
-        return;
-    }
-    const double ourPhase = mixxx::prolink::barPhaseOf(
-            mixxx::prolink::beatPositionOf(m_pDeckPlayPosition->get(),
-                    duration,
-                    fileBpm,
-                    m_pDeckBeatDistance->get()));
-    if (ourPhase < 0.0) {
-        return;
-    }
-    // **Beats, not bars.** Bar alignment across devices is not knowable --
-    // nothing in a Mixxx grid names a downbeat -- so aligning to the master's
-    // bar would be a coin flip that moves the track by up to two beats. The
-    // beat within the bar is real, so the correction is wrapped into half a
-    // beat either way and never moves the playhead further than that.
-    const double beatsApart = (masterPhase - ourPhase) * mixxx::prolink::kBeatsPerBar;
-    double withinBeat = beatsApart - std::floor(beatsApart);
-    if (withinBeat > 0.5) {
-        withinBeat -= 1.0;
-    }
-    // **The track's own tempo, not the one being played.** `playposition` is a
-    // fraction of the track, so moving it walks the beat grid at the grid's own
-    // rate -- which is `file_bpm`, because that is the tempo the grid was laid
-    // out at and the tempo beatPositionOf() reads it back with. Converting the
-    // correction at the *playing* tempo instead made every correction wrong by
-    // the pitch fader: at +6% it fell 6% short, and at the wide range it
-    // undershot by half.
-    const double seconds = withinBeat * 60.0 / fileBpm;
-    const double position = m_pDeckPlayPosition->get() + seconds / duration;
-    if (position < 0.0 || position > 1.0) {
-        return;
-    }
-    const double before = m_pDeckPlayPosition->get();
-    // **Through the proxy, which is how every other seek in Mixxx is written.**
-    // `ControlObject::set(key, value)` looks the control up and writes it with a
-    // null sender; a ControlProxy writes it with itself as the sender, which is
-    // what WOverview and the waveform do when a click seeks. The two are
-    // supposed to be equivalent and the deck says otherwise: the correction was
-    // logged every 1.5 s for minutes on end and the playhead never moved by so
-    // much as a millisecond, with the phase error sitting at a constant 0.23
-    // beats through all of it.
-    m_pDeckPlayPosition->set(position);
-    kLogger.debug() << "phase align: moving" << seconds * 1000.0
-                    << "ms onto the master's beat -- from" << before << "to" << position
-                    << "now reads" << m_pDeckPlayPosition->get();
+void ProLinkNetworkService::alignPhaseToMaster(double beats) {
+    // **A nudge, not a seek.** The correction used to be written to
+    // `playposition`, and the deck never moved: a `playposition` write is a
+    // standard seek, quantize (on, on this deck) turns it into a
+    // phase-preserving one, and with no other Mixxx deck playing the engine
+    // matches the deck against its own phase from before the seek -- so every
+    // correction under half a beat landed exactly where it started.
+    // `phase_nudge_beats` is exact, measured in beats on the deck's own grid,
+    // and applied against the engine's position when the engine processes it
+    // rather than against one read here a callback earlier.
+    //
+    // **Beats, not bars.** *beats* is already wrapped into half a beat either
+    // way (phaseErrorBeats()): bar alignment across devices is not something
+    // this corrects, so the playhead never moves further than that.
+    m_pDeckPhaseNudge->set(beats);
+    kLogger.debug() << "phase align: nudging" << beats
+                    << "beats onto the followed deck's beat";
 }
 
 bool ProLinkNetworkService::reconcileMastership(int rivalMaster) {

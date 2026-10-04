@@ -4,6 +4,7 @@
 
 #include <QAtomicInt>
 #include <QMutex>
+#include <atomic>
 #include <initializer_list>
 
 #include "audio/frame.h"
@@ -410,6 +411,25 @@ class EngineBuffer : public EngineObject {
     ControlProxy* m_pPassthroughEnabled;
 
     ControlObject* m_pTrackLoaded;
+
+    /// `phase_nudge_beats`: move the playhead by this many beats, exactly.
+    ///
+    /// For Pro DJ Link SYNC, which has to move the playhead a fraction of a
+    /// beat to land on another deck's beat. `playposition` cannot do it: a
+    /// write to it is a standard seek, which quantize turns into a
+    /// phase-preserving one, and with no other Mixxx deck to match against the
+    /// deck is matched against its own phase from before the seek -- so any
+    /// move of less than half a beat lands exactly where it started.
+    ///
+    /// A nudge is relative to the engine's own position at the moment it is
+    /// processed, never to a position read earlier on another thread, and it
+    /// is dropped rather than applied when a user seek is waiting, when a loop
+    /// is active (it would leave the loop), while slip is on (the slip return
+    /// would undo it) or while scratching.
+    ControlObject* m_pPhaseNudge;
+    std::atomic<double> m_pendingPhaseNudgeBeats{0.0};
+    /// Apply a pending `phase_nudge_beats`, if any. Engine thread only.
+    void processPhaseNudge();
 
     // Whether or not to repeat the track when at the end
     ControlPushButton* m_pRepeat;
