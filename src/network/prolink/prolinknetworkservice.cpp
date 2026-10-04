@@ -1333,11 +1333,12 @@ void ProLinkNetworkService::poll() {
 
     for (const ::prolink::Event& event : (*m_pImpl->pSession)->drain_events()) {
         if (event.dropped > 0) {
-            // The queue overflowed, so the running picture is stale and the
-            // table has to be re-read rather than patched. Clearing it makes
-            // the diff below re-announce everything.
-            kLogger.debug() << "missed" << event.dropped << "events; re-reading";
-            m_devices.clear();
+            // This thread stopped draining the queue for seconds. Nothing is
+            // lost for good: devices and players are re-read from their tables
+            // every poll, a transfer's progress is overtaken by its end, and
+            // the session never discards the two events nothing repeats, a
+            // slot description and a transfer's end.
+            kLogger.warning() << "stalled; missed" << event.dropped << "events";
         }
         switch (event.kind) {
         case ::prolink::EventKind::MediaInfo:

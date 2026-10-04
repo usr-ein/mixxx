@@ -76,8 +76,8 @@ WTempoPanel::WTempoPanel(QWidget* pParent, const QString& group)
             ControlFlag::NoWarnIfMissing);
     m_pRate = std::make_unique<ControlProxy>(group, QStringLiteral("rate"), this);
 
-    // Polled: three controls, and a repaint ten times a second is cheaper than
-    // wiring three valueChanged signals to the same update().
+    // Polled: seven controls, and a repaint ten times a second is cheaper than
+    // wiring seven valueChanged signals to the same update().
     auto* pTimer = new QTimer(this);
     connect(pTimer, &QTimer::timeout, this, [this]() {
         // Raised on every tick, not just once: the waveform beneath repaints
