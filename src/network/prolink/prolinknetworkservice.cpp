@@ -851,7 +851,11 @@ void ProLinkNetworkService::publishMaster() {
             // medium's database and means nothing anywhere else.
             masterTrack.sourcePlayer = static_cast<int>(player.track_source_player);
             masterTrack.slot = toMixxxSlot(player.track_source_slot);
-            masterTrack.trackId = player.track_id;
+            // Only a rekordbox track's id is a row in that medium's database.
+            // An unanalysed file's is the player's own numbering, and looked
+            // up there it named an unrelated track whose key KEY SYNC then
+            // offered and latched. No id: no key, KEY SYNC stays dark.
+            masterTrack.trackId = player.track_is_rekordbox ? player.track_id : 0;
             break;
         }
     }
