@@ -506,6 +506,8 @@ void ProLinkNetworkService::publishPlayback() {
             ->set_playback(fileBpm,
                     pitchPercent,
                     m_pDeckPlay->get() > 0.0,
+                    // `play` stays up while the jog is held to scratch.
+                    m_pDeckScratching->get() > 0.0,
                     position.number,
                     position.fraction);
 }
