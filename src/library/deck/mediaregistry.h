@@ -250,6 +250,8 @@ class MediaRegistry : public QObject {
             mixxx::prolink::MediaSlot slot,
             const QByteArray& data,
             const QString& error);
+    /// Add *device*, or update the one with its MAC.
+    void upsertDevice(const mixxx::prolink::ProLinkDevice& device);
     void onDeviceLost(const QByteArray& mac);
     /// A range of a streamed file has landed, or its size is now known.
     ///

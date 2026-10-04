@@ -170,7 +170,19 @@ MediaRegistry::MediaRegistry(mixxx::DbConnectionPoolPtr dbConnectionPool, QObjec
             &mixxx::prolink::ProLinkNetworkService::deviceFound,
             this,
             [this](const mixxx::prolink::ProLinkDevice& device) {
-                m_devices.append(device);
+                upsertDevice(device);
+            });
+    // A player renumbered in its UTILITY menu and back within the forget
+    // window arrives as a change, not a loss and a find: without this its old
+    // number stayed here for the session, and a master on that player
+    // resolved to nothing -- or, after two decks swapped, to the other deck's
+    // stick and the wrong key.
+    connect(m_pNetwork.get(),
+            &mixxx::prolink::ProLinkNetworkService::deviceChanged,
+            this,
+            [this](const mixxx::prolink::ProLinkDevice& device) {
+                upsertDevice(device);
+                resolveMasterKey();
             });
     // Connected once, for the life of the registry, rather than per transfer.
     // A streamed file's ranges must be recorded even while nothing is waiting
@@ -205,6 +217,17 @@ MediaRegistry::MediaRegistry(mixxx::DbConnectionPoolPtr dbConnectionPool, QObjec
                 if (m_announcedRekordboxId != 0) {
                     announceLoadedTrack(m_announcedMedium, m_announcedRekordboxId);
                 }
+                // The master playing off our own stick resolves through what
+                // we serve, so the answer can change with it.
+                resolveMasterKey();
+            });
+    // ...and through our own player number, which arrives some seconds into a
+    // session and may change on a rebind.
+    connect(m_pNetwork.get(),
+            &mixxx::prolink::ProLinkNetworkService::announceChanged,
+            this,
+            [this]() {
+                resolveMasterKey();
             });
     m_pKeySync = std::make_unique<mixxx::prolink::ProLinkKeySync>();
     connect(m_pNetwork.get(),
@@ -656,7 +679,10 @@ MediumId MediaRegistry::mediumOf(int player, mixxx::prolink::MediaSlot slot) con
         // Looked up by mount point rather than rebuilt from it: a local id
         // carries the stick's UUID too, which the serve status does not.
         for (const auto& served : m_pNetwork->serveStatus().media) {
-            if (served.slot == slot && !served.localPath.isEmpty()) {
+            // Not a phantom: that stick has been pulled, and its mount point
+            // may already belong to the next one -- whose rows, looked up by
+            // the old track's id, would name an unrelated track.
+            if (served.slot == slot && !served.localPath.isEmpty() && !served.phantom) {
                 const int index = indexOfLocal(served.localPath);
                 return index >= 0 ? m_media.at(index).id : MediumId();
             }
@@ -1304,6 +1330,18 @@ void MediaRegistry::onFetchFinished(const QString& localPath, const QString& err
     // Whatever arrived is not a playable file and must not be mistaken for one
     // by the next load.
     QFile::remove(localPath);
+}
+
+void MediaRegistry::upsertDevice(const mixxx::prolink::ProLinkDevice& device) {
+    // By MAC: a number can move, and a re-read of the device table after
+    // dropped events announces every device again.
+    for (auto& known : m_devices) {
+        if (known.mac == device.mac) {
+            known = device;
+            return;
+        }
+    }
+    m_devices.append(device);
 }
 
 void MediaRegistry::onDeviceLost(const QByteArray& mac) {
