@@ -2,6 +2,7 @@
 
 #include "control/controlproxy.h"
 #include "control/controlpushbutton.h"
+#include "mixer/playerinfo.h"
 #include "moc_prolinkkeysync.cpp"
 #include "network/prolink/prolinkcontrols.h"
 #include "track/keyutils.h"
@@ -34,22 +35,56 @@ ProLinkKeySync::ProLinkKeySync(QObject* pParent)
                 this,
                 ControlFlag::NoWarnIfMissing);
     };
-    // `pitch` and not `rate`: with keylock on -- which this deck boots into --
-    // it is the one that moves the key and leaves the tempo alone. It is also
-    // what Mixxx's own `sync_key` writes, so the two cannot disagree about
-    // what a key shift is.
-    m_pDeckPitch = deck("pitch");
+    // `pitch_adjust`, the offset, and not `pitch`, the total. With keylock off
+    // `pitch` includes what the tempo fader does to the key, so writing a
+    // shift there stored "steps minus the fader's part", and releasing by
+    // writing 0 there left a hidden offset that cancelled the fader's part --
+    // a deck a semitone flat once the fader came back to centre, with KEY SYNC
+    // dark. The shift is an offset on top of whatever the fader does (owner
+    // decision 8), which is exactly what `pitch_adjust` is.
+    m_pDeckPitchAdjust = deck("pitch_adjust");
     m_pDeckFileKey = deck("file_key");
+    m_pDeckKeylock = deck("keylock");
 
     connect(m_pControls->keySyncEnabled(),
             &ControlPushButton::valueChanged,
             this,
             &ProLinkKeySync::onEnabledChanged);
 
-    // The track's own key, which is also how a load reaches us: it is set from
-    // the Track the moment the deck takes one, and zeroed when the deck is
-    // ejected.
-    m_pDeckFileKey->connectValueChanged(this, &ProLinkKeySync::onFileKeyChanged);
+    // **After the load, not during it.** `file_key` is set inside
+    // BaseTrackPlayer's load handler, and the same handler then resets the
+    // pitch (SpeedAutoReset): re-applying when the key changed was undone a few
+    // lines later, and a track in the same key as the last never changed it at
+    // all. PlayerInfo announces the new track after those resets, on this
+    // thread, for every load.
+    connect(&PlayerInfo::instance(),
+            &PlayerInfo::trackChanged,
+            this,
+            [this](const QString& group, TrackPointer pNewTrack, TrackPointer) {
+                if (group == QLatin1String(kDeckGroup) && pNewTrack) {
+                    reapply();
+                }
+            });
+    // A key that arrives after the load -- analysed on the deck, or read late.
+    // Queued, so a change made inside the load handler is seen after its
+    // resets too.
+    m_pDeckFileKey->connectValueChanged(
+            this, &ProLinkKeySync::onFileKeyChanged, Qt::QueuedConnection);
+    // **Keylock wipes the shift both ways** at this deck's settings
+    // (keylockMode 0, keyunlockMode 0): KeyControl zeroes pitch_adjust when it
+    // is turned on and when it is turned off. The shift is put back straight
+    // after, on whichever thread toggled it, so not a buffer is played without
+    // it. KeyControl connected first, at the deck's construction, so this runs
+    // after its reset.
+    m_pDeckKeylock->connectValueChanged(
+            this,
+            [this](double) {
+                const int steps = m_heldSteps.load();
+                if (steps != kNoShift) {
+                    m_pDeckPitchAdjust->set(steps);
+                }
+            },
+            Qt::DirectConnection);
 }
 
 ProLinkKeySync::~ProLinkKeySync() = default;
@@ -72,12 +107,12 @@ void ProLinkKeySync::onEnabledChanged(double value) {
     }
     if (!wanted) {
         m_state.release();
-        // Back to the track's own key. Not to whatever the pitch was before
-        // the sync: `pitch` is zero unless something deliberately moved it,
-        // and restoring a remembered value would mean guessing which of the
-        // two -- the DJ or us -- moved it last.
-        if (m_pDeckPitch) {
-            m_pDeckPitch->set(0.0);
+        m_heldSteps.store(kNoShift);
+        // No shift: the key is the track's own, plus whatever the fader does
+        // with keylock off. Not whatever pitch_adjust was before the sync:
+        // nothing else on this deck moves it.
+        if (m_pDeckPitchAdjust) {
+            m_pDeckPitchAdjust->set(0.0);
         }
         return;
     }
@@ -93,6 +128,12 @@ void ProLinkKeySync::onEnabledChanged(double value) {
         }
         return;
     }
+    // Owner decision 12: engaging turns master tempo on. A latched key is a
+    // key; with keylock off the deck's key would move with every tempo change
+    // from the moment it was set.
+    if (m_pDeckKeylock && m_pDeckKeylock->get() <= 0.0) {
+        m_pDeckKeylock->set(1.0);
+    }
     applyToDeck();
     kLogger.debug() << "engaged on"
                     << KeyUtils::keyToString(m_state.target(), KeyUtils::KeyNotation::Lancelot);
@@ -100,19 +141,25 @@ void ProLinkKeySync::onEnabledChanged(double value) {
 
 void ProLinkKeySync::onFileKeyChanged(double value) {
     Q_UNUSED(value);
+    reapply();
+}
+
+void ProLinkKeySync::reapply() {
     if (m_state.engaged()) {
         applyToDeck();
     }
 }
 
 void ProLinkKeySync::applyToDeck() {
-    if (!m_pDeckPitch || !m_pDeckFileKey) {
+    if (!m_pDeckPitchAdjust || !m_pDeckFileKey) {
         return;
     }
     const auto fileKey = KeyUtils::keyFromNumericValue(m_pDeckFileKey->get());
     if (fileKey == mixxx::track::io::key::INVALID) {
         // No track, or one nobody ever worked out a key for. The latch stands:
-        // the next track that does have a key is pitched into it.
+        // the next track that does have a key is pitched into it. Nothing is
+        // held meanwhile, so a keylock toggle puts no stale shift back.
+        m_heldSteps.store(kNoShift);
         return;
     }
     // Compatible rather than identical, exactly as Mixxx's own `sync_key`
@@ -125,7 +172,8 @@ void ProLinkKeySync::applyToDeck() {
     // a key and not a detuning, so there is nothing finer than a semitone to
     // aim at.
     const int steps = KeyUtils::shortestStepsToCompatibleKey(fileKey, m_state.target());
-    m_pDeckPitch->set(steps);
+    m_heldSteps.store(steps);
+    m_pDeckPitchAdjust->set(steps);
 }
 
 } // namespace prolink

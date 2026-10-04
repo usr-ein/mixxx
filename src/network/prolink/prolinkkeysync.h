@@ -1,6 +1,8 @@
 #pragma once
 
 #include <QObject>
+#include <atomic>
+#include <limits>
 #include <memory>
 
 #include "network/prolink/keysync.h"
@@ -48,6 +50,14 @@ class ProLinkKeySync : public QObject {
     void onFileKeyChanged(double value);
     /// Pitch the deck into the latched key, if there is a track to pitch.
     void applyToDeck();
+    /// applyToDeck() if engaged: after a load, or a key arriving late.
+    void reapply();
+
+    /// The shift applied to the track on the deck, in semitones, or kNoShift.
+    /// Atomic, because the keylock watcher reads it on whichever thread
+    /// toggled keylock.
+    static constexpr int kNoShift = std::numeric_limits<int>::min();
+    std::atomic<int> m_heldSteps{kNoShift};
 
     KeySync m_state;
     KeySync::Link m_link;
@@ -55,8 +65,9 @@ class ProLinkKeySync : public QObject {
     /// The `[ProLink]` controls, used and not owned. Null in a build with no
     /// core services, and every use is guarded.
     ProLinkControls* m_pControls = nullptr;
-    std::unique_ptr<ControlProxy> m_pDeckPitch;
+    std::unique_ptr<ControlProxy> m_pDeckPitchAdjust;
     std::unique_ptr<ControlProxy> m_pDeckFileKey;
+    std::unique_ptr<ControlProxy> m_pDeckKeylock;
 };
 
 } // namespace prolink
