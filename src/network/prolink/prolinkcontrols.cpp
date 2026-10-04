@@ -56,6 +56,11 @@ ProLinkControls::ProLinkControls() {
     m_pKeySyncAvailable->setReadOnly();
     m_pKeySyncAvailable->forceSet(0.0);
 
+    // Persistent: read from mixxx.cfg, which is where a rig's measured value
+    // lives (the fork never writes the file back, so it is set there).
+    m_pPhaseTrimMs = std::make_unique<ControlObject>(
+            key("phase_trim_ms"), true, false, true, 0.0);
+
     VERIFY_OR_DEBUG_ASSERT(s_pInstance == nullptr) {
         return;
     }

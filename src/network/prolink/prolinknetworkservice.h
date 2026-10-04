@@ -19,6 +19,7 @@ class ControlPushButton;
 
 namespace mixxx {
 namespace prolink {
+class AudibleBeatClock;
 class ProLinkControls;
 }
 } // namespace mixxx
@@ -416,6 +417,9 @@ class ProLinkNetworkService : public QObject {
     std::unique_ptr<ControlProxy> m_pDeckBeatDistance;
     /// `phase_nudge_beats`, the engine's exact move by a number of beats.
     std::unique_ptr<ControlProxy> m_pDeckPhaseNudge;
+    /// This deck's place on its grid as heard; what SYNC compares, the meter
+    /// draws and the network is told.
+    std::unique_ptr<AudibleBeatClock> m_pOurBeat;
     std::unique_ptr<ControlProxy> m_pDeckPlayLatched;
     std::unique_ptr<ControlProxy> m_pDeckScratching;
     std::unique_ptr<ControlProxy> m_pDeckLoopEnabled;

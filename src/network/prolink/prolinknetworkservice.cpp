@@ -14,6 +14,7 @@
 #include "control/controlproxy.h"
 #include "control/controlpushbutton.h"
 #include "moc_prolinknetworkservice.cpp"
+#include "network/prolink/audiblebeatclock.h"
 #include "network/prolink/prolinkbeatposition.h"
 #include "network/prolink/prolinkcontrols.h"
 #include "network/prolink/synctempo.h"
@@ -392,6 +393,7 @@ ProLinkNetworkService::ProLinkNetworkService(QObject* parent)
     m_pDeckPlayPosition = deck("playposition");
     m_pDeckBeatDistance = deck("beat_distance");
     m_pDeckPhaseNudge = deck("phase_nudge_beats");
+    m_pOurBeat = std::make_unique<AudibleBeatClock>(QString::fromLatin1(kDeckGroup), this);
 
     // The DJ's hands on the deck, which the phase hold must leave alone. See
     // holdSuspended().
@@ -486,11 +488,9 @@ void ProLinkNetworkService::publishPlayback() {
     const double effectiveBpm = m_pDeckBpm->get();
     const double pitchPercent = effectiveBpm > 0.0 ? (effectiveBpm / fileBpm - 1.0) * 100.0 : 0.0;
 
-    const mixxx::prolink::BeatPosition position =
-            mixxx::prolink::beatPositionOf(m_pDeckPlayPosition->get(),
-                    duration,
-                    fileBpm,
-                    m_pDeckBeatDistance->get());
+    // As heard, not as the engine has it: a CDJ following us lines its beat
+    // up with our packets, so they have to leave on our *audible* beat.
+    const mixxx::prolink::BeatPosition position = m_pOurBeat->now();
     (*m_pImpl->pSession)
             ->set_playback(fileBpm,
                     pitchPercent,
@@ -639,11 +639,8 @@ bool ProLinkNetworkService::phaseErrorBeats(double* pBeats) const {
     if (masterPhase < 0.0 || duration <= 0.0 || fileBpm <= 0.0) {
         return false;
     }
-    const double ourPhase = mixxx::prolink::barPhaseOf(
-            mixxx::prolink::beatPositionOf(m_pDeckPlayPosition->get(),
-                    duration,
-                    fileBpm,
-                    m_pDeckBeatDistance->get()));
+    // Ours as heard, against theirs as heard: see AudibleBeatClock.
+    const double ourPhase = mixxx::prolink::barPhaseOf(m_pOurBeat->now());
     if (ourPhase < 0.0) {
         return false;
     }
@@ -682,11 +679,7 @@ void ProLinkNetworkService::reportPhaseDrift() {
     kLogger.debug() << "phase drift" << beats * 60000.0 / effectiveBpm << "ms ("
                     << beats << "beats ) -- master" << m_pControls->masterBarPhase()->get()
                     << "ours"
-                    << mixxx::prolink::barPhaseOf(
-                               mixxx::prolink::beatPositionOf(m_pDeckPlayPosition->get(),
-                                       m_pDeckDuration->get(),
-                                       m_pDeckFileBpm->get(),
-                                       m_pDeckBeatDistance->get()))
+                    << mixxx::prolink::barPhaseOf(m_pOurBeat->now())
                     << "beat distance" << m_pDeckBeatDistance->get();
 }
 

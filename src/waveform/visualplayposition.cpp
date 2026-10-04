@@ -1,5 +1,7 @@
 #include "waveform/visualplayposition.h"
 
+#include <algorithm>
+
 #include "moc_visualplayposition.cpp"
 #include "util/cmdlineargs.h"
 #include "util/math.h"
@@ -187,6 +189,37 @@ void VisualPlayPosition::getPlaySlipAtNextVSync(VSyncThread* pVSyncThread,
             *pSlipPosition = interpolatedPlayPos;
         }
     }
+}
+
+double VisualPlayPosition::calcOffsetNow(const VisualPlayPositionData& data) const {
+    if (data.m_audioBufferMicroS == 0.0) {
+        return 0.0;
+    }
+    // As calcOffsetAtNextVSync(), with "now" in place of the next vsync: the
+    // sample at the DAC this instant is the buffer's first sample plus however
+    // far past its DAC time we are. Bounded the same way, so a late callback
+    // (an underflow) does not extrapolate on into music that never played.
+    const auto sinceEntry = static_cast<double>(data.m_referenceTime.elapsed().toIntegerMicros());
+    const double offset = std::clamp(sinceEntry - data.m_callbackEntrytoDac,
+            -static_cast<double>(data.m_callbackEntrytoDac),
+            2.0 * data.m_audioBufferMicroS);
+    return data.m_positionStep * offset / data.m_audioBufferMicroS;
+}
+
+double VisualPlayPosition::getAudibleAtNow() {
+    if (!m_valid.load()) {
+        return -1;
+    }
+    const VisualPlayPositionData data = m_data.getValue();
+    return determinePlayPosInLoopBoundries(data, calcOffsetNow(data));
+}
+
+double VisualPlayPosition::getAudibleOffsetNow() {
+    if (!m_valid.load()) {
+        return 0.0;
+    }
+    const VisualPlayPositionData data = m_data.getValue();
+    return determinePlayPosInLoopBoundries(data, calcOffsetNow(data)) - data.m_playPos;
 }
 
 double VisualPlayPosition::getEnginePlayPos() {

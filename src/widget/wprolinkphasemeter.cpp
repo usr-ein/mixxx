@@ -7,6 +7,7 @@
 
 #include "control/controlproxy.h"
 #include "moc_wprolinkphasemeter.cpp"
+#include "network/prolink/audiblebeatclock.h"
 #include "network/prolink/prolinkbeatposition.h"
 #include "skin/legacy/skincontext.h"
 
@@ -46,6 +47,7 @@ WProLinkPhaseMeter::WProLinkPhaseMeter(QWidget* pParent, const QString& group)
     m_pFileBpm = deck("file_bpm");
     m_pDuration = deck("duration");
     m_pPlayPosition = deck("playposition");
+    m_pOurBeat = std::make_unique<mixxx::prolink::AudibleBeatClock>(m_group, this);
 
     // Polled rather than driven by valueChanged: the other deck's phase moves
     // continuously and the marker has to move with it, so there is a repaint
@@ -161,20 +163,17 @@ void WProLinkPhaseMeter::paintEvent(QPaintEvent* pEvent) {
             m_pMasterBarPhase->valid() ? m_pMasterBarPhase->get() : -1.0;
     m_idle = masterPhase < 0.0;
 
-    // Our own bar phase, from the *playhead* rather than from counting beats,
-    // and through the same helper the network publisher uses -- so the row
-    // drawn here and the bar a CDJ is told we are in cannot drift apart. Only
+    // Our own bar phase as it is *heard*, through the same clock SYNC and the
+    // network publisher use -- so the row drawn here, the error SYNC corrects
+    // and the bar a CDJ is told we are in cannot drift apart, and so two rows
+    // lined up on the meter are two beats lined up in the room. Only
     // when there is something to compare it to: see the class comment.
     const double fileBpm = m_pFileBpm->get();
     const double duration = m_pDuration->get();
     const bool ourGrid = m_pBpm->get() > 0.0 && fileBpm > 0.0 && duration > 0.0;
     double ourPhase = -1.0;
     if (!m_idle && ourGrid) {
-        ourPhase = mixxx::prolink::barPhaseOf(
-                mixxx::prolink::beatPositionOf(m_pPlayPosition->get(),
-                        duration,
-                        fileBpm,
-                        m_pBeatDistance->get()));
+        ourPhase = mixxx::prolink::barPhaseOf(m_pOurBeat->now());
     }
 
     // **Each row keeps its own colour, always.** Recolouring an aligned pair was

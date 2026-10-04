@@ -8,6 +8,11 @@
 #include "widget/wwidget.h"
 
 class ControlProxy;
+namespace mixxx {
+namespace prolink {
+class AudibleBeatClock;
+}
+} // namespace mixxx
 class QDomNode;
 class SkinContext;
 
@@ -84,6 +89,8 @@ class WProLinkPhaseMeter : public WWidget {
     std::unique_ptr<ControlProxy> m_pFileBpm;
     std::unique_ptr<ControlProxy> m_pDuration;
     std::unique_ptr<ControlProxy> m_pPlayPosition;
+    /// Our place on the grid as heard; see mixxx::prolink::AudibleBeatClock.
+    std::unique_ptr<mixxx::prolink::AudibleBeatClock> m_pOurBeat;
 
     /// Fixed per row, deliberately. An earlier version turned both green when
     /// the decks agreed; it read as the meter changing meaning rather than the

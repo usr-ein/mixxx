@@ -1084,6 +1084,7 @@ add_library(mixxx-lib STATIC EXCLUDE_FROM_ALL
   src/network/jsonwebtask.cpp
   src/network/networktask.cpp
   src/util/posixsignalhandler.cpp
+  src/network/prolink/audiblebeatclock.cpp
   src/network/prolink/prolinkcontrols.cpp
   src/network/prolink/keysync.cpp
   src/network/prolink/prolinkkeysync.cpp
