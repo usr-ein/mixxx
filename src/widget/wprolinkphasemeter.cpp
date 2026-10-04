@@ -205,7 +205,7 @@ void WProLinkPhaseMeter::paintEvent(QPaintEvent* pEvent) {
     }
     QColor masterColour = m_masterColour;
     if (m_pMeterLive->get() <= 0.0) {
-        masterColour.setAlphaF(0.4);
+        masterColour.setAlphaF(0.4f);
     }
     paintRow(&painter, masterRect, masterPhase, masterColour, masterLabel);
     // The bottom row is always this deck; it is labelled only when we hold

@@ -104,85 +104,8 @@ constexpr int kBendQuietMs = 600;
 /// read the position that produced, rather than the one from before it.
 constexpr int kSettleMs = 150;
 
-
-/// Whether a deck's status says its playhead is moving on its own.
-bool isMoving(const ::prolink::Player& player) {
-    switch (player.play_state) {
-    case ::prolink::PlayState::Playing:
-    case ::prolink::PlayState::Looping:
-    case ::prolink::PlayState::CuePlay:
-        return true;
-    case ::prolink::PlayState::Emergency:
-        // The medium was pulled and the deck is looping what it had. Still
-        // making sound and still on the grid -- the emergency is the medium's,
-        // not the music's.
-        return true;
-    default:
-        // Paused, cued, searching, spun down, loading, nothing loaded.
-        return false;
-    }
-}
-
-/// Where a deck sits on the phase meter, if anywhere.
-struct Placement {
-    /// In its bar, `0..1`, or negative for nothing to draw.
-    double barPhase = -1.0;
-    /// Drawn from beats as they arrive: the phase moves, and it is precise
-    /// enough for SYNC to correct our own phase against. False for a deck
-    /// drawn where its status says it stands.
-    bool live = false;
-};
-
-/// Where to draw *player* on the phase meter.
-///
-/// **A playing deck from its beats, a stopped one from its status.** Beats are
-/// the precise source -- they arrive on the beat, and the phase is
-/// interpolated between them -- but they stop with the platter. Status keeps
-/// coming every ~200 ms whatever the deck is doing, and it names the beat the
-/// playhead is in, and it follows the playhead while paused: a paused
-/// CDJ-2000NXS in the corpus, its playhead wound back, reports beat 225, 224,
-/// 223, 222 in consecutive packets. So a paused master
-/// is still drawn, held where it stands to the nearest beat, and it moves when
-/// the DJ moves it. It used to vanish, and with it the one thing a DJ cueing it
-/// up wanted to see.
-///
-/// Never the beat phase for a deck whose status says it is stopped: that phase
-/// is extrapolated from a beat that never came, and drawing it is what once
-/// kept the ticks walking for a CDJ standing still.
-///
-/// A deck we have no status for at all is judged on its beats alone. Fresh
-/// beats *are* playing -- they stop when the platter does.
-///
-/// **And it has to be somebody else's deck.** The monitor hears every beat on
-/// UDP 50001, ours included: our beats are broadcast, and a socket bound to
-/// 0.0.0.0 gets its own host's broadcasts back. Status is filtered for our
-/// number and beats were not, so as soon as this deck played it appeared in its
-/// own player table -- with beats and no status. Alone on the network the
-/// meter drew our own phase above our own phase, labelled with our own number;
-/// beside a CDJ numbered higher it drew us instead of the CDJ; and SYNC chased
-/// our own echo, nudging the playhead by the network's latency every second and
-/// a half.
-///
-/// Only players, too. A mixer broadcasts beats all the time as a metronome and
-/// sends no CDJ status, and rekordbox sits above the player range: neither is a
-/// deck anyone is mixing against.
-Placement placementOf(const ::prolink::Player& player, int ours) {
-    if (static_cast<int>(player.number) == ours ||
-            !mixxx::prolink::isPlayerNumber(static_cast<int>(player.number))) {
-        return {};
-    }
-    if (!player.has_status) {
-        return {player.bar_phase, player.bar_phase >= 0.0};
-    }
-    if (isMoving(player) && player.bar_phase >= 0.0) {
-        return {player.bar_phase, true};
-    }
-    // Stopped, or playing without a fresh beat yet: the first beat after PLAY
-    // is up to a beat away. Status places it, still.
-    return {player.bar_position, false};
-}
-
-/// *player* as SYNC sees it; see mixxx::prolink::chooseSyncSource().
+/// *player* as SYNC and the phase meter see it; see
+/// mixxx::prolink::chooseSyncSource() and chooseMeterDeck().
 mixxx::prolink::SyncPeer syncPeerOf(const ::prolink::Player& player) {
     mixxx::prolink::SyncPeer peer;
     peer.number = static_cast<int>(player.number);
@@ -191,13 +114,29 @@ mixxx::prolink::SyncPeer syncPeerOf(const ::prolink::Player& player) {
     peer.isMaster = player.is_master;
     peer.yieldingTo = static_cast<int>(player.yielding_to);
     peer.isSynced = player.is_synced;
-    peer.playing = isMoving(player) && player.play_state != ::prolink::PlayState::CuePlay;
+    switch (player.play_state) {
+    case ::prolink::PlayState::Playing:
+    case ::prolink::PlayState::Looping:
+    // The medium was pulled and the deck is looping what it had. Still making
+    // sound and still on the grid -- the emergency is the medium's, not the
+    // music's.
+    case ::prolink::PlayState::Emergency:
+        peer.playing = true;
+        break;
+    case ::prolink::PlayState::CuePlay:
+        peer.auditioning = true;
+        break;
+    default:
+        // Paused, cued, searching, spun down, loading, nothing loaded.
+        break;
+    }
     peer.beatBpm = player.effective_bpm;
     peer.beatAgeMs = player.beat_age_ms;
     peer.statusBpm = player.has_status && player.track_bpm > 0.0
             ? player.track_bpm * (1.0 + player.pitch_percent / 100.0)
             : -1.0;
     peer.barPhase = player.bar_phase;
+    peer.barPosition = player.bar_position;
     return peer;
 }
 
@@ -964,41 +903,17 @@ void ProLinkNetworkService::publishMaster() {
 
     // **Who to draw is "the deck I am mixing against", not literally "the
     // master".** The two are the same until this deck takes mastership, and
-    // then they stop being: the master becomes us, the top row would be our own
-    // phase drawn above our own phase, and the meter goes blank or useless at
-    // exactly the moment a DJ has just declared they are the one being
-    // followed. So the master comes first, paused or not, then any other
-    // playing deck, then any other deck that has a place on its grid at all --
-    // one being cued up is still the deck the next mix lines up against. Ties
-    // go to the lowest player number.
-    const ::prolink::Player* pShow = nullptr;
-    Placement shown;
-    int shownRank = 0;
-    for (const ::prolink::Player& player : players) {
-        const Placement placement = placementOf(player, ours);
-        if (placement.barPhase < 0.0) {
-            continue;
-        }
-        const int rank = player.is_master ? 3 : (placement.live ? 2 : 1);
-        if (rank > shownRank) {
-            pShow = &player;
-            shown = placement;
-            shownRank = rank;
-        }
-    }
-    if (pShow != nullptr) {
-        m_pControls->masterDevice()->forceSet(pShow->number);
-        m_pControls->meterIsMaster()->forceSet(pShow->is_master ? 1.0 : 0.0);
-        m_pControls->meterLive()->forceSet(shown.live ? 1.0 : 0.0);
-        m_pControls->masterBarPhase()->forceSet(shown.barPhase);
-        return;
-    }
-    // Nobody to draw. Not the same as a deck at phase zero, which is why the
-    // phase goes to -1 rather than to 0.
-    m_pControls->masterDevice()->forceSet(0.0);
-    m_pControls->meterIsMaster()->forceSet(0.0);
-    m_pControls->meterLive()->forceSet(0.0);
-    m_pControls->masterBarPhase()->forceSet(-1.0);
+    // then they stop being: the master becomes us, and the meter would go
+    // blank at exactly the moment a DJ has just declared they are the one
+    // being followed. See chooseMeterDeck() for the rules.
+    publishMeter(mixxx::prolink::chooseMeterDeck(peers, ours));
+}
+
+void ProLinkNetworkService::publishMeter(const mixxx::prolink::MeterDeck& deck) {
+    m_pControls->masterDevice()->forceSet(deck.device);
+    m_pControls->meterIsMaster()->forceSet(deck.isMaster ? 1.0 : 0.0);
+    m_pControls->meterLive()->forceSet(deck.live ? 1.0 : 0.0);
+    m_pControls->masterBarPhase()->forceSet(deck.barPhase);
 }
 
 void ProLinkNetworkService::clearMaster() {
@@ -1007,10 +922,7 @@ void ProLinkNetworkService::clearMaster() {
     m_pControls->following()->forceSet(0.0);
     m_phaseSamples.clear();
     m_pControls->isMaster()->forceSet(0.0);
-    m_pControls->masterDevice()->forceSet(0.0);
-    m_pControls->meterIsMaster()->forceSet(0.0);
-    m_pControls->meterLive()->forceSet(0.0);
-    m_pControls->masterBarPhase()->forceSet(-1.0);
+    publishMeter(mixxx::prolink::MeterDeck());
     publishMasterTrack(MasterTrack());
 }
 

@@ -221,12 +221,15 @@ class ProLinkNetworkService : public QObject {
     /// Drain the library's events and re-read its tables. On a timer.
     void poll();
 
-    /// Publish the tempo master's number, tempo and bar phase as controls.
-    ///
-    /// `[ProLink] master_device` and `master_bar_phase`, which is
-    /// what the phase-meter widget reads. Read-only, because nothing in Mixxx
-    /// may tell a CDJ what phase it is at.
+    /// Settle who holds tempo master, then publish what follows from it: our
+    /// MASTER button, the master's track for KEY SYNC, what SYNC follows,
+    /// and the deck the phase meter draws.
     void publishMaster();
+    /// The deck the phase meter draws: `[ProLink] master_device`,
+    /// `meter_is_master`, `meter_live` and `master_bar_phase`, which the
+    /// phase-meter widget reads. Read-only, because nothing in Mixxx may tell
+    /// a CDJ what phase it is at.
+    void publishMeter(const mixxx::prolink::MeterDeck& deck);
 
     /// Publish that there is no master and we are not it. For a session that
     /// has stopped, which has no players to say so.

@@ -4,7 +4,9 @@
 
 namespace {
 
+using mixxx::prolink::chooseMeterDeck;
 using mixxx::prolink::chooseSyncSource;
+using mixxx::prolink::MeterDeck;
 using mixxx::prolink::SyncPeer;
 using mixxx::prolink::SyncSource;
 
@@ -21,6 +23,7 @@ SyncPeer playing(int number, double bpm = 128.0) {
     peer.beatAgeMs = 100.0;
     peer.statusBpm = bpm;
     peer.barPhase = 0.3;
+    peer.barPosition = 0.25;
     return peer;
 }
 
@@ -125,4 +128,85 @@ TEST(SyncSource, AnOverdueBeatIsFlagged) {
     EXPECT_TRUE(chooseSyncSource({cdj}, kUs).beatOverdue);
     cdj.beatAgeMs = 200.0;
     EXPECT_FALSE(chooseSyncSource({cdj}, kUs).beatOverdue);
+}
+
+// The master is drawn first, paused or not: it is the deck a DJ cueing up
+// wants to see. Paused, it is held where its status puts it.
+TEST(MeterDeck, TheMasterFirstHeldWhereItStandsWhilePaused) {
+    const MeterDeck deck = chooseMeterDeck({playing(1), master(paused(playing(4)))}, kUs);
+    EXPECT_EQ(4, deck.device);
+    EXPECT_TRUE(deck.isMaster);
+    EXPECT_FALSE(deck.live);
+    EXPECT_DOUBLE_EQ(0.25, deck.barPhase);
+}
+
+TEST(MeterDeck, WithNoMasterAPlayingDeckThenTheLowest) {
+    EXPECT_EQ(4, chooseMeterDeck({paused(playing(1)), playing(4)}, kUs).device);
+    EXPECT_EQ(2, chooseMeterDeck({playing(4), playing(2)}, kUs).device);
+    const MeterDeck cued = chooseMeterDeck({paused(playing(2))}, kUs);
+    EXPECT_EQ(2, cued.device);
+    EXPECT_FALSE(cued.live);
+}
+
+// A deck that has gone keeps its last status, mastership included, until it
+// is forgotten some 30 s later.
+TEST(MeterDeck, ADeckThatHasGoneSilentIsNotDrawn) {
+    SyncPeer gone = master(playing(2));
+    gone.statusAgeMs = 4000.0;
+    gone.beatAgeMs = 4000.0;
+    const MeterDeck deck = chooseMeterDeck({gone, paused(playing(4))}, kUs);
+    EXPECT_EQ(4, deck.device);
+    EXPECT_FALSE(deck.isMaster);
+    EXPECT_EQ(0, chooseMeterDeck({gone}, kUs).device);
+}
+
+// Status still says playing, but no beat has come for two beats: the phase
+// from beats stands at the end of the last one. Status places the deck.
+TEST(MeterDeck, HeldOnceItsBeatsStop) {
+    SyncPeer cdj = playing(2, 120.0); // 500 ms a beat
+    cdj.beatAgeMs = 1000.0;
+    cdj.barPhase = 0.5;
+    const MeterDeck deck = chooseMeterDeck({cdj}, kUs);
+    EXPECT_FALSE(deck.live);
+    EXPECT_DOUBLE_EQ(0.25, deck.barPhase);
+}
+
+// Just paused: its last beat is fresh, but status says it has stopped.
+TEST(MeterDeck, HeldWhileStatusSaysStopped) {
+    SyncPeer cdj = playing(2);
+    cdj.playing = false;
+    const MeterDeck deck = chooseMeterDeck({cdj}, kUs);
+    EXPECT_FALSE(deck.live);
+    EXPECT_DOUBLE_EQ(0.25, deck.barPhase);
+}
+
+// CUE held moves the playhead, and the meter shows it moving.
+TEST(MeterDeck, AuditioningTheCueIsDrawnLive) {
+    SyncPeer cdj = playing(2);
+    cdj.playing = false;
+    cdj.auditioning = true;
+    const MeterDeck deck = chooseMeterDeck({cdj}, kUs);
+    EXPECT_TRUE(deck.live);
+    EXPECT_DOUBLE_EQ(0.3, deck.barPhase);
+}
+
+// We are not announcing, so no status reaches us: beats alone.
+TEST(MeterDeck, WithoutStatusDrawnWhileItsBeatsArrive) {
+    SyncPeer cdj;
+    cdj.number = 2;
+    cdj.beatBpm = 128.0;
+    cdj.beatAgeMs = 100.0;
+    cdj.barPhase = 0.3;
+    const MeterDeck deck = chooseMeterDeck({cdj}, kUs);
+    EXPECT_EQ(2, deck.device);
+    EXPECT_TRUE(deck.live);
+    cdj.beatAgeMs = 2000.0;
+    EXPECT_EQ(0, chooseMeterDeck({cdj}, kUs).device);
+}
+
+// Our own beats come back to us, and a mixer beats as a metronome.
+TEST(MeterDeck, NeverOurselvesNorANonPlayer) {
+    const MeterDeck deck = chooseMeterDeck({master(playing(kUs)), playing(33)}, kUs);
+    EXPECT_EQ(0, deck.device);
+    EXPECT_LT(deck.barPhase, 0.0);
 }

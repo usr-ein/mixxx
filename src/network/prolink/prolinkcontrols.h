@@ -45,13 +45,13 @@ class ProLinkControls {
 
     /// The player the phase meter draws, `0` for none: the master when there
     /// is one, else a deck worth drawing. Not necessarily what SYNC follows;
-    /// see ProLinkNetworkService::publishMaster() and chooseSyncSource().
+    /// see chooseMeterDeck() and chooseSyncSource().
     ControlObject* masterDevice() const {
         return m_pMasterDevice.get();
     }
-    /// Where the deck the phase meter follows is in its bar, `0..1`, or `-1`
-    /// for none. The master first, held where its status says it stands while
-    /// it is paused; see ProLinkNetworkService::publishMaster().
+    /// Where the deck the phase meter draws is in its bar, `0..1`, or `-1`
+    /// for none. Held where its status says it stands while it is paused; see
+    /// chooseMeterDeck().
     ///
     /// `-1` rather than `0`, because a master sitting exactly on its downbeat
     /// is a real and common state and must not read as an absent one.

@@ -15,10 +15,16 @@ constexpr double kBeatOverdueMarginMs = 5.0;
 /// now: it stopped, or it has only just started again.
 constexpr double kBeatStaleIntervals = 1.25;
 
+/// Whether *peer*'s beats are still arriving: its last one is younger than a
+/// beat and a bit.
+bool isBeating(const SyncPeer& peer) {
+    return peer.beatBpm > 0.0 && peer.beatAgeMs >= 0.0 &&
+            peer.beatAgeMs < kBeatStaleIntervals * 60000.0 / peer.beatBpm;
+}
+
 /// Fill in tempo and phase for a deck that is playing.
 void takeTempoAndPhase(const SyncPeer& peer, SyncSource* pSource) {
-    const bool beating = peer.beatBpm > 0.0 && peer.beatAgeMs >= 0.0 &&
-            peer.beatAgeMs < kBeatStaleIntervals * 60000.0 / peer.beatBpm;
+    const bool beating = isBeating(peer);
     // Beats while they are fresh: they carry the tempo the deck is playing at
     // right now. Otherwise status, which a deck that has only just started (no
     // beat yet) or that we have never heard beat still states.
@@ -89,6 +95,44 @@ SyncSource chooseSyncSource(const std::vector<SyncPeer>& peers, int ours) {
         takeTempoAndPhase(*pFallback, &source);
     }
     return source;
+}
+
+MeterDeck chooseMeterDeck(const std::vector<SyncPeer>& peers, int ours) {
+    MeterDeck shown;
+    int shownRank = 0;
+    for (const SyncPeer& peer : peers) {
+        if (!isPlayerNumber(peer.number) || peer.number == ours) {
+            continue;
+        }
+        MeterDeck candidate;
+        candidate.device = peer.number;
+        if (!peer.hasStatus) {
+            if (!isBeating(peer)) {
+                continue;
+            }
+            candidate.barPhase = peer.barPhase;
+            candidate.live = true;
+        } else {
+            if (!isHeard(peer)) {
+                continue;
+            }
+            candidate.isMaster = peer.isMaster;
+            candidate.live = (peer.playing || peer.auditioning) && isBeating(peer) &&
+                    peer.barPhase >= 0.0;
+            // Not beating yet, too: the first beat after PLAY is up to a beat
+            // away, and status places the deck in the meantime.
+            candidate.barPhase = candidate.live ? peer.barPhase : peer.barPosition;
+        }
+        if (candidate.barPhase < 0.0) {
+            continue;
+        }
+        const int rank = candidate.isMaster ? 3 : (candidate.live ? 2 : 1);
+        if (rank > shownRank || (rank == shownRank && candidate.device < shown.device)) {
+            shown = candidate;
+            shownRank = rank;
+        }
+    }
+    return shown;
 }
 
 } // namespace prolink
