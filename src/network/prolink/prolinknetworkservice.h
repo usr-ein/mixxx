@@ -7,6 +7,7 @@
 #include <QObject>
 #include <QString>
 #include <memory>
+#include <vector>
 
 #include "network/prolink/prolinkdevice.h"
 #include "network/prolink/prolinkmediaquery.h"
@@ -313,6 +314,15 @@ class ProLinkNetworkService : public QObject {
     /// tempo takes a poll or two, and a phase alignment applied before that has
     /// landed is measured at the old tempo and walked away from by the new one.
     bool m_alignWhenTempoMatches = false;
+    /// The last few phase errors, which a correction is decided on. See
+    /// kPhaseSamples. Cleared whenever they stop describing the deck: a
+    /// correction, the DJ's hands, a tempo change, another deck followed.
+    std::vector<double> m_phaseSamples;
+    /// The player whose phase is being followed, or 0.
+    int m_followedDevice = 0;
+    /// Whether that player's next beat is due and has not arrived; see
+    /// kBeatOverdueMarginMs.
+    bool m_masterBeatOverdue = false;
     /// Whether the DJ is moving the deck by hand, so the phase hold must not.
     ///
     /// The jog touched (scratching) or bent, a loop or slip active, reverse,

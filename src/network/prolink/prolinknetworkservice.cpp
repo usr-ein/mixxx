@@ -8,6 +8,7 @@
 
 #include <algorithm>
 #include <cmath>
+#include <vector>
 
 #include "control/controlobject.h"
 #include "control/controlproxy.h"
@@ -55,6 +56,34 @@ constexpr int kMasterSettleMs = 1500;
 /// A correction has to have taken effect *and* been measured before the next
 /// one is considered, or one error is chased by a burst of overlapping seeks.
 constexpr int kPhaseHoldMs = 1500;
+
+/// How many phase-error samples the hold decides on: about half a second of
+/// polls.
+///
+/// One sample is a poor witness. Ours is read up to a buffer after the engine
+/// wrote it, the other deck's is extrapolated from a packet whose arrival
+/// jitters, and a single sample over the threshold used to trigger a seek of
+/// its own size -- turning noise into a real error, corrected back 1.5 s later.
+constexpr std::size_t kPhaseSamples = 15;
+/// How many of them a periodic correction waits for, and a landing.
+constexpr std::size_t kPhaseSamplesToHold = 8;
+constexpr std::size_t kPhaseSamplesToLand = 3;
+/// Below this a landing is not worth a seek: about 2 ms at 128 BPM.
+constexpr double kPhaseLandBeats = 0.005;
+/// How close to its next beat the followed deck may be before its phase is no
+/// longer trusted.
+///
+/// Its phase is extrapolated from its last beat packet and stops at the end
+/// of the beat rather than running on, so a packet that is merely late reads
+/// as a deck sitting on its beat while ours moves on -- a false error.
+constexpr double kBeatOverdueMarginMs = 5.0;
+
+/// The median of *samples*, which must not be empty.
+double medianOf(std::vector<double> samples) {
+    const auto middle = samples.begin() + samples.size() / 2;
+    std::nth_element(samples.begin(), middle, samples.end());
+    return *middle;
+}
 
 /// How long after the last jog bend the phase hold stays off.
 ///
@@ -537,23 +566,38 @@ void ProLinkNetworkService::followMaster() {
     // looped, slipping, previewed -- is being moved on purpose. See
     // holdSuspended().
     const bool settled = !m_holdSettle.isValid() || m_holdSettle.elapsed() > kSettleMs;
-    if (tempoMatched && !suspended && settled) {
+    if (!tempoMatched || suspended || !settled) {
+        // Whatever was measured before is about a deck that has since been
+        // moved, by hand or by a tempo change.
+        m_phaseSamples.clear();
+    } else {
         // **A sync that aligns once is not a sync.** Landing on the beat when
-        // the button is pressed is the easy half; the two then drift apart
-        // whenever the master's tempo is nudged, and nothing was closing that
-        // gap again. A CDJ holds the phase for as long as SYNC is lit.
-        //
-        // Rate-limited, so a correction always has time to take effect and be
-        // measured before the next one is considered -- otherwise a single
-        // error is chased by a burst of overlapping seeks.
+        // SYNC is pressed or the deck starts is the easy half; the two then
+        // drift apart whenever the master's tempo is nudged, and something has
+        // to close that gap again. A CDJ holds the phase for as long as SYNC
+        // is lit.
+        double error = 0.0;
+        if (phaseErrorBeats(&error)) {
+            if (m_phaseSamples.size() == kPhaseSamples) {
+                m_phaseSamples.erase(m_phaseSamples.begin());
+            }
+            m_phaseSamples.push_back(error);
+        }
+        // Rate-limited, so a correction has taken effect and been measured
+        // again before the next one is considered.
         const bool pending = m_alignWhenTempoMatches;
         const bool due = !m_phaseHold.isValid() || m_phaseHold.elapsed() > kPhaseHoldMs;
-        double error = 0.0;
-        if ((pending || due) && phaseErrorBeats(&error) &&
-                (pending || std::abs(error) > kPhaseSlipBeats)) {
+        const std::size_t needed = pending ? kPhaseSamplesToLand : kPhaseSamplesToHold;
+        if ((pending || due) && m_phaseSamples.size() >= needed) {
+            const double median = medianOf(m_phaseSamples);
+            const double threshold = pending ? kPhaseLandBeats : kPhaseSlipBeats;
             m_alignWhenTempoMatches = false;
-            m_phaseHold.start();
-            alignPhaseToMaster(error);
+            if (std::abs(median) > threshold) {
+                m_phaseHold.start();
+                // What was measured is from before the move.
+                m_phaseSamples.clear();
+                alignPhaseToMaster(median);
+            }
         }
     }
     reportPhaseDrift();
@@ -582,6 +626,11 @@ bool ProLinkNetworkService::phaseErrorBeats(double* pBeats) const {
     // grows without bound, and correcting it would drag our playhead every
     // second and a half towards a deck standing still.
     if (!m_masterPhaseLive) {
+        return false;
+    }
+    // Its next beat is due and not here yet: its phase is standing still at
+    // the end of the beat while ours moves on. See kBeatOverdueMarginMs.
+    if (m_masterBeatOverdue) {
         return false;
     }
     const double masterPhase = m_pControls->masterBarPhase()->get();
@@ -776,6 +825,18 @@ void ProLinkNetworkService::publishMaster() {
         }
     }
     m_masterPhaseLive = pShow != nullptr && shown.live;
+    m_masterBeatOverdue = false;
+    if (m_masterPhaseLive && pShow->effective_bpm > 0.0 && pShow->beat_age_ms >= 0.0) {
+        const double intervalMs = 60000.0 / pShow->effective_bpm;
+        m_masterBeatOverdue = pShow->beat_age_ms > intervalMs - kBeatOverdueMarginMs;
+    }
+    const int followed = pShow != nullptr ? static_cast<int>(pShow->number) : 0;
+    if (followed != m_followedDevice) {
+        // A different deck's phase: what was measured against the last one
+        // says nothing about this one.
+        m_followedDevice = followed;
+        m_phaseSamples.clear();
+    }
     if (pShow != nullptr) {
         m_pControls->masterDevice()->forceSet(pShow->number);
         // The tempo SYNC follows, with the pitch fader applied. The master's
@@ -797,6 +858,9 @@ void ProLinkNetworkService::publishMaster() {
 
 void ProLinkNetworkService::clearMaster() {
     m_masterPhaseLive = false;
+    m_masterBeatOverdue = false;
+    m_followedDevice = 0;
+    m_phaseSamples.clear();
     m_pControls->isMaster()->forceSet(0.0);
     m_pControls->masterDevice()->forceSet(0.0);
     m_pControls->masterBpm()->forceSet(0.0);
