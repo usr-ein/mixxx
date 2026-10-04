@@ -103,6 +103,10 @@ constexpr int kBendQuietMs = 600;
 /// read the position that produced, rather than the one from before it.
 constexpr int kSettleMs = 150;
 
+/// A status packet older than this describes a deck that may have gone. A
+/// deck sends one every ~200 ms.
+constexpr double kStatusFreshMs = mixxx::prolink::kStatusFreshMs;
+
 /// The player range. A CDJ-3000 rig goes up to six; a mixer is 33 and
 /// rekordbox is 17 and up.
 constexpr int kFirstPlayer = 1;
@@ -822,12 +826,22 @@ void ProLinkNetworkService::publishMaster() {
         if (!player.is_master || static_cast<int>(player.number) == ours) {
             continue;
         }
-        if (static_cast<int>(player.yielding_to) == ours) {
+        // **Only a claim we are still hearing.** A deck that has gone -- cable
+        // pulled, powered off -- keeps its last status, mastership included,
+        // until it is forgotten some 30 s later. Believing it, MASTER asked a
+        // deck that was not there and KEY SYNC offered its key.
+        if (player.status_age_ms < 0.0 || player.status_age_ms > kStatusFreshMs) {
+            continue;
+        }
+        const int successor = static_cast<int>(player.yielding_to);
+        if (successor == ours) {
             // Naming us its successor: a takeover of ours in flight, not a
             // rival claim (F52).
             continue;
         }
-        rivalMaster = static_cast<int>(player.number);
+        // Handing over to another deck: that deck is the master, a packet or
+        // two before its own status says so.
+        rivalMaster = successor != 0 ? successor : static_cast<int>(player.number);
         break;
     }
     const bool weAreMaster = reconcileMastership(rivalMaster);
