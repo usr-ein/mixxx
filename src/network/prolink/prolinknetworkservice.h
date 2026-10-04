@@ -440,8 +440,8 @@ class ProLinkNetworkService : public QObject {
     std::unique_ptr<ControlProxy> m_pDeckDuration;
     std::unique_ptr<ControlProxy> m_pDeckPlayPosition;
     std::unique_ptr<ControlProxy> m_pDeckBeatDistance;
-    /// `phase_nudge_beats`, the engine's exact move by a number of beats.
-    std::unique_ptr<ControlProxy> m_pDeckPhaseNudge;
+    /// `beatjump`, Mixxx's exact move by a number of beats.
+    std::unique_ptr<ControlProxy> m_pDeckBeatJump;
     /// `phase_trim`, the engine's small temporary change of speed that SYNC
     /// eases the phase back with; see setPhaseTrim().
     std::unique_ptr<ControlProxy> m_pDeckPhaseTrim;

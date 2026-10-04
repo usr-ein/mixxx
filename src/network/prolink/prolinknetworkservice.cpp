@@ -402,7 +402,7 @@ ProLinkNetworkService::ProLinkNetworkService(QObject* parent)
     m_pDeckDuration = deck("duration");
     m_pDeckPlayPosition = deck("playposition");
     m_pDeckBeatDistance = deck("beat_distance");
-    m_pDeckPhaseNudge = deck("phase_nudge_beats");
+    m_pDeckBeatJump = deck("beatjump");
     m_pDeckPhaseTrim = deck("phase_trim");
     m_pOurBeat = std::make_unique<AudibleBeatClock>(QString::fromLatin1(kDeckGroup), this);
 
@@ -751,21 +751,23 @@ void ProLinkNetworkService::reportPhaseDrift() {
 }
 
 void ProLinkNetworkService::alignPhaseToMaster(double beats) {
-    // **A nudge, not a seek.** The correction used to be written to
+    // **A beat jump, not a seek.** The correction used to be written to
     // `playposition`, and the deck never moved: a `playposition` write is a
     // standard seek, quantize (on, on this deck) turns it into a
     // phase-preserving one, and with no other Mixxx deck playing the engine
     // matches the deck against its own phase from before the seek -- so every
     // correction under half a beat landed exactly where it started.
-    // `phase_nudge_beats` is exact, measured in beats on the deck's own grid,
-    // and applied against the engine's position when the engine processes it
-    // rather than against one read here a callback earlier.
+    //
+    // `beatjump` is Mixxx's own exact move by a number of beats, fractions
+    // included, on the deck's grid, and it does not consult quantize. Inside a
+    // loop it would move the loop instead; holdSuspended() keeps the hold off
+    // in a loop, so it is never asked to.
     //
     // **Beats, not bars.** *beats* is already wrapped into half a beat either
     // way (phaseErrorBeats()): bar alignment across devices is not something
     // this corrects, so the playhead never moves further than that.
-    m_pDeckPhaseNudge->set(beats);
-    kLogger.debug() << "phase align: nudging" << beats
+    m_pDeckBeatJump->set(beats);
+    kLogger.debug() << "phase align: jumping" << beats
                     << "beats onto the followed deck's beat";
 }
 

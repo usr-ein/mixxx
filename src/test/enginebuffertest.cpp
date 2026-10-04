@@ -83,9 +83,11 @@ constexpr double kFakeTrackSeconds = 10.0;
 // Pro DJ Link SYNC moves the playhead a fraction of a beat to land on another
 // deck's beat. Through `playposition` that does nothing while the deck plays
 // with quantize on: the seek becomes phase-preserving and, with no other deck
-// playing, is matched against the deck's own phase from before the seek. This
-// pins both halves: the trap, and the control that does not fall into it.
-TEST_F(EngineBufferTest, PhaseNudgeMovesThePlayheadWithQuantizeOn) {
+// playing, is matched against the deck's own phase from before the seek. SYNC
+// uses `beatjump` instead; this pins both halves -- the trap, and the upstream
+// behaviour SYNC now relies on, that a fractional beat jump is exact under
+// quantize.
+TEST_F(EngineBufferTest, AFractionalBeatJumpMovesThePlayheadWithQuantizeOn) {
     m_pTrack1->trySetBeats(mixxx::Beats::fromConstTempo(
             m_pTrack1->getSampleRate(), mixxx::audio::kStartFramePos, mixxx::Bpm(120)));
     ControlObject::set(ConfigKey(m_sGroup1, "quantize"), 1.0);
@@ -103,53 +105,21 @@ TEST_F(EngineBufferTest, PhaseNudgeMovesThePlayheadWithQuantizeOn) {
     ASSERT_GT(step, 0.0);
 
     // The trap: a quarter of a beat further on, written as a position.
-    const double duration = kFakeTrackSeconds;
     const double quarterBeatSeconds = 0.25 * 60.0 / 120.0;
     const double before = ControlObject::get(ConfigKey(m_sGroup1, "beat_distance"));
     ControlObject::set(ConfigKey(m_sGroup1, "playposition"),
             ControlObject::get(ConfigKey(m_sGroup1, "playposition")) +
-                    quarterBeatSeconds / duration);
+                    quarterBeatSeconds / kFakeTrackSeconds);
     ProcessBuffer();
     EXPECT_NEAR(before + step,
             ControlObject::get(ConfigKey(m_sGroup1, "beat_distance")),
             1e-3);
 
-    // The control: the same quarter beat, as a nudge.
-    const double beforeNudge = ControlObject::get(ConfigKey(m_sGroup1, "beat_distance"));
-    ControlObject::set(ConfigKey(m_sGroup1, "phase_nudge_beats"), 0.25);
+    // The control: the same quarter beat, as a beat jump.
+    const double beforeJump = ControlObject::get(ConfigKey(m_sGroup1, "beat_distance"));
+    ControlObject::set(ConfigKey(m_sGroup1, "beatjump"), 0.25);
     ProcessBuffer();
-    EXPECT_NEAR(beforeNudge + step + 0.25,
-            ControlObject::get(ConfigKey(m_sGroup1, "beat_distance")),
-            1e-3);
-
-    // And backwards, by the same amount twice in a row: two nudges, not one.
-    ControlObject::set(ConfigKey(m_sGroup1, "phase_nudge_beats"), -0.1);
-    ProcessBuffer();
-    const double afterFirst = ControlObject::get(ConfigKey(m_sGroup1, "beat_distance"));
-    ControlObject::set(ConfigKey(m_sGroup1, "phase_nudge_beats"), -0.1);
-    ProcessBuffer();
-    EXPECT_NEAR(afterFirst + step - 0.1,
-            ControlObject::get(ConfigKey(m_sGroup1, "beat_distance")),
-            1e-3);
-}
-
-// A nudge inside an active loop would jump out of it: it is dropped instead.
-TEST_F(EngineBufferTest, PhaseNudgeIsDroppedInsideALoop) {
-    m_pTrack1->trySetBeats(mixxx::Beats::fromConstTempo(
-            m_pTrack1->getSampleRate(), mixxx::audio::kStartFramePos, mixxx::Bpm(120)));
-    ControlObject::set(ConfigKey(m_sGroup1, "play"), 1.0);
-    ProcessBuffer();
-    ControlObject::set(ConfigKey(m_sGroup1, "beatloop_4_activate"), 1.0);
-    ProcessBuffer();
-    ASSERT_GT(ControlObject::get(ConfigKey(m_sGroup1, "loop_enabled")), 0.0);
-    const double stepBefore = ControlObject::get(ConfigKey(m_sGroup1, "beat_distance"));
-    ProcessBuffer();
-    const double step = ControlObject::get(ConfigKey(m_sGroup1, "beat_distance")) - stepBefore;
-
-    const double before = ControlObject::get(ConfigKey(m_sGroup1, "beat_distance"));
-    ControlObject::set(ConfigKey(m_sGroup1, "phase_nudge_beats"), 0.25);
-    ProcessBuffer();
-    EXPECT_NEAR(before + step,
+    EXPECT_NEAR(beforeJump + step + 0.25,
             ControlObject::get(ConfigKey(m_sGroup1, "beat_distance")),
             1e-3);
 }
