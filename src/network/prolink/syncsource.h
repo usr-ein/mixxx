@@ -1,0 +1,88 @@
+#pragma once
+
+#include <vector>
+
+namespace mixxx {
+namespace prolink {
+
+/// One other device on the network, as SYNC needs to see it.
+///
+/// Plain data rather than the Rust bridge's Player, so the choice below can be
+/// tested without a network.
+struct SyncPeer {
+    int number = 0;
+    /// Whether any status packet has been heard; the status fields below mean
+    /// nothing otherwise.
+    bool hasStatus = false;
+    /// How long ago the last status arrived, ms; negative for never.
+    double statusAgeMs = -1.0;
+    bool isMaster = false;
+    /// The device it is handing master to, or 0.
+    int yieldingTo = 0;
+    bool isSynced = false;
+    /// Status says the playhead moves on its own and is heard: playing,
+    /// looping, or the emergency loop of a pulled medium.
+    bool playing = false;
+    /// Status says it is auditioning its cue (CUE held). Moving, but not a deck
+    /// anybody mixes against.
+    bool cuePlay = false;
+    /// The tempo from its last beat packet, pitch applied; <= 0 for none.
+    double beatBpm = -1.0;
+    /// How long ago that beat packet arrived, ms; negative for never.
+    double beatAgeMs = -1.0;
+    /// The tempo its status states, pitch applied; <= 0 for none.
+    double statusBpm = -1.0;
+    /// Where it is in its bar from its beats, 0..1; negative for none.
+    double barPhase = -1.0;
+};
+
+/// What a lit SYNC on this deck follows, this poll.
+struct SyncSource {
+    enum class Kind {
+        /// Nothing to follow: the fader leads.
+        None,
+        /// The tempo master.
+        Master,
+        /// No master on the network; a playing deck stands in (owner decision
+        /// 1).
+        Fallback,
+    };
+    Kind kind = Kind::None;
+    int device = 0;
+    /// The tempo to follow; <= 0 when there is a source but no tempo to take
+    /// from it, which means hold the tempo already playing.
+    double bpm = 0.0;
+    /// Its phase, 0..1 in the bar; negative for none.
+    double barPhase = -1.0;
+    /// Whether barPhase is a phase to correct against: from beats, fresh.
+    bool phaseLive = false;
+    /// Its next beat is due and has not arrived, so barPhase is standing still
+    /// at the end of the beat while ours moves on.
+    bool beatOverdue = false;
+    /// The master is there and not playing: paused, cued, auditioning its cue,
+    /// or with nothing loaded. SYNC lets go of it (owner decision 15).
+    bool masterStopped = false;
+};
+
+/// A status packet older than this describes a deck that may have gone. A deck
+/// sends one every ~200 ms.
+constexpr double kStatusFreshMs = 1000.0;
+
+/// Choose what a lit SYNC follows.
+///
+/// *ours* is this deck's player number, 0 before one is held.
+///
+///  * **The tempo master always wins** -- on fresh status, and not while it is
+///    handing master to someone else (its successor is about to be master).
+///    A master that is playing is followed: tempo, and phase when its beats
+///    are fresh. A master that is not playing is reported as stopped; the
+///    caller releases SYNC.
+///  * **With no master**, the lowest-numbered deck that is playing and has a
+///    tempo -- but never a deck that is itself synced and numbered above us:
+///    two synced decks with no master would otherwise follow each other, each
+///    copying the other's tempo, and neither could ever take master.
+///  * Only players 1-6, and never ourselves.
+SyncSource chooseSyncSource(const std::vector<SyncPeer>& peers, int ours);
+
+} // namespace prolink
+} // namespace mixxx

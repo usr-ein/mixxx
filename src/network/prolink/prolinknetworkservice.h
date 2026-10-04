@@ -12,6 +12,7 @@
 #include "network/prolink/prolinkdevice.h"
 #include "network/prolink/prolinkmediaquery.h"
 #include "network/prolink/server/prolinkservestatus.h"
+#include "network/prolink/syncsource.h"
 
 class ControlObject;
 class ControlProxy;
@@ -321,9 +322,11 @@ class ProLinkNetworkService : public QObject {
     std::vector<double> m_phaseSamples;
     /// The player whose phase is being followed, or 0.
     int m_followedDevice = 0;
-    /// Whether that player's next beat is due and has not arrived; see
-    /// kBeatOverdueMarginMs.
-    bool m_masterBeatOverdue = false;
+    /// What a lit SYNC follows, chosen each poll by chooseSyncSource().
+    SyncSource m_syncSource;
+    /// The player SYNC was following on the last poll, or 0; so that one
+    /// stopping can be told from a SYNC that never followed it.
+    int m_followingDevice = 0;
     /// Ease the phase: play *trim* (a fraction, +0.005 = 0.5% fast) off the
     /// deck's own speed until told otherwise. 0 stops. Written only on a
     /// change.
@@ -344,11 +347,6 @@ class ProLinkNetworkService : public QObject {
     QElapsedTimer m_driftReport;
     /// Since the last phase correction; see kPhaseHoldMs.
     QElapsedTimer m_phaseHold;
-    /// Whether the deck publishMaster() last drew is playing, its phase
-    /// interpolated from beats as they arrive. False for one drawn where its
-    /// status says it stands, which SYNC must not correct against; see
-    /// phaseErrorBeats().
-    bool m_masterPhaseLive = false;
     /// Set once publishPlayback() has warned that the deck has a tempo but no
     /// `file_bpm`, so it says so once rather than thirty times a second.
     bool m_warnedNoFileBpm = false;

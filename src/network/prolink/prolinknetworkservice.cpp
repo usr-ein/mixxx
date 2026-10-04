@@ -17,6 +17,7 @@
 #include "network/prolink/audiblebeatclock.h"
 #include "network/prolink/prolinkbeatposition.h"
 #include "network/prolink/prolinkcontrols.h"
+#include "network/prolink/syncsource.h"
 #include "network/prolink/synctempo.h"
 #include "prolink-cxx/src/lib.rs.h"
 #include "util/assert.h"
@@ -82,14 +83,6 @@ constexpr std::size_t kPhaseSamplesToHold = 8;
 constexpr std::size_t kPhaseSamplesToLand = 3;
 /// Below this a landing is not worth a seek: about 2 ms at 128 BPM.
 constexpr double kPhaseLandBeats = 0.005;
-/// How close to its next beat the followed deck may be before its phase is no
-/// longer trusted.
-///
-/// Its phase is extrapolated from its last beat packet and stops at the end
-/// of the beat rather than running on, so a packet that is merely late reads
-/// as a deck sitting on its beat while ours moves on -- a false error.
-constexpr double kBeatOverdueMarginMs = 5.0;
-
 /// The median of *samples*, which must not be empty.
 double medianOf(std::vector<double> samples) {
     const auto middle = samples.begin() + samples.size() / 2;
@@ -192,19 +185,24 @@ Placement placementOf(const ::prolink::Player& player, int ours) {
     return {player.bar_position, false};
 }
 
-/// A deck's tempo with its pitch fader applied, negative when not known.
-///
-/// From its beats where there are any, and from its status otherwise: a paused
-/// deck has sent none for a while, and one that has not played since we joined
-/// has never sent one, but status states the tempo either way.
-double tempoOf(const ::prolink::Player& player) {
-    if (player.effective_bpm > 0.0) {
-        return player.effective_bpm;
-    }
-    if (player.has_status && player.track_bpm > 0.0) {
-        return player.track_bpm * (1.0 + player.pitch_percent / 100.0);
-    }
-    return -1.0;
+/// *player* as SYNC sees it; see mixxx::prolink::chooseSyncSource().
+mixxx::prolink::SyncPeer syncPeerOf(const ::prolink::Player& player) {
+    mixxx::prolink::SyncPeer peer;
+    peer.number = static_cast<int>(player.number);
+    peer.hasStatus = player.has_status;
+    peer.statusAgeMs = player.status_age_ms;
+    peer.isMaster = player.is_master;
+    peer.yieldingTo = static_cast<int>(player.yielding_to);
+    peer.isSynced = player.is_synced;
+    peer.cuePlay = player.play_state == ::prolink::PlayState::CuePlay;
+    peer.playing = isMoving(player) && !peer.cuePlay;
+    peer.beatBpm = player.effective_bpm;
+    peer.beatAgeMs = player.beat_age_ms;
+    peer.statusBpm = player.has_status && player.track_bpm > 0.0
+            ? player.track_bpm * (1.0 + player.pitch_percent / 100.0)
+            : -1.0;
+    peer.barPhase = player.bar_phase;
+    return peer;
 }
 
 mixxx::prolink::MediaSlot toMixxxSlot(::prolink::Slot slot) {
@@ -538,8 +536,29 @@ void ProLinkNetworkService::followMaster() {
     SyncTempo::State state;
     state.syncEnabled = m_pControls->syncEnabled()->get() > 0.0;
     state.isMaster = m_pControls->isMaster()->get() > 0.0;
-    state.masterBpm = m_pControls->masterBpm()->get();
-    if (SyncTempo::decide(state) != SyncTempo::Source::Master) {
+    state.masterBpm = m_syncSource.bpm;
+
+    // **The master pausing ends the follow** (owner decision 15). The tempo it
+    // was being followed at carries on as this deck's own, the fader has to
+    // catch up with it, and SYNC goes dark: the deck follows again only when
+    // the DJ presses SYNC. Following on would mean following whatever that
+    // master does while nobody can hear it -- a new track loaded, its pitch
+    // fader moved -- and jumping to it on air the moment it plays again.
+    if (state.syncEnabled && !state.isMaster && m_syncSource.masterStopped &&
+            m_followingDevice != 0 && m_followingDevice == m_syncSource.device) {
+        kLogger.info() << "player" << m_followingDevice
+                       << "stopped while we followed it; releasing SYNC";
+        m_pControls->syncEnabled()->set(0.0);
+        if (m_pImpl->pSession) {
+            (*m_pImpl->pSession)->set_synced(false);
+        }
+        state.syncEnabled = false;
+    }
+
+    const bool following = SyncTempo::decide(state) == SyncTempo::Source::Master;
+    m_followingDevice = following ? m_syncSource.device : 0;
+    m_pControls->following()->forceSet(following ? 1.0 : 0.0);
+    if (!following) {
         setPhaseTrim(0.0);
         return;
     }
@@ -670,15 +689,15 @@ bool ProLinkNetworkService::phaseErrorBeats(double* pBeats) const {
     // to lock to. Measuring a playing deck against it reads as an error that
     // grows without bound, and correcting it would drag our playhead every
     // second and a half towards a deck standing still.
-    if (!m_masterPhaseLive) {
+    if (!m_syncSource.phaseLive) {
         return false;
     }
     // Its next beat is due and not here yet: its phase is standing still at
-    // the end of the beat while ours moves on. See kBeatOverdueMarginMs.
-    if (m_masterBeatOverdue) {
+    // the end of the beat while ours moves on.
+    if (m_syncSource.beatOverdue) {
         return false;
     }
-    const double masterPhase = m_pControls->masterBarPhase()->get();
+    const double masterPhase = m_syncSource.barPhase;
     const double duration = m_pDeckDuration->get();
     const double fileBpm = m_pDeckFileBpm->get();
     if (masterPhase < 0.0 || duration <= 0.0 || fileBpm <= 0.0) {
@@ -722,7 +741,7 @@ void ProLinkNetworkService::reportPhaseDrift() {
     // which cost three rounds of reasoning about a number that turned out to be
     // measured against the wrong tempo.
     kLogger.debug() << "phase drift" << beats * 60000.0 / effectiveBpm << "ms ("
-                    << beats << "beats ) -- master" << m_pControls->masterBarPhase()->get()
+                    << beats << "beats ) -- followed" << m_syncSource.barPhase
                     << "ours"
                     << mixxx::prolink::barPhaseOf(m_pOurBeat->now())
                     << "beat distance" << m_pDeckBeatDistance->get();
@@ -838,6 +857,24 @@ void ProLinkNetworkService::publishMaster() {
     }
     publishMasterTrack(masterTrack);
 
+    // **What SYNC follows, chosen on its own.** It used to be whatever the
+    // phase meter drew, and the meter's choice is a different question -- it
+    // will show a deck being cued up, which nobody asked to follow. See
+    // chooseSyncSource() for the rules.
+    std::vector<mixxx::prolink::SyncPeer> peers;
+    peers.reserve(players.size());
+    for (const ::prolink::Player& player : players) {
+        peers.push_back(syncPeerOf(player));
+    }
+    m_syncSource = mixxx::prolink::chooseSyncSource(peers, ours);
+    if (m_syncSource.device != m_followedDevice) {
+        // A different deck's phase: what was measured against the last one
+        // says nothing about this one.
+        m_followedDevice = m_syncSource.device;
+        m_phaseSamples.clear();
+    }
+    m_pControls->masterBpm()->forceSet(m_syncSource.bpm > 0.0 ? m_syncSource.bpm : 0.0);
+
     // **Who to draw is "the deck I am mixing against", not literally "the
     // master".** The two are the same until this deck takes mastership, and
     // then they stop being: the master becomes us, the top row would be our own
@@ -862,42 +899,21 @@ void ProLinkNetworkService::publishMaster() {
             shownRank = rank;
         }
     }
-    m_masterPhaseLive = pShow != nullptr && shown.live;
-    m_masterBeatOverdue = false;
-    if (m_masterPhaseLive && pShow->effective_bpm > 0.0 && pShow->beat_age_ms >= 0.0) {
-        const double intervalMs = 60000.0 / pShow->effective_bpm;
-        m_masterBeatOverdue = pShow->beat_age_ms > intervalMs - kBeatOverdueMarginMs;
-    }
-    const int followed = pShow != nullptr ? static_cast<int>(pShow->number) : 0;
-    if (followed != m_followedDevice) {
-        // A different deck's phase: what was measured against the last one
-        // says nothing about this one.
-        m_followedDevice = followed;
-        m_phaseSamples.clear();
-    }
     if (pShow != nullptr) {
         m_pControls->masterDevice()->forceSet(pShow->number);
-        // The tempo SYNC follows, with the pitch fader applied. The master's
-        // whether or not it is playing -- a paused master's tempo is still the
-        // tempo -- and otherwise only a playing deck's: a stopped deck that is
-        // merely the best thing to draw is not a tempo anybody asked to follow.
-        // Negative for "not known", which must not be taken for a tempo.
-        const bool followable = pShow->is_master || shown.live;
-        m_pControls->masterBpm()->forceSet(followable ? tempoOf(*pShow) : 0.0);
         m_pControls->masterBarPhase()->forceSet(shown.barPhase);
         return;
     }
     // Nobody to draw. Not the same as a deck at phase zero, which is why the
     // phase goes to -1 rather than to 0.
     m_pControls->masterDevice()->forceSet(0.0);
-    m_pControls->masterBpm()->forceSet(0.0);
     m_pControls->masterBarPhase()->forceSet(-1.0);
 }
 
 void ProLinkNetworkService::clearMaster() {
-    m_masterPhaseLive = false;
-    m_masterBeatOverdue = false;
+    m_syncSource = mixxx::prolink::SyncSource();
     m_followedDevice = 0;
+    m_pControls->following()->forceSet(0.0);
     m_phaseSamples.clear();
     m_pControls->isMaster()->forceSet(0.0);
     m_pControls->masterDevice()->forceSet(0.0);

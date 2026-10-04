@@ -70,6 +70,12 @@ class ProLinkControls {
     ControlObject* isMaster() const {
         return m_pIsMaster.get();
     }
+    /// Whether SYNC is following a deck right now: lit, not master, and with
+    /// a tempo to follow. While it is, the tempo fader is connected to
+    /// nothing. Read-only.
+    ControlObject* following() const {
+        return m_pFollowing.get();
+    }
     /// SYNC: follow the network master's tempo, and say so on the wire.
     ControlPushButton* syncEnabled() const {
         return m_pSyncEnabled.get();
@@ -109,6 +115,7 @@ class ProLinkControls {
     std::unique_ptr<ControlPushButton> m_pTakeMaster;
     std::unique_ptr<ControlObject> m_pIsMaster;
     std::unique_ptr<ControlPushButton> m_pSyncEnabled;
+    std::unique_ptr<ControlObject> m_pFollowing;
     std::unique_ptr<ControlPushButton> m_pKeySyncEnabled;
     std::unique_ptr<ControlObject> m_pKeySyncAvailable;
     std::unique_ptr<ControlObject> m_pPhaseTrimMs;

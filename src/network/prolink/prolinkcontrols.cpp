@@ -46,6 +46,9 @@ ProLinkControls::ProLinkControls() {
 
     m_pSyncEnabled = std::make_unique<ControlPushButton>(key("sync_enabled"));
     m_pSyncEnabled->setButtonMode(ControlPushButton::TOGGLE);
+    m_pFollowing = std::make_unique<ControlObject>(key("following"));
+    m_pFollowing->setReadOnly();
+    m_pFollowing->forceSet(0.0);
 
     // TOGGLE, unlike `take_master`: this one is not a request anybody has to
     // grant. It latches a key off the network and then holds it, so it has a
