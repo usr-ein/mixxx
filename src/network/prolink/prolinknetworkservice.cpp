@@ -104,10 +104,6 @@ constexpr int kBendQuietMs = 600;
 /// read the position that produced, rather than the one from before it.
 constexpr int kSettleMs = 150;
 
-/// The player range. A CDJ-3000 rig goes up to six; a mixer is 33 and
-/// rekordbox is 17 and up.
-constexpr int kFirstPlayer = 1;
-constexpr int kLastPlayer = 6;
 
 /// Whether a deck's status says its playhead is moving on its own.
 bool isMoving(const ::prolink::Player& player) {
@@ -171,8 +167,8 @@ struct Placement {
 /// sends no CDJ status, and rekordbox sits above the player range: neither is a
 /// deck anyone is mixing against.
 Placement placementOf(const ::prolink::Player& player, int ours) {
-    if (static_cast<int>(player.number) == ours || player.number < kFirstPlayer ||
-            player.number > kLastPlayer) {
+    if (static_cast<int>(player.number) == ours ||
+            !mixxx::prolink::isPlayerNumber(static_cast<int>(player.number))) {
         return {};
     }
     if (!player.has_status) {
@@ -195,8 +191,7 @@ mixxx::prolink::SyncPeer syncPeerOf(const ::prolink::Player& player) {
     peer.isMaster = player.is_master;
     peer.yieldingTo = static_cast<int>(player.yielding_to);
     peer.isSynced = player.is_synced;
-    peer.cuePlay = player.play_state == ::prolink::PlayState::CuePlay;
-    peer.playing = isMoving(player) && !peer.cuePlay;
+    peer.playing = isMoving(player) && player.play_state != ::prolink::PlayState::CuePlay;
     peer.beatBpm = player.effective_bpm;
     peer.beatAgeMs = player.beat_age_ms;
     peer.statusBpm = player.has_status && player.track_bpm > 0.0
@@ -515,16 +510,8 @@ void ProLinkNetworkService::followMaster() {
         return;
     }
 
-    // Which of the eight states this is, and therefore whether the tempo comes
-    // off the wire or off the fader. The table and the reasoning are in
-    // docs/tempo-sync.md; the decision itself is in SyncTempo so that every row
-    // of that table is a test rather than a branch nobody can find.
-    //
-    // Nothing to do in the Fader case: not writing the tempo *is* letting the
-    // fader have it. Catching up afterwards is `soft-takeover` in the mapping,
-    // which is Mixxx's own.
-    // Tracked whatever the sync state, so the release is seen even if SYNC
-    // was pressed in the meantime.
+    // Whether the DJ has the deck. Tracked whatever the sync state, so the
+    // release is seen even if SYNC was pressed in the meantime.
     const bool suspended = holdSuspended();
     if (m_holdWasSuspended && !suspended) {
         // **Back on the beat after the DJ lets go** -- of the jog, a loop,
@@ -534,6 +521,14 @@ void ProLinkNetworkService::followMaster() {
     }
     m_holdWasSuspended = suspended;
 
+    // Which of the eight states this is, and therefore whether the tempo comes
+    // off the wire or off the fader. The table and the reasoning are in
+    // docs/tempo-sync.md; the decision itself is in SyncTempo so that every row
+    // of that table is a test rather than a branch nobody can find.
+    //
+    // Nothing to do in the Fader case: not writing the tempo *is* letting the
+    // fader have it. Catching up afterwards is the mapping's pickup
+    // (TriMixxx.scripts.js, "Tempo fader"), which reads [ProLink],following.
     SyncTempo::State state;
     state.syncEnabled = m_pControls->syncEnabled()->get() > 0.0;
     state.isMaster = m_pControls->isMaster()->get() > 0.0;
@@ -570,17 +565,13 @@ void ProLinkNetworkService::followMaster() {
     }
     // **The tempo is the master's, exactly, and is not used to steer.**
     //
-    // An earlier version held the phase by trimming the tempo a fraction of a
-    // percent. It worked -- the error closed smoothly -- but it rewrote the
-    // tempo on every one of thirty polls a second, and the deck's own BPM
-    // readout jittered around the master's value for as long as SYNC was lit.
-    // A tempo display that will not sit still is worse than the drift it was
-    // correcting, because it is the number a DJ reads to decide whether the two
-    // decks agree at all.
-    //
-    // So the tempo is set once and left alone, and the phase is corrected by
-    // moving the playhead: a few tens of milliseconds, which is what a nudge on
-    // a jog wheel is, and inaudible on anything but a solo drum hit.
+    // An earlier version held the phase by trimming the `bpm` a fraction of a
+    // percent. It rewrote the tempo thirty times a second, and the deck's own
+    // BPM readout jittered around the master's value for as long as SYNC was
+    // lit -- worse than the drift, because it is the number a DJ reads to
+    // decide whether the two decks agree. So `bpm` is set once and left alone.
+    // The phase is landed with a beat jump and held with the engine's
+    // phase_trim, which the readout never sees; see below.
     //
     // A deadband rather than equality, because the master's effective tempo is
     // its centi-BPM times a fixed-point pitch and this deck's is whatever the
@@ -588,9 +579,7 @@ void ProLinkNetworkService::followMaster() {
     // and then stop.
     const bool tempoMatched = std::abs(masterBpm - ours) < kTempoMatchedBpm;
     if (!tempoMatched) {
-        ControlObject::set(ConfigKey(QString::fromLatin1(kDeckGroup),
-                                   QStringLiteral("bpm")),
-                masterBpm);
+        m_pDeckBpm->set(masterBpm);
     }
 
     // **Only while the deck is running on its own.** A paused deck's playhead
@@ -812,23 +801,22 @@ void ProLinkNetworkService::standDown() {
 }
 
 bool ProLinkNetworkService::manageMasterLikeACdj(
-        const std::vector<mixxx::prolink::SyncPeer>& peers,
-        int ours,
-        int rivalMaster,
-        bool weAreMaster) {
+        const std::vector<mixxx::prolink::SyncPeer>& peers, int ours, bool weAreMaster) {
 
     // Owner decision 13, first half: a deck handing master to us unasked --
     // a CDJ master stopping while our synced deck plays on -- is taken up.
-    if (!weAreMaster) {
-        for (const auto& peer : peers) {
-            if (peer.isMaster && peer.yieldingTo == ours && mixxx::prolink::isHeard(peer) &&
-                    (*m_pImpl->pSession)->accept_tempo_master()) {
-                return true;
-            }
-        }
+    if (!weAreMaster &&
+            std::any_of(peers.begin(), peers.end(), [ours](const auto& peer) {
+                return mixxx::prolink::isHeardMasterClaim(peer, ours) &&
+                        peer.yieldingTo == ours;
+            }) &&
+            (*m_pImpl->pSession)->accept_tempo_master()) {
+        return true;
     }
 
-    const bool deckPlaying = m_pDeckPlay->get() > 0.0;
+    // `play_latched`, not `play`: a cue held as a preview is not the deck
+    // playing, and must not hand master over or claim it.
+    const bool deckPlaying = m_pDeckPlayLatched->get() > 0.0;
     // Second half: when our deck stops while we are master, hand master to a
     // synced deck playing on, once per stop. If it does not pick it up we keep
     // it -- an empty mastership is worse.
@@ -848,12 +836,9 @@ bool ProLinkNetworkService::manageMasterLikeACdj(
     // Owner decisions 2 and 3: with no master on the network, a deck that is
     // playing and following nobody takes it, after a delay that orders decks
     // by number. See automaster::claimDelayMs().
-    bool anyClaim = rivalMaster != 0;
-    for (const auto& peer : peers) {
-        if (peer.isMaster && peer.number != ours && mixxx::prolink::isHeard(peer)) {
-            anyClaim = true;
-        }
-    }
+    const bool anyClaim = std::any_of(peers.begin(), peers.end(), [ours](const auto& peer) {
+        return mixxx::prolink::isHeardMasterClaim(peer, ours);
+    });
     automaster::ClaimInputs inputs;
     inputs.ours = ours;
     inputs.weAreMaster = weAreMaster;
@@ -916,14 +901,11 @@ void ProLinkNetworkService::publishMaster() {
     }
     int rivalMaster = 0;
     for (const auto& peer : peers) {
-        if (!peer.isMaster || peer.number == ours) {
-            continue;
-        }
         // **Only a claim we are still hearing.** A deck that has gone -- cable
         // pulled, powered off -- keeps its last status, mastership included,
         // until it is forgotten some 30 s later. Believing it, MASTER asked a
         // deck that was not there and KEY SYNC offered its key.
-        if (!mixxx::prolink::isHeard(peer)) {
+        if (!mixxx::prolink::isHeardMasterClaim(peer, ours)) {
             continue;
         }
         if (peer.yieldingTo == ours) {
@@ -937,7 +919,7 @@ void ProLinkNetworkService::publishMaster() {
         break;
     }
     bool weAreMaster = reconcileMastership(rivalMaster);
-    weAreMaster = manageMasterLikeACdj(peers, ours, rivalMaster, weAreMaster);
+    weAreMaster = manageMasterLikeACdj(peers, ours, weAreMaster);
     // Published here rather than beside the playback, because that returns
     // early when no track is loaded -- and holding tempo master with the deck
     // stopped is an ordinary state whose button must not go dark.
@@ -973,13 +955,12 @@ void ProLinkNetworkService::publishMaster() {
     // will show a deck being cued up, which nobody asked to follow. See
     // chooseSyncSource() for the rules.
     m_syncSource = mixxx::prolink::chooseSyncSource(peers, ours);
-    if (m_syncSource.device != m_followedDevice) {
+    if (m_syncSource.device != m_sampledDevice) {
         // A different deck's phase: what was measured against the last one
         // says nothing about this one.
-        m_followedDevice = m_syncSource.device;
+        m_sampledDevice = m_syncSource.device;
         m_phaseSamples.clear();
     }
-    m_pControls->masterBpm()->forceSet(m_syncSource.bpm > 0.0 ? m_syncSource.bpm : 0.0);
 
     // **Who to draw is "the deck I am mixing against", not literally "the
     // master".** The two are the same until this deck takes mastership, and
@@ -1018,12 +999,11 @@ void ProLinkNetworkService::publishMaster() {
 
 void ProLinkNetworkService::clearMaster() {
     m_syncSource = mixxx::prolink::SyncSource();
-    m_followedDevice = 0;
+    m_sampledDevice = 0;
     m_pControls->following()->forceSet(0.0);
     m_phaseSamples.clear();
     m_pControls->isMaster()->forceSet(0.0);
     m_pControls->masterDevice()->forceSet(0.0);
-    m_pControls->masterBpm()->forceSet(0.0);
     m_pControls->masterBarPhase()->forceSet(-1.0);
     publishMasterTrack(MasterTrack());
 }
@@ -1100,7 +1080,8 @@ void ProLinkNetworkService::start() {
         // preference: at any other number a deck accepts our announcement in
         // full and then never offers us as a LINK source or asks us anything.
         config.preferred_number = static_cast<::std::uint8_t>(
-                m_preferredNumber >= 1 && m_preferredNumber <= 4 ? m_preferredNumber : 0);
+                mixxx::prolink::isOurPlayerNumber(m_preferredNumber) ? m_preferredNumber
+                                                                     : 0);
         m_pImpl->pSession = std::make_unique<::rust::Box<::prolink::Session>>(
                 ::prolink::open(config));
     } catch (const std::exception& error) {
@@ -1585,10 +1566,8 @@ void ProLinkNetworkService::syncAnnouncement() {
     }
     m_publishedNumber = number;
     m_announcedNumber = number;
-    if (number >= 1 && number <= 4) {
+    if (mixxx::prolink::isOurPlayerNumber(number)) {
         m_preferredNumber = number;
-    }
-    if (number >= 1 && number <= 4) {
         m_announceDetail = tr("announced as player %1").arg(number);
     } else if (number > 0) {
         // Every player number was defended, so the library settled for one

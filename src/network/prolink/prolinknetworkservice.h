@@ -223,7 +223,7 @@ class ProLinkNetworkService : public QObject {
 
     /// Publish the tempo master's number, tempo and bar phase as controls.
     ///
-    /// `[ProLink] master_device`, `master_bpm` and `master_bar_phase`, which is
+    /// `[ProLink] master_device` and `master_bar_phase`, which is
     /// what the phase-meter widget reads. Read-only, because nothing in Mixxx
     /// may tell a CDJ what phase it is at.
     void publishMaster();
@@ -284,10 +284,7 @@ class ProLinkNetworkService : public QObject {
     /// handover another deck offers us, offer it to a synced deck playing on
     /// when our deck stops, and claim it when the network has none. Returns
     /// whether we now hold it. See automaster.
-    bool manageMasterLikeACdj(const std::vector<SyncPeer>& peers,
-            int ours,
-            int rivalMaster,
-            bool weAreMaster);
+    bool manageMasterLikeACdj(const std::vector<SyncPeer>& peers, int ours, bool weAreMaster);
     /// Whether our claim was an auto-claim, which yields to any rival at once.
     bool m_autoClaimed = false;
     /// Auto-claims that met a rival, for the back-off; reset by a settled
@@ -343,8 +340,9 @@ class ProLinkNetworkService : public QObject {
     /// kPhaseSamples. Cleared whenever they stop describing the deck: a
     /// correction, the DJ's hands, a tempo change, another deck followed.
     std::vector<double> m_phaseSamples;
-    /// The player whose phase is being followed, or 0.
-    int m_followedDevice = 0;
+    /// The player the samples in m_phaseSamples were measured against, or 0;
+    /// when the sync source moves to another, they are dropped.
+    int m_sampledDevice = 0;
     /// What a lit SYNC follows, chosen each poll by chooseSyncSource().
     SyncSource m_syncSource;
     /// The player SYNC was following on the last poll, or 0; so that one

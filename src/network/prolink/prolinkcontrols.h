@@ -43,14 +43,11 @@ class ProLinkControls {
         return m_pPullDb.get();
     }
 
-    /// The tempo master's player number, `0` when nobody holds it.
+    /// The player the phase meter draws, `0` for none: the master when there
+    /// is one, else a deck worth drawing. Not necessarily what SYNC follows;
+    /// see ProLinkNetworkService::publishMaster() and chooseSyncSource().
     ControlObject* masterDevice() const {
         return m_pMasterDevice.get();
-    }
-    /// The tempo SYNC follows: the master's, paused or not, else a playing
-    /// deck's. `0` when there is none.
-    ControlObject* masterBpm() const {
-        return m_pMasterBpm.get();
     }
     /// Where the deck the phase meter follows is in its bar, `0..1`, or `-1`
     /// for none. The master first, held where its status says it stands while
@@ -112,7 +109,6 @@ class ProLinkControls {
   private:
     std::unique_ptr<ControlPushButton> m_pPullDb;
     std::unique_ptr<ControlObject> m_pMasterDevice;
-    std::unique_ptr<ControlObject> m_pMasterBpm;
     std::unique_ptr<ControlObject> m_pMasterBarPhase;
     std::unique_ptr<ControlPushButton> m_pTakeMaster;
     std::unique_ptr<ControlObject> m_pIsMaster;

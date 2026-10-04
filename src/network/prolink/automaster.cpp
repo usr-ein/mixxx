@@ -9,9 +9,6 @@ namespace automaster {
 namespace {
 constexpr int kBaseDelayMs = 3000;
 constexpr int kStepPerNumberMs = 1000;
-constexpr int kFirstPlayer = 1;
-constexpr int kLastBrowsablePlayer = 4;
-constexpr int kLastPlayer = 6;
 } // namespace
 
 int claimDelayMs(int ours, int collisions) {
@@ -20,21 +17,14 @@ int claimDelayMs(int ours, int collisions) {
 }
 
 bool mayClaim(const ClaimInputs& inputs) {
-    return inputs.ours >= kFirstPlayer && inputs.ours <= kLastBrowsablePlayer &&
-            !inputs.weAreMaster && !inputs.anyClaim && inputs.playingWithTempo &&
+    return isOurPlayerNumber(inputs.ours) && !inputs.weAreMaster && !inputs.anyClaim && inputs.playingWithTempo &&
             !inputs.following && !inputs.holdingOff;
 }
 
 int successorWhenStopped(const std::vector<SyncPeer>& peers, int ours) {
     int best = 0;
     for (const SyncPeer& peer : peers) {
-        if (peer.number < kFirstPlayer || peer.number > kLastPlayer || peer.number == ours) {
-            continue;
-        }
-        if (!isHeard(peer)) {
-            continue;
-        }
-        if (!peer.isSynced || !peer.playing || peer.cuePlay) {
+        if (!isHeardPlayer(peer, ours) || !peer.isSynced || !peer.playing) {
             continue;
         }
         if (best == 0 || peer.number < best) {

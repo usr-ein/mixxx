@@ -14,8 +14,10 @@ SyncTempo::Source inState(bool weAreMaster, bool ourSync, double masterBpm) {
     SyncTempo::State state;
     state.isMaster = weAreMaster;
     state.syncEnabled = ourSync;
-    // Zero when we are master: by the invariant nobody else holds it.
-    state.masterBpm = weAreMaster ? 0.0 : masterBpm;
+    // Taken as given even when we are master: the sync source can still name a
+    // tempo then (a playing deck we are not following), and it is the isMaster
+    // test, not a zero, that has to keep this deck off it.
+    state.masterBpm = masterBpm;
     return SyncTempo::decide(state);
 }
 
@@ -58,24 +60,24 @@ TEST(SyncTempoTable, CdjMasterUnsyncedAndWeFollowIt) {
 // --- Row 5: we are master and synced; CDJ not synced. ----------------------
 // Our SYNC is inert. The fader leads.
 TEST(SyncTempoTable, WeAreMasterAndSyncedWithNobodyFollowing) {
-    EXPECT_EQ(SyncTempo::Source::Fader, inState(true, true, 0.0));
+    EXPECT_EQ(SyncTempo::Source::Fader, inState(true, true, kCdjTempo));
 }
 
 // --- Row 6: we are master, no SYNC anywhere. -------------------------------
 TEST(SyncTempoTable, WeAreMasterAndNobodySynced) {
-    EXPECT_EQ(SyncTempo::Source::Fader, inState(true, false, 0.0));
+    EXPECT_EQ(SyncTempo::Source::Fader, inState(true, false, kCdjTempo));
 }
 
 // --- Row 7: we are master; the CDJ is synced and follows us. ---------------
 TEST(SyncTempoTable, WeAreMasterAndTheCdjFollowsUs) {
-    EXPECT_EQ(SyncTempo::Source::Fader, inState(true, false, 0.0));
+    EXPECT_EQ(SyncTempo::Source::Fader, inState(true, false, kCdjTempo));
 }
 
 // --- Row 8: we are master and synced; the CDJ follows us. ------------------
 // Row 7 with our SYNC flag also lit. Inert, and published all the same, because
 // a CDJ lights its own SYNC button from that bit.
 TEST(SyncTempoTable, WeAreMasterAndSyncedAndTheCdjFollowsUs) {
-    EXPECT_EQ(SyncTempo::Source::Fader, inState(true, true, 0.0));
+    EXPECT_EQ(SyncTempo::Source::Fader, inState(true, true, kCdjTempo));
 }
 
 // --- The two states the table does not have a row for. ---------------------

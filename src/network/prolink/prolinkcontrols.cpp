@@ -23,15 +23,12 @@ ProLinkControls::ProLinkControls() {
     m_pPullDb = std::make_unique<ControlPushButton>(key("pull_db"));
 
     m_pMasterDevice = std::make_unique<ControlObject>(key("master_device"));
-    m_pMasterBpm = std::make_unique<ControlObject>(key("master_bpm"));
     m_pMasterBarPhase = std::make_unique<ControlObject>(key("master_bar_phase"));
     // Read-only, because nothing in Mixxx may tell a CDJ what phase it is at
     // and a skin binding that could write these would look like it worked.
     m_pMasterDevice->setReadOnly();
-    m_pMasterBpm->setReadOnly();
     m_pMasterBarPhase->setReadOnly();
     m_pMasterBarPhase->forceSet(-1.0);
-    m_pMasterBpm->forceSet(0.0);
     m_pMasterDevice->forceSet(0.0);
 
     // TRIGGER, not TOGGLE: pressing MASTER is a request that may take a couple

@@ -64,12 +64,6 @@ TEST(SyncSource, APausedMasterIsReportedStoppedAndNotReplaced) {
     EXPECT_LE(source.bpm, 0.0);
 }
 
-TEST(SyncSource, AMasterAuditioningItsCueIsStopped) {
-    SyncPeer cdj = master(playing(2));
-    cdj.cuePlay = true;
-    EXPECT_TRUE(chooseSyncSource({cdj}, kUs).masterStopped);
-}
-
 // Its last status is 30 s old: it has gone, whatever it last said.
 TEST(SyncSource, AMasterThatHasGoneSilentIsIgnored) {
     SyncPeer gone = master(playing(2));

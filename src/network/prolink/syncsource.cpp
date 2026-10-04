@@ -1,12 +1,11 @@
 #include "network/prolink/syncsource.h"
 
+#include <algorithm>
+
 namespace mixxx {
 namespace prolink {
 
 namespace {
-
-constexpr int kFirstPlayer = 1;
-constexpr int kLastPlayer = 6;
 
 /// How much older than one beat interval a beat packet may be before the next
 /// one counts as overdue. The phase stops at the end of the beat rather than
@@ -15,11 +14,6 @@ constexpr double kBeatOverdueMarginMs = 5.0;
 /// A beat older than this many intervals says nothing about where the deck is
 /// now: it stopped, or it has only just started again.
 constexpr double kBeatStaleIntervals = 1.25;
-
-bool isCandidate(const SyncPeer& peer, int ours) {
-    return peer.number >= kFirstPlayer && peer.number <= kLastPlayer && peer.number != ours &&
-            isHeard(peer);
-}
 
 /// Fill in tempo and phase for a deck that is playing.
 void takeTempoAndPhase(const SyncPeer& peer, SyncSource* pSource) {
@@ -43,7 +37,7 @@ SyncSource chooseSyncSource(const std::vector<SyncPeer>& peers, int ours) {
 
     const SyncPeer* pMaster = nullptr;
     for (const SyncPeer& peer : peers) {
-        if (!isCandidate(peer, ours) || !peer.isMaster) {
+        if (!isHeardMasterClaim(peer, ours)) {
             continue;
         }
         // Handing over: to us, and we are about to be master; or to another
@@ -58,7 +52,7 @@ SyncSource chooseSyncSource(const std::vector<SyncPeer>& peers, int ours) {
     if (pMaster != nullptr) {
         source.kind = SyncSource::Kind::Master;
         source.device = pMaster->number;
-        if (!pMaster->playing || pMaster->cuePlay) {
+        if (!pMaster->playing) {
             source.masterStopped = true;
             return source;
         }
@@ -68,15 +62,15 @@ SyncSource chooseSyncSource(const std::vector<SyncPeer>& peers, int ours) {
 
     // Is anyone handing master over at all? Then there is about to be a
     // master, and nothing should be followed in the meantime.
-    for (const SyncPeer& peer : peers) {
-        if (isCandidate(peer, ours) && peer.isMaster) {
-            return source;
-        }
+    if (std::any_of(peers.begin(), peers.end(), [ours](const SyncPeer& peer) {
+            return isHeardMasterClaim(peer, ours);
+        })) {
+        return source;
     }
 
     const SyncPeer* pFallback = nullptr;
     for (const SyncPeer& peer : peers) {
-        if (!isCandidate(peer, ours) || !peer.playing || peer.cuePlay) {
+        if (!isHeardPlayer(peer, ours) || !peer.playing) {
             continue;
         }
         if (peer.beatBpm <= 0.0 && peer.statusBpm <= 0.0) {

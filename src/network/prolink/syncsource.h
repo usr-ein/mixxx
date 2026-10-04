@@ -21,11 +21,9 @@ struct SyncPeer {
     int yieldingTo = 0;
     bool isSynced = false;
     /// Status says the playhead moves on its own and is heard: playing,
-    /// looping, or the emergency loop of a pulled medium.
+    /// looping, or the emergency loop of a pulled medium. Not auditioning its
+    /// cue (CUE held): moving, but not a deck anybody mixes against.
     bool playing = false;
-    /// Status says it is auditioning its cue (CUE held). Moving, but not a deck
-    /// anybody mixes against.
-    bool cuePlay = false;
     /// The tempo from its last beat packet, pitch applied; <= 0 for none.
     double beatBpm = -1.0;
     /// How long ago that beat packet arrived, ms; negative for never.
@@ -68,9 +66,35 @@ struct SyncSource {
 /// sends one every ~200 ms.
 constexpr double kStatusFreshMs = 1000.0;
 
+/// Player numbers. A CDJ-3000 rig goes up to six; only 1-4 can be browsed,
+/// and so only 1-4 is a player number this deck can hold. A mixer is 33 and
+/// rekordbox 17 and up.
+constexpr int kFirstPlayer = 1;
+constexpr int kLastPlayer = 6;
+constexpr int kLastBrowsablePlayer = 4;
+
+inline bool isPlayerNumber(int number) {
+    return number >= kFirstPlayer && number <= kLastPlayer;
+}
+
+/// A number this deck can hold and be seen as a player at.
+inline bool isOurPlayerNumber(int number) {
+    return number >= kFirstPlayer && number <= kLastBrowsablePlayer;
+}
+
 /// Whether *peer*'s status is recent enough to describe it as it is now.
 inline bool isHeard(const SyncPeer& peer) {
     return peer.hasStatus && peer.statusAgeMs >= 0.0 && peer.statusAgeMs < kStatusFreshMs;
+}
+
+/// Another player, still being heard.
+inline bool isHeardPlayer(const SyncPeer& peer, int ours) {
+    return isPlayerNumber(peer.number) && peer.number != ours && isHeard(peer);
+}
+
+/// Another player, still being heard, that claims tempo master.
+inline bool isHeardMasterClaim(const SyncPeer& peer, int ours) {
+    return peer.isMaster && isHeardPlayer(peer, ours);
 }
 
 /// Choose what a lit SYNC follows.
