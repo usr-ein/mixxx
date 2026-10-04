@@ -177,8 +177,10 @@ COPY --from=build /mixxx.debug /mixxx.debug
 
 # Unit tests, for the parts of the tree that can be checked without hardware.
 #
-#   docker build --target unittest --build-arg GTEST_FILTER='Library*' \
-#       $(./checkout-id.sh --build-args) .
+#   docker buildx build --target unittest --build-arg GTEST_FILTER='Library*' \
+#       $(./checkout-id.sh --build-args) --output type=cacheonly .
+#
+# (--output type=cacheonly: the tests run, and no ~2 GB image is left behind.)
 #
 # **The Pro DJ Link tests are not here any more.** The protocol moved to
 # lib/prolink and its tests moved with it -- 659 of them, including a replay of
