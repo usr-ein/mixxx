@@ -16,7 +16,8 @@ constexpr double kBeatOverdueMarginMs = 5.0;
 constexpr double kBeatStaleIntervals = 1.25;
 
 /// Whether *peer*'s beats are still arriving: its last one is younger than a
-/// beat and a bit.
+/// beat and a quarter. Stricter than the bridge's `is_beating`, which allows
+/// 3 s: a phase from a beat that late stands still at the end of it.
 bool isBeating(const SyncPeer& peer) {
     return peer.beatBpm > 0.0 && peer.beatAgeMs >= 0.0 &&
             peer.beatAgeMs < kBeatStaleIntervals * 60000.0 / peer.beatBpm;

@@ -13,11 +13,11 @@ SyncTempo::Source SyncTempo::decide(const State& state) {
         return Source::Fader;
     }
     if (state.masterBpm <= 0.0) {
-        // Either nobody holds mastership — the seconds after power-on, before
-        // anyone has claimed — or the holder is stopped or empty and publishes
-        // the no-tempo sentinel. Following a zero would drag this deck to a
-        // standstill, and a fader that does nothing because of a master that
-        // does not exist is worse than no sync at all.
+        // Nothing to follow: no master and nobody playing, a master that has
+        // stopped (whose SYNC the service then releases, owner decision 15),
+        // or a deck with no tempo to take. Following a zero would drag this
+        // deck to a standstill, and a fader that does nothing because of a
+        // deck that is not there is worse than no sync at all.
         return Source::Fader;
     }
     return Source::Master;

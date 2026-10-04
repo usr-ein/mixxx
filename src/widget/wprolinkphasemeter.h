@@ -76,7 +76,8 @@ class WProLinkPhaseMeter : public WWidget {
             double phase,
             const QColor& colour,
             const QString& label);
-    /// The player number, over the ticks rather than beside them.
+    /// A row's label ("M3", "3", "M"), over its ticks rather than beside
+    /// them: the top bar has no width to spare for a label column.
     void drawOverlayLabel(QPainter* pPainter, const QRectF& rect, const QString& label);
 
     const QString m_group;

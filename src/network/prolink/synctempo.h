@@ -23,18 +23,19 @@ namespace prolink {
 /// back and meet the tempo before it takes over, or the first touch of it drops
 /// the tempo by however far the master had moved.
 ///
-/// That is `soft-takeover` in `TriMixxx.midi.xml`, which is Mixxx's own and is
-/// applied after the 14-bit fader value is assembled. Writing a second one here
-/// would mean two implementations racing over the same fader.
+/// That is the mapping's (`TriMixxx.scripts.js`, "Tempo fader"), which writes
+/// nothing to `rate` while `[ProLink],following` is set and catches the tempo
+/// on a crossing afterwards.
 class SyncTempo {
   public:
     enum class Source {
         /// This deck's own pitch fader, whatever the rest of the network is
-        /// doing. Mixxx's soft takeover decides when a moved fader takes
+        /// doing. The mapping's pickup decides when a moved fader takes
         /// effect.
         Fader,
-        /// The network master's tempo, and its phase with it. The fader is
-        /// decoupled for as long as this lasts.
+        /// The followed deck's tempo -- the master's, or with no master a
+        /// playing deck's -- and its phase with it. The fader is decoupled
+        /// for as long as this lasts.
         Master,
     };
 
@@ -43,8 +44,9 @@ class SyncTempo {
         bool syncEnabled = false;
         /// Whether this deck holds tempo master.
         bool isMaster = false;
-        /// The master's effective tempo, or 0 when nobody holds it or the
-        /// holder has no track.
+        /// The effective tempo of the deck SYNC follows -- the master, or with
+        /// no master a playing deck; see chooseSyncSource() -- or 0 when there
+        /// is none, or it has no tempo to take.
         double masterBpm = 0.0;
     };
 

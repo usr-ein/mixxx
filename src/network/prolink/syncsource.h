@@ -20,9 +20,10 @@ struct SyncPeer {
     /// The device it is handing master to, or 0.
     int yieldingTo = 0;
     bool isSynced = false;
-    /// Status says the playhead moves on its own and is heard: playing,
-    /// looping, or the emergency loop of a pulled medium. Not auditioning its
-    /// cue (CUE held): moving, but not a deck anybody mixes against.
+    /// Status says the playhead moves on its own and the deck is on air:
+    /// playing, looping, or the emergency loop of a pulled medium. Not
+    /// auditioning its cue (CUE held): moving, but not a deck anybody mixes
+    /// against.
     bool playing = false;
     /// Status says it is auditioning its cue: CUE held, the playhead moving
     /// until it is let go.

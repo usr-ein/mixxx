@@ -17,8 +17,8 @@ int claimDelayMs(int ours, int collisions) {
 }
 
 bool mayClaim(const ClaimInputs& inputs) {
-    return isOurPlayerNumber(inputs.ours) && !inputs.weAreMaster && !inputs.anyClaim && inputs.playingWithTempo &&
-            !inputs.following && !inputs.holdingOff;
+    return isOurPlayerNumber(inputs.ours) && !inputs.weAreMaster && !inputs.anyClaim &&
+            inputs.playingWithTempo && !inputs.following && !inputs.holdingOff;
 }
 
 int successorWhenStopped(const std::vector<SyncPeer>& peers, int ours) {

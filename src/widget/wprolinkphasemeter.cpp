@@ -20,10 +20,6 @@ constexpr int kBeatsPerBar = mixxx::prolink::kBeatsPerBar;
 /// the service polls, which is as smooth as the data gets.
 constexpr int kRepaintIntervalMs = 33;
 
-/// The player number is drawn *over* the top row rather than beside it. In the
-/// top bar there is no width to spare for a label column, and "which player"
-/// is the only thing a label was telling us that the rows do not.
-
 /// Beat marks are blocks rather than hairlines: this is read at a glance from
 /// arm's length, and a one-pixel line disappears against a waveform.
 constexpr int kDownbeatWidth = 9;

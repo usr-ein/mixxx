@@ -332,8 +332,8 @@ class ProLinkNetworkService : public QObject {
 
     /// Set when SYNC is engaged, and when the DJ lets go of the deck (which
     /// includes the deck starting to play): see holdSuspended(). Cleared once
-    /// the phase has been nudged. A SYNC press while the deck is under the
-    /// DJ's hands waits for the release.
+    /// the landing is decided, with a jump or without one. A SYNC press while
+    /// the deck is under the DJ's hands waits for the release.
     ///
     /// The two halves of a sync cannot happen at the same moment: matching the
     /// tempo takes a poll or two, and a phase alignment applied before that has

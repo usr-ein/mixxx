@@ -413,8 +413,7 @@ void ProLinkNetworkService::publishPlayback() {
         // BPM never reached `file_bpm` -- the state every rekordbox track
         // the browser loaded was in, silently, until Track learnt to recompute
         // its BPM once the duration is known. Said once, because it takes this
-        // deck off the network and its row off the phase meter, and nothing
-        // else would say so.
+        // deck off the network, and nothing else would say so.
         if (m_pDeckBpm->get() > 0.0 && !m_warnedNoFileBpm) {
             m_warnedNoFileBpm = true;
             kLogger.warning() << "the deck has a tempo of" << m_pDeckBpm->get()
@@ -632,9 +631,9 @@ bool ProLinkNetworkService::phaseErrorBeats(double* pBeats) const {
     if (masterPhase < 0.0 || ourPhase < 0.0) {
         return false;
     }
-    // Wrapped to the nearest **beat**, not the nearest bar. Bar alignment
-    // across devices is not knowable -- nothing in a Mixxx grid names a
-    // downbeat -- so chasing it would drag the track by up to two beats.
+    // Wrapped to the nearest **beat**, not the nearest bar (owner decision
+    // 14): lining the bars up would drag the track by up to two beats, and
+    // which bar the mix starts on is the DJ's call.
     double beats = (masterPhase - ourPhase) * mixxx::prolink::kBeatsPerBar;
     beats -= std::floor(beats);
     if (beats > 0.5) {
@@ -1331,6 +1330,11 @@ void ProLinkNetworkService::poll() {
         }
     }
 
+    // Before the events: a slot description is reported against its device's
+    // MAC, from this table, and a deck that joined since the last poll -- or
+    // during a stall -- must already be in it. The description is not sent
+    // twice.
+    syncDevices();
     for (const ::prolink::Event& event : (*m_pImpl->pSession)->drain_events()) {
         if (event.dropped > 0) {
             // This thread stopped draining the queue for seconds. Nothing is
@@ -1418,7 +1422,6 @@ void ProLinkNetworkService::poll() {
         }
     }
 
-    syncDevices();
     publishMaster();
     publishPlayback();
     followMaster();

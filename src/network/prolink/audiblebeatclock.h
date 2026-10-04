@@ -15,12 +15,12 @@ namespace prolink {
 
 /// Where a deck is on its beat grid **as it is heard**, now.
 ///
-/// `playposition` and `beat_distance` are the engine's: written at the end of
-/// each audio callback, and ahead of what comes out of the speakers by the
-/// output latency -- some 10-20 ms on the deck. Another player's beat packets
-/// arrive about when that player's beat is heard. Comparing the two directly
-/// put this deck's audio that far behind a CDJ while the phase meter showed
-/// them aligned, and told a CDJ following us to play that far ahead of us.
+/// `playposition` is the engine's: written at the end of each audio callback,
+/// and ahead of what comes out of the speakers by the output latency -- some
+/// 10-20 ms on the deck. Another player's beat packets arrive about when that
+/// player's beat is heard. Comparing the two directly put this deck's audio
+/// that far behind a CDJ while the phase meter showed them aligned, and told a
+/// CDJ following us to play that far ahead of us.
 ///
 /// So the comparison, the meter and what we publish all read this: the
 /// engine's position moved to the sample the DAC is playing this instant
