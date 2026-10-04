@@ -2256,10 +2256,10 @@ if(BUILD_TESTING)
     src/test/softtakeover_test.cpp
     src/test/streamingfile_test.cpp
     src/test/keysync_test.cpp
-  src/test/automaster_test.cpp
-  src/test/prolinkkeysync_test.cpp
-  src/test/syncsource_test.cpp
-  src/test/synctempo_test.cpp
+    src/test/automaster_test.cpp
+    src/test/prolinkkeysync_test.cpp
+    src/test/syncsource_test.cpp
+    src/test/synctempo_test.cpp
     src/test/soundproxy_test.cpp
     src/test/soundsourceproviderregistrytest.cpp
     src/test/sqliteliketest.cpp

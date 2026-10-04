@@ -179,14 +179,13 @@ void WTempoPanel::paintEvent(QPaintEvent* pEvent) {
     QString faderText;
     const double faderRate = m_pTempoFader->get();
     const bool following = m_pFollowing->valid() && m_pFollowing->get() > 0.0;
-    const double rateRatio = ratio;
-    if (!following && faderRate > kFaderUnknown && bpm > 0.0 && rateRatio > 0.0 &&
+    if (!following && faderRate > kFaderUnknown && bpm > 0.0 && ratio > 0.0 &&
             std::abs(faderRate - m_pRate->get()) > kSameRate) {
         // Mixxx's own arithmetic: the deck's tempo at this point of the grid
         // (bpm over rate_ratio, which is local_bpm on a variable grid), times
         // the ratio the fader would give, with the deck's own direction.
         const double dir = m_pRateDir->valid() ? m_pRateDir->get() : 1.0;
-        const double faderBpm = (bpm / rateRatio) * (1.0 + faderRate * range * dir);
+        const double faderBpm = (bpm / ratio) * (1.0 + faderRate * range * dir);
         faderText = QStringLiteral("%1").arg(faderBpm, 0, 'f', 2);
     }
 

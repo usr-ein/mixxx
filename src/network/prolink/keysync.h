@@ -66,6 +66,11 @@ class KeySync {
     /// answer by simply putting the button back.
     bool engage(const Link& link);
 
+    /// Pick up a latch that was already engaged on *key*, by an earlier
+    /// instance whose state outlived it. Not a new engagement: rule 1 was
+    /// checked when it was made.
+    void resume(mixxx::track::io::key::ChromaticKey key);
+
     /// Let go, forgetting the key. What to do with the deck's pitch afterwards
     /// is the caller's, not this class's.
     void release();

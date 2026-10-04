@@ -18,6 +18,14 @@ bool KeySync::engage(const Link& link) {
     return true;
 }
 
+void KeySync::resume(mixxx::track::io::key::ChromaticKey key) {
+    if (key == mixxx::track::io::key::INVALID) {
+        return;
+    }
+    m_target = key;
+    m_engaged = true;
+}
+
 void KeySync::release() {
     m_engaged = false;
     m_target = mixxx::track::io::key::INVALID;

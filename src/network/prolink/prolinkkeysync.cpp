@@ -56,10 +56,7 @@ ProLinkKeySync::ProLinkKeySync(QObject* pParent)
     const auto held = KeyUtils::keyFromNumericValue(m_pControls->keySyncTarget()->get());
     if (m_pControls->keySyncEnabled()->get() > 0.0 &&
             held != mixxx::track::io::key::INVALID) {
-        KeySync::Link link;
-        link.otherIsMaster = true;
-        link.masterKey = held;
-        m_state.engage(link);
+        m_state.resume(held);
         applyToDeck();
     } else if (m_pControls->keySyncEnabled()->get() > 0.0) {
         // Lit with nothing held: a state nothing can explain. Put the button
