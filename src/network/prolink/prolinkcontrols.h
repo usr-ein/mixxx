@@ -109,14 +109,6 @@ class ProLinkControls {
         return m_pKeySyncTarget.get();
     }
 
-    /// How much later this deck is heard than Mixxx's own latency accounts
-    /// for, in milliseconds, against a CDJ's beat packets. From mixxx.cfg
-    /// (`[ProLink] phase_trim_ms`), measured once per rig; see
-    /// AudibleBeatClock.
-    ControlObject* phaseTrimMs() const {
-        return m_pPhaseTrimMs.get();
-    }
-
   private:
     std::unique_ptr<ControlPushButton> m_pPullDb;
     std::unique_ptr<ControlObject> m_pMasterDevice;
@@ -129,6 +121,9 @@ class ProLinkControls {
     std::unique_ptr<ControlPushButton> m_pKeySyncEnabled;
     std::unique_ptr<ControlObject> m_pKeySyncAvailable;
     std::unique_ptr<ControlObject> m_pKeySyncTarget;
+    /// `[ProLink] phase_trim_ms`: how much later this deck is heard than
+    /// Mixxx's own latency accounts for, against a CDJ's beat packets. From
+    /// mixxx.cfg, measured once per rig; read by AudibleBeatClock.
     std::unique_ptr<ControlObject> m_pPhaseTrimMs;
 };
 

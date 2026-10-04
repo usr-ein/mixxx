@@ -400,8 +400,6 @@ ProLinkNetworkService::ProLinkNetworkService(QObject* parent)
     m_pDeckFileBpm = deck("file_bpm");
     m_pDeckPlay = deck("play");
     m_pDeckDuration = deck("duration");
-    m_pDeckPlayPosition = deck("playposition");
-    m_pDeckBeatDistance = deck("beat_distance");
     m_pDeckBeatJump = deck("beatjump");
     m_pDeckPhaseTrim = deck("phase_trim");
     m_pOurBeat = std::make_unique<AudibleBeatClock>(QString::fromLatin1(kDeckGroup), this);
@@ -701,14 +699,9 @@ bool ProLinkNetworkService::phaseErrorBeats(double* pBeats) const {
         return false;
     }
     const double masterPhase = m_syncSource.barPhase;
-    const double duration = m_pDeckDuration->get();
-    const double fileBpm = m_pDeckFileBpm->get();
-    if (masterPhase < 0.0 || duration <= 0.0 || fileBpm <= 0.0) {
-        return false;
-    }
     // Ours as heard, against theirs as heard: see AudibleBeatClock.
     const double ourPhase = mixxx::prolink::barPhaseOf(m_pOurBeat->now());
-    if (ourPhase < 0.0) {
+    if (masterPhase < 0.0 || ourPhase < 0.0) {
         return false;
     }
     // Wrapped to the nearest **beat**, not the nearest bar. Bar alignment
@@ -746,8 +739,7 @@ void ProLinkNetworkService::reportPhaseDrift() {
     kLogger.debug() << "phase drift" << beats * 60000.0 / effectiveBpm << "ms ("
                     << beats << "beats ) -- followed" << m_syncSource.barPhase
                     << "ours"
-                    << mixxx::prolink::barPhaseOf(m_pOurBeat->now())
-                    << "beat distance" << m_pDeckBeatDistance->get();
+                    << mixxx::prolink::barPhaseOf(m_pOurBeat->now());
 }
 
 void ProLinkNetworkService::alignPhaseToMaster(double beats) {

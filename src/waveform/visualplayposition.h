@@ -69,16 +69,13 @@ class VisualPlayPosition : public QObject {
             double audioBufferMicroS);
 
     double getAtNextVSync(VSyncThread* pVSyncThread);
-    /// The play position the DAC is outputting right now, as a fraction of
-    /// the track, or -1 when there is none.
+    /// How far the sample the DAC is outputting right now is from the
+    /// engine's position, in fractions of the track; 0 when unknown.
     ///
     /// getAtNextVSync()'s arithmetic, measured to this instant instead of to
     /// the next display frame. `playposition` is the engine's position, which
     /// leads what is heard by the output latency; a comparison with another
-    /// device's *audible* beat (Pro DJ Link) has to use this one.
-    double getAudibleAtNow();
-    /// What getAudibleAtNow() adds to the engine's position, in fractions of
-    /// the track: its value minus getEnginePlayPos()'s, or 0 when unknown.
+    /// device's *audible* beat (Pro DJ Link) has to account for this.
     double getAudibleOffsetNow();
     void getPlaySlipAtNextVSync(VSyncThread* pVSyncThread,
             double* playPosition,

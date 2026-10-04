@@ -83,12 +83,6 @@ class WProLinkPhaseMeter : public WWidget {
     /// exist by the time this widget does and need no retrying.
     std::unique_ptr<ControlProxy> m_pMasterDevice;
     std::unique_ptr<ControlProxy> m_pMasterBarPhase;
-    /// This deck.
-    std::unique_ptr<ControlProxy> m_pBeatDistance;
-    std::unique_ptr<ControlProxy> m_pBpm;
-    std::unique_ptr<ControlProxy> m_pFileBpm;
-    std::unique_ptr<ControlProxy> m_pDuration;
-    std::unique_ptr<ControlProxy> m_pPlayPosition;
     /// Our place on the grid as heard; see mixxx::prolink::AudibleBeatClock.
     std::unique_ptr<mixxx::prolink::AudibleBeatClock> m_pOurBeat;
 

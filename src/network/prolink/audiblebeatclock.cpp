@@ -20,6 +20,7 @@ AudibleBeatClock::AudibleBeatClock(const QString& group, QObject* pParent)
     m_pBeatDistance = control(group, "beat_distance");
     m_pDuration = control(group, "duration");
     m_pFileBpm = control(group, "file_bpm");
+    m_pBpm = control(group, "bpm");
     m_pRateRatio = control(group, "rate_ratio");
     m_pTrimMs = control(QStringLiteral("[ProLink]"), "phase_trim_ms");
 }
@@ -29,7 +30,10 @@ AudibleBeatClock::~AudibleBeatClock() = default;
 BeatPosition AudibleBeatClock::now() const {
     const double duration = m_pDuration->get();
     const double fileBpm = m_pFileBpm->get();
-    if (duration <= 0.0 || fileBpm <= 0.0) {
+    // All three, so the meter, SYNC and the network agree on when this deck
+    // has a phase at all. `bpm` is 0 for a moment after a load, before the
+    // engine has the grid, while `file_bpm` already has a value.
+    if (duration <= 0.0 || fileBpm <= 0.0 || m_pBpm->get() <= 0.0) {
         return BeatPosition();
     }
     // How far the DAC is from the engine, in track seconds, and the trim, in

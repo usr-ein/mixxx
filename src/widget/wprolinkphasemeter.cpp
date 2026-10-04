@@ -39,14 +39,6 @@ WProLinkPhaseMeter::WProLinkPhaseMeter(QWidget* pParent, const QString& group)
     };
     m_pMasterDevice = proLink("master_device");
     m_pMasterBarPhase = proLink("master_bar_phase");
-    const auto deck = [this](const char* item) {
-        return std::make_unique<ControlProxy>(m_group, QString::fromLatin1(item), this);
-    };
-    m_pBeatDistance = deck("beat_distance");
-    m_pBpm = deck("bpm");
-    m_pFileBpm = deck("file_bpm");
-    m_pDuration = deck("duration");
-    m_pPlayPosition = deck("playposition");
     m_pOurBeat = std::make_unique<mixxx::prolink::AudibleBeatClock>(m_group, this);
 
     // Polled rather than driven by valueChanged: the other deck's phase moves
@@ -168,13 +160,7 @@ void WProLinkPhaseMeter::paintEvent(QPaintEvent* pEvent) {
     // and the bar a CDJ is told we are in cannot drift apart, and so two rows
     // lined up on the meter are two beats lined up in the room. Only
     // when there is something to compare it to: see the class comment.
-    const double fileBpm = m_pFileBpm->get();
-    const double duration = m_pDuration->get();
-    const bool ourGrid = m_pBpm->get() > 0.0 && fileBpm > 0.0 && duration > 0.0;
-    double ourPhase = -1.0;
-    if (!m_idle && ourGrid) {
-        ourPhase = mixxx::prolink::barPhaseOf(m_pOurBeat->now());
-    }
+    const double ourPhase = m_idle ? -1.0 : mixxx::prolink::barPhaseOf(m_pOurBeat->now());
 
     // **Each row keeps its own colour, always.** Recolouring an aligned pair was
     // a distraction rather than information: the rows lining up already says

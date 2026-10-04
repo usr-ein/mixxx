@@ -45,6 +45,7 @@ class AudibleBeatClock {
     std::unique_ptr<ControlProxy> m_pBeatDistance;
     std::unique_ptr<ControlProxy> m_pDuration;
     std::unique_ptr<ControlProxy> m_pFileBpm;
+    std::unique_ptr<ControlProxy> m_pBpm;
     std::unique_ptr<ControlProxy> m_pRateRatio;
     std::unique_ptr<ControlProxy> m_pTrimMs;
 };
