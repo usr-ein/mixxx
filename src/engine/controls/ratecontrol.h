@@ -117,6 +117,16 @@ private:
   std::unique_ptr<ControlObject> m_pRateRange;
   std::unique_ptr<ControlPotmeter> m_pRateSlider;
   std::unique_ptr<ControlPotmeter> m_pRateSearch;
+  /// `phase_trim`: a small, temporary change of speed, as a fraction (0.005
+  /// plays 0.5% fast), applied while the deck plays on its own.
+  ///
+  /// For Pro DJ Link SYNC, which closes a small phase error by playing a
+  /// touch fast or slow for a moment rather than by moving the playhead. It is
+  /// applied here, inside the engine, and never touches `rate`, `rate_ratio`
+  /// or `bpm` -- so the BPM read-out stays still, which is what ruled out
+  /// trimming the tempo before. Clamped to +/-kMaxPhaseTrim, and ignored while
+  /// scratching, searching or paused.
+  std::unique_ptr<ControlObject> m_pPhaseTrim;
 
   std::unique_ptr<ControlPushButton> m_pButtonRateTempDown;
   std::unique_ptr<ControlPushButton> m_pButtonRateTempDownSmall;

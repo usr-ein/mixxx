@@ -297,10 +297,10 @@ class ProLinkNetworkService : public QObject {
 
     /// Move the playhead by *beats* so our beat lands on the followed deck's.
     ///
-    /// *beats* is phaseErrorBeats()'s answer: within half a beat either way.
-    /// Called once when SYNC is engaged or the deck starts playing, and again
-    /// whenever the phase has slipped past kPhaseSlipBeats -- SYNC holds the
-    /// phase for as long as it is lit, not only at the moment it is pressed.
+    /// *beats* is a median of phaseErrorBeats()'s answers: within half a beat
+    /// either way. The landing when SYNC is pressed or the deck starts, and a
+    /// slip too large for the trim to ease back; smaller errors are eased with
+    /// setPhaseTrim() instead. SYNC holds the phase for as long as it is lit.
     void alignPhaseToMaster(double beats);
 
     /// The deck the browser and the network both mean by "this deck".
@@ -324,6 +324,10 @@ class ProLinkNetworkService : public QObject {
     /// Whether that player's next beat is due and has not arrived; see
     /// kBeatOverdueMarginMs.
     bool m_masterBeatOverdue = false;
+    /// Ease the phase: play *trim* (a fraction, +0.005 = 0.5% fast) off the
+    /// deck's own speed until told otherwise. 0 stops. Written only on a
+    /// change.
+    void setPhaseTrim(double trim);
     /// Whether the DJ is moving the deck by hand, so the phase hold must not.
     ///
     /// The jog touched (scratching) or bent, a loop or slip active, reverse,
@@ -417,6 +421,11 @@ class ProLinkNetworkService : public QObject {
     std::unique_ptr<ControlProxy> m_pDeckBeatDistance;
     /// `phase_nudge_beats`, the engine's exact move by a number of beats.
     std::unique_ptr<ControlProxy> m_pDeckPhaseNudge;
+    /// `phase_trim`, the engine's small temporary change of speed that SYNC
+    /// eases the phase back with; see setPhaseTrim().
+    std::unique_ptr<ControlProxy> m_pDeckPhaseTrim;
+    /// What setPhaseTrim() last wrote.
+    double m_phaseTrim = 0.0;
     /// This deck's place on its grid as heard; what SYNC compares, the meter
     /// draws and the network is told.
     std::unique_ptr<AudibleBeatClock> m_pOurBeat;

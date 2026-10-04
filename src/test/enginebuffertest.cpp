@@ -154,6 +154,38 @@ TEST_F(EngineBufferTest, PhaseNudgeIsDroppedInsideALoop) {
             1e-3);
 }
 
+// SYNC eases a small phase error back by playing a touch fast or slow. The
+// trim has to change how far the deck travels and nothing a DJ reads: not
+// `rate`, `rate_ratio` or `bpm`.
+TEST_F(EngineBufferTest, PhaseTrimSpeedsTheDeckWithoutTouchingItsTempo) {
+    m_pTrack1->trySetBeats(mixxx::Beats::fromConstTempo(
+            m_pTrack1->getSampleRate(), mixxx::audio::kStartFramePos, mixxx::Bpm(120)));
+    ControlObject::set(ConfigKey(m_sGroup1, "play"), 1.0);
+    ProcessBuffer();
+    ProcessBuffer();
+    const auto oneBuffer = [this]() {
+        const double before = ControlObject::get(ConfigKey(m_sGroup1, "beat_distance"));
+        ProcessBuffer();
+        return ControlObject::get(ConfigKey(m_sGroup1, "beat_distance")) - before;
+    };
+    const double step = oneBuffer();
+    ASSERT_GT(step, 0.0);
+    const double bpm = ControlObject::get(ConfigKey(m_sGroup1, "bpm"));
+    const double rateRatio = ControlObject::get(ConfigKey(m_sGroup1, "rate_ratio"));
+
+    ControlObject::set(ConfigKey(m_sGroup1, "phase_trim"), 0.01);
+    ProcessBuffer(); // the scaler ramps to a new rate over one buffer
+    const double trimmed = oneBuffer();
+    EXPECT_NEAR(step * 1.01, trimmed, step * 1e-3);
+    EXPECT_DOUBLE_EQ(bpm, ControlObject::get(ConfigKey(m_sGroup1, "bpm")));
+    EXPECT_DOUBLE_EQ(rateRatio, ControlObject::get(ConfigKey(m_sGroup1, "rate_ratio")));
+
+    // Clamped to 1% whatever is asked.
+    ControlObject::set(ConfigKey(m_sGroup1, "phase_trim"), 0.5);
+    ProcessBuffer();
+    EXPECT_NEAR(step * 1.01, oneBuffer(), step * 1e-3);
+}
+
 TEST_F(EngineBufferTest, PitchRoundtrip) {
     ControlObject::set(ConfigKey(m_sGroup1, "keylock"), 0.0);
     ControlObject::set(ConfigKey(m_sGroup1, "keylockMode"),

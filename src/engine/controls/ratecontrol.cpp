@@ -1,6 +1,7 @@
 #include "engine/controls/ratecontrol.h"
 
 #include <QtDebug>
+#include <algorithm>
 
 #include "control/controlobject.h"
 #include "control/controlpotmeter.h"
@@ -15,6 +16,11 @@
 #include "vinylcontrol/defs_vinylcontrol.h"
 
 namespace {
+
+/// The largest phase trim the engine applies: 1%, about a fifth of a semitone
+/// with keylock off and a sixth of a BPM at 128. See m_pPhaseTrim.
+constexpr double kMaxPhaseTrim = 0.01;
+
 constexpr int kRateSensitivityMin = 100;
 constexpr int kRateSensitivityMax = 2500;
 } // namespace
@@ -113,6 +119,7 @@ RateControl::RateControl(const QString& group, UserSettingsPointer pConfig)
           m_bTempStarted(false),
           m_tempRateRatio(0.0),
           m_dRateTempRampChange(0.0) {
+    m_pPhaseTrim = std::make_unique<ControlObject>(ConfigKey(group, QStringLiteral("phase_trim")));
     // This is the resulting rate ratio that can be used for display or calculations.
     // The track original rate ratio is 1.
     connect(m_pRateRatio.get(),
@@ -449,8 +456,11 @@ double RateControl::calculateSpeed(double baserate, double speed, bool paused,
                 if (useScratch2Value) {
                     rate = scratchFactor;
                 } else {
-                    // add temp rate, but don't go backwards
-                    rate = math_max(speed + getTempRate(), 0.0);
+                    // add temp rate, but don't go backwards. The phase trim
+                    // scales the deck's own speed only; see m_pPhaseTrim.
+                    const double phaseTrim = std::clamp(
+                            m_pPhaseTrim->get(), -kMaxPhaseTrim, kMaxPhaseTrim);
+                    rate = math_max(speed * (1.0 + phaseTrim) + getTempRate(), 0.0);
                     rate += wheelFactor;
                 }
                 rate += jogFactor;

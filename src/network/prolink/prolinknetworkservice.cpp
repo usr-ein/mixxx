@@ -33,15 +33,26 @@ const mixxx::Logger kLogger("ProLinkNetworkService");
 /// less demanding than the marker is.
 constexpr int kPollIntervalMs = 33;
 
-/// How close two tempos have to be before the one-shot landing runs.
+/// How close two tempos have to be before the phase is worked on at all.
+///
+/// Also the tempo-matched test for the hold: the master's effective tempo is
+/// its centi-BPM times a fixed-point pitch, and this deck's is whatever the
+/// rate slider quantises to, so the two converge to about a hundredth of a BPM
+/// and then stop.
 constexpr double kTempoMatchedBpm = 0.05;
 
-/// How far out of phase the deck may drift before it is nudged back.
-///
-/// A fiftieth of a beat, which at 120 BPM is 10 ms -- below what anyone can
-/// hear as a flam, and comfortably above the jitter in measuring the master's
-/// phase from packets that arrive every 200 ms.
-constexpr double kPhaseSlipBeats = 0.02;
+/// Below this the phase is left alone: about 1.4 ms at 128 BPM, under the
+/// jitter in measuring it.
+constexpr double kPhaseDeadbandBeats = 0.003;
+/// Above this the phase is put back with a seek rather than eased back with
+/// the trim: a slip this large (a jog jump on the master, a missed landing)
+/// would take the trim longer to close than a DJ will wait.
+constexpr double kPhaseSeekBeats = 0.1;
+/// How long the trim aims to take to close an error. Two seconds closes 0.02
+/// beat at 128 BPM with a 0.5% trim.
+constexpr double kPhaseTrimHorizonSeconds = 2.0;
+/// The largest trim asked for. The engine clamps to the same.
+constexpr double kMaxPhaseTrim = 0.01;
 
 /// How long a fresh claim on tempo master is left unchallenged.
 ///
@@ -52,10 +63,10 @@ constexpr double kPhaseSlipBeats = 0.02;
 /// notice the gap.
 constexpr int kMasterSettleMs = 1500;
 
-/// The shortest gap between two phase corrections.
+/// The shortest gap between two seeks.
 ///
-/// A correction has to have taken effect *and* been measured before the next
-/// one is considered, or one error is chased by a burst of overlapping seeks.
+/// A seek has to have taken effect *and* been measured before the next one is
+/// considered, or one error is chased by a burst of overlapping seeks.
 constexpr int kPhaseHoldMs = 1500;
 
 /// How many phase-error samples the hold decides on: about half a second of
@@ -393,6 +404,7 @@ ProLinkNetworkService::ProLinkNetworkService(QObject* parent)
     m_pDeckPlayPosition = deck("playposition");
     m_pDeckBeatDistance = deck("beat_distance");
     m_pDeckPhaseNudge = deck("phase_nudge_beats");
+    m_pDeckPhaseTrim = deck("phase_trim");
     m_pOurBeat = std::make_unique<AudibleBeatClock>(QString::fromLatin1(kDeckGroup), this);
 
     // The DJ's hands on the deck, which the phase hold must leave alone. See
@@ -528,6 +540,7 @@ void ProLinkNetworkService::followMaster() {
     state.isMaster = m_pControls->isMaster()->get() > 0.0;
     state.masterBpm = m_pControls->masterBpm()->get();
     if (SyncTempo::decide(state) != SyncTempo::Source::Master) {
+        setPhaseTrim(0.0);
         return;
     }
     const double masterBpm = state.masterBpm;
@@ -568,39 +581,71 @@ void ProLinkNetworkService::followMaster() {
     const bool settled = !m_holdSettle.isValid() || m_holdSettle.elapsed() > kSettleMs;
     if (!tempoMatched || suspended || !settled) {
         // Whatever was measured before is about a deck that has since been
-        // moved, by hand or by a tempo change.
+        // moved, by hand or by a tempo change; and nothing is eased while the
+        // DJ has the deck.
         m_phaseSamples.clear();
-    } else {
-        // **A sync that aligns once is not a sync.** Landing on the beat when
-        // SYNC is pressed or the deck starts is the easy half; the two then
-        // drift apart whenever the master's tempo is nudged, and something has
-        // to close that gap again. A CDJ holds the phase for as long as SYNC
-        // is lit.
-        double error = 0.0;
-        if (phaseErrorBeats(&error)) {
-            if (m_phaseSamples.size() == kPhaseSamples) {
-                m_phaseSamples.erase(m_phaseSamples.begin());
-            }
-            m_phaseSamples.push_back(error);
+        setPhaseTrim(0.0);
+        reportPhaseDrift();
+        return;
+    }
+    // **A sync that aligns once is not a sync.** Landing on the beat when SYNC
+    // is pressed or the deck starts is the easy half; the two then drift apart
+    // whenever the master's tempo is nudged, and something has to close that
+    // gap again. A CDJ holds the phase for as long as SYNC is lit.
+    double error = 0.0;
+    if (phaseErrorBeats(&error)) {
+        if (m_phaseSamples.size() == kPhaseSamples) {
+            m_phaseSamples.erase(m_phaseSamples.begin());
         }
-        // Rate-limited, so a correction has taken effect and been measured
-        // again before the next one is considered.
-        const bool pending = m_alignWhenTempoMatches;
-        const bool due = !m_phaseHold.isValid() || m_phaseHold.elapsed() > kPhaseHoldMs;
-        const std::size_t needed = pending ? kPhaseSamplesToLand : kPhaseSamplesToHold;
-        if ((pending || due) && m_phaseSamples.size() >= needed) {
-            const double median = medianOf(m_phaseSamples);
-            const double threshold = pending ? kPhaseLandBeats : kPhaseSlipBeats;
+        m_phaseSamples.push_back(error);
+    }
+    const bool due = !m_phaseHold.isValid() || m_phaseHold.elapsed() > kPhaseHoldMs;
+    const auto seek = [this](double beats) {
+        setPhaseTrim(0.0);
+        m_phaseHold.start();
+        // What was measured is from before the move.
+        m_phaseSamples.clear();
+        alignPhaseToMaster(beats);
+    };
+    if (m_alignWhenTempoMatches) {
+        // **Landing: one exact seek.** Pressing SYNC or starting the deck is
+        // the moment a jump is expected, and the error can be half a beat.
+        if (m_phaseSamples.size() >= kPhaseSamplesToLand) {
             m_alignWhenTempoMatches = false;
-            if (std::abs(median) > threshold) {
-                m_phaseHold.start();
-                // What was measured is from before the move.
-                m_phaseSamples.clear();
-                alignPhaseToMaster(median);
+            const double median = medianOf(m_phaseSamples);
+            if (std::abs(median) > kPhaseLandBeats) {
+                seek(median);
             }
+        }
+    } else if (m_phaseSamples.size() >= kPhaseSamplesToHold) {
+        // **Holding: ease it back.** A seek mid-mix is a flam of its own, so a
+        // small error is closed by playing a touch fast or slow for a moment --
+        // inside the engine, where the BPM read-out never sees it. Only a slip
+        // too large for that gets a seek.
+        const double median = medianOf(m_phaseSamples);
+        if (std::abs(median) > kPhaseSeekBeats && due) {
+            seek(median);
+        } else if (std::abs(median) > kPhaseDeadbandBeats && ours > 0.0) {
+            // Positive error: the followed deck is ahead, so play faster.
+            const double beatSeconds = 60.0 / ours;
+            setPhaseTrim(std::clamp(median * beatSeconds / kPhaseTrimHorizonSeconds,
+                    -kMaxPhaseTrim,
+                    kMaxPhaseTrim));
+        } else {
+            setPhaseTrim(0.0);
         }
     }
     reportPhaseDrift();
+}
+
+void ProLinkNetworkService::setPhaseTrim(double trim) {
+    if (trim == m_phaseTrim) {
+        return;
+    }
+    m_phaseTrim = trim;
+    if (m_pDeckPhaseTrim) {
+        m_pDeckPhaseTrim->set(trim);
+    }
 }
 
 bool ProLinkNetworkService::holdSuspended() const {
@@ -985,6 +1030,8 @@ void ProLinkNetworkService::shutdown() {
     // runs from the destructor, and the controls may have gone first.
     m_masterSince.invalidate();
     m_alignWhenTempoMatches = false;
+    // A deck left playing a touch fast for a network that is gone.
+    setPhaseTrim(0.0);
     if (m_pControls && ProLinkControls::instance() == m_pControls) {
         clearMaster();
     }
