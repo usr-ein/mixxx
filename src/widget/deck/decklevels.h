@@ -28,13 +28,13 @@ namespace deck {
 /// deck's user is in, so this needs no helper and no sudo. A panel with no
 /// backlight there, or a machine that is not a Pi, has no brightness to set.
 ///
-/// **Neither is kept in mixxx.cfg.** Mixxx persists neither, writes that file
-/// only on a clean exit, and mixxx_config/upload.sh replaces it on every
-/// deploy, which would put both back to default for a mapping tweak. So they
-/// have a file of their own beside it, like sessionpurge's boot id, written a
-/// moment after the last change and applied when the skin loads. It holds only
-/// what was set here: a level nobody has touched stays wherever the system put
-/// it, which for the backlight is systemd-backlight's restore.
+/// **Neither is kept in mixxx.cfg.** Mixxx persists neither, never writes that
+/// file back (CoreServices::finalize()), and mixxx_config/upload.sh replaces it
+/// on every deploy, which would put both back to default for a mapping tweak.
+/// So they have a file of their own beside it, like sessionpurge's boot id,
+/// written a moment after the last change and applied when the skin loads. It
+/// holds only what was set here: a level nobody has touched stays wherever the
+/// system put it, which for the backlight is systemd-backlight's restore.
 class DeckLevels : public QObject {
     Q_OBJECT
 

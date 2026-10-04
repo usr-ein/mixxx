@@ -369,11 +369,7 @@ CoreServices::~CoreServices() {
         StatsManager::destroy();
     }
 
-    // HACK: Save config again. We saved it once before doing some dangerous
-    // stuff. We only really want to save it here, but the first one was just
-    // a precaution. The earlier one can be removed when stuff is more stable
-    // at exit.
-    m_pSettingsManager->save();
+    // No save here either: mixxx.cfg is never written back (see finalize()).
     m_pSettingsManager.reset();
 
     Sandbox::shutdown();
@@ -800,8 +796,14 @@ void CoreServices::finalize() {
     m_pTrackCollectionManager->stopLibraryScan();
     m_pLibrary->stopPendingTasks();
 
-    qDebug() << t.elapsed(false).debugMillisWithUnit() << "saving configuration";
-    m_pSettingsManager->save();
+    // mixxx.cfg is not saved on the way out, or anywhere else. On the deck it
+    // is deployed by mixxx_config/upload.sh and only ever edited by hand, so
+    // writing it back bought nothing, and the write landed seconds before the
+    // power is cut. ConfigObject::save() deletes the old file and then renames
+    // the new one in, with no fsync -- the one replace pattern that ext4's
+    // safety net for un-fsynced writes does not cover -- so a cut in the next
+    // ~30 s could leave the deck with an empty mixxx.cfg, or none. Settings
+    // changed at runtime last until Mixxx exits.
 
     // SoundManager depend on Engine and Config
     qDebug() << t.elapsed(false).debugMillisWithUnit() << "deleting SoundManager";

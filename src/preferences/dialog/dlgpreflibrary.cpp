@@ -588,9 +588,7 @@ void DlgPrefLibrary::slotApply() {
     m_pConfig->set(
             mixxx::library::prefs::kApplyPlayedTrackColorConfigKey,
             ConfigValue(checkbox_played_track_color->isChecked()));
-
-    // TODO(rryan): Don't save here.
-    m_pConfig->save();
+    // Not saved to disk: Mixxx never writes mixxx.cfg (CoreServices::finalize()).
 }
 
 void DlgPrefLibrary::slotRowHeightValueChanged(int height) {

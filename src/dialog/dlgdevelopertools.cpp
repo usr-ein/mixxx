@@ -5,6 +5,7 @@
 
 #include "control/control.h"
 #include "moc_dlgdevelopertools.cpp"
+#include "util/cmdlineargs.h"
 #include "util/logging.h"
 #include "util/statsmanager.h"
 
@@ -32,7 +33,13 @@ DlgDeveloperTools::DlgDeveloperTools(QWidget* pParent,
     m_statProxyModel.setSourceModel(&m_statModel);
     statsTable->setModel(&m_statProxyModel);
 
-    QString logFileName = QDir(pConfig->getSettingsPath()).filePath("mixxx.log");
+    // Wherever CoreServices::initializeLogging() put it: --log-path, or beside
+    // mixxx.cfg.
+    QString logDirPath = CmdlineArgs::Instance().getLogPath();
+    if (logDirPath.isEmpty()) {
+        logDirPath = pConfig->getSettingsPath();
+    }
+    QString logFileName = QDir(logDirPath).filePath("mixxx.log");
     m_logFile.setFileName(logFileName);
     if (!m_logFile.open(QIODevice::ReadOnly | QIODevice::Text)) {
         qWarning() << "ERROR: Could not open log file:" << logFileName;
