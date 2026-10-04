@@ -7,8 +7,9 @@ namespace prolink {
 
 /// KEY SYNC, as a state machine and nothing else.
 ///
-/// A CDJ's KEY SYNC pitches this deck until it is in the same key as the deck
-/// the room is following. The rules below are what separate that from "track
+/// A CDJ's KEY SYNC pitches this deck into a key compatible with the track the
+/// deck the room is following has loaded -- the same key, its relative, or a
+/// neighbour on the wheel. The rules below are what separate that from "track
 /// the master's key", which is what it looks like from outside and is not what
 /// a DJ wants:
 ///

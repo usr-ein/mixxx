@@ -190,9 +190,10 @@ void ProLinkKeySync::applyToDeck() {
     // Matching the master's tonic literally is a shift of up to six, which is
     // where a track starts sounding like a chipmunk.
     //
-    // There is no cents term here, unlike KeyControl::syncKey: a CDJ publishes
-    // a key and not a detuning, so there is nothing finer than a semitone to
-    // aim at.
+    // There is no cents term here, unlike KeyControl::syncKey: the target is
+    // the master's track key as rekordbox analysed it (owner decision 7), and
+    // nothing on the wire says how that CDJ is detuned, so there is nothing
+    // finer than a semitone to aim at.
     const int steps = KeyUtils::shortestStepsToCompatibleKey(fileKey, m_state.target());
     m_heldSteps.store(steps);
     m_pDeckPitchAdjust->set(steps);
