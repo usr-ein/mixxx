@@ -1,6 +1,7 @@
 #pragma once
 
 #include <QColor>
+#include <QElapsedTimer>
 #include <QString>
 #include <QWidget>
 #include <memory>
@@ -29,14 +30,16 @@ class SkinContext;
 /// **What each row is built from is not the same, and that matters.** The top
 /// row comes off the network: beat packets on UDP 50001 arrive *on* each beat
 /// and carry the beat's position in the bar, so both the phase and the bar
-/// alignment are the other deck's own. Our row is derived from the playhead —
-/// `beat_distance` for the sub-beat and the elapsed track time for which beat of
-/// the bar. Deriving it from *position* rather than counting `beat_active`
-/// pulses is what makes a loop behave: a one-beat loop replays the same beat,
-/// and a counter would march on through the bar as though the track had.
-/// Absolute bar alignment is still arbitrary — nothing in the engine names a
-/// downbeat — so beat alignment is trustworthy and bar alignment is a display
-/// convenience.
+/// alignment are the other deck's own. Our row is this deck's place on its own
+/// grid at the sample being heard now (AudibleBeatClock), with bars counted
+/// from rekordbox's downbeat -- the same numbers SYNC corrects with and the
+/// network is told -- so a loop replays the same beats rather than marching
+/// on through the bar, and two rows lined up are two beats lined up in the room.
+///
+/// The top row is labelled with its player number, "M" before it when that
+/// player holds tempo master, and drawn dim when the deck is held where its
+/// status says it stands rather than playing. The bottom row is labelled "M"
+/// when this deck holds tempo master.
 ///
 /// # States
 ///
@@ -83,6 +86,10 @@ class WProLinkPhaseMeter : public WWidget {
     /// exist by the time this widget does and need no retrying.
     std::unique_ptr<ControlProxy> m_pMasterDevice;
     std::unique_ptr<ControlProxy> m_pMasterBarPhase;
+    std::unique_ptr<ControlProxy> m_pMeterIsMaster;
+    std::unique_ptr<ControlProxy> m_pMeterLive;
+    /// Whether this deck holds tempo master.
+    std::unique_ptr<ControlProxy> m_pWeAreMaster;
     /// Our place on the grid as heard; see mixxx::prolink::AudibleBeatClock.
     std::unique_ptr<mixxx::prolink::AudibleBeatClock> m_pOurBeat;
 
@@ -91,6 +98,9 @@ class WProLinkPhaseMeter : public WWidget {
     /// decks changing relationship, and the rows lining up already says it.
     QColor m_masterColour{0xff, 0x66, 0x00};
     QColor m_ourColour{0x44, 0xcc, 0xff};
+
+    /// Since the other deck's phase was last published; see the constructor.
+    QElapsedTimer m_lastPublished;
 
     /// Whether the last paint had nobody to follow. While it stays that way
     /// nothing on the meter moves, and the repaint timer skips the frame.

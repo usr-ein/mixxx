@@ -16,8 +16,8 @@ namespace {
 /// and the beat packet's bar field is 1-4.
 constexpr int kBeatsPerBar = mixxx::prolink::kBeatsPerBar;
 
-/// How often the meter repaints. The master's phase is republished at 30 Hz, so
-/// matching that is as smooth as the data gets.
+/// How often the meter repaints when nothing is being published: as often as
+/// the service polls, which is as smooth as the data gets.
 constexpr int kRepaintIntervalMs = 33;
 
 /// The player number is drawn *over* the top row rather than beside it. In the
@@ -39,20 +39,38 @@ WProLinkPhaseMeter::WProLinkPhaseMeter(QWidget* pParent, const QString& group)
     };
     m_pMasterDevice = proLink("master_device");
     m_pMasterBarPhase = proLink("master_bar_phase");
+    m_pMeterIsMaster = proLink("meter_is_master");
+    m_pMeterLive = proLink("meter_live");
+    m_pWeAreMaster = proLink("is_master");
     m_pOurBeat = std::make_unique<mixxx::prolink::AudibleBeatClock>(m_group, this);
 
-    // Polled rather than driven by valueChanged: the other deck's phase moves
-    // continuously and the marker has to move with it, so there is a repaint
-    // every frame regardless of whether any single control changed -- except
-    // while there is nobody to follow, when nothing on the meter moves at all.
+    // **Repainted when the other deck's phase is published**, so the two rows
+    // are read a moment apart rather than up to a whole poll apart. The meter
+    // used to repaint on its own 33 ms timer, beside the service's own 33 ms
+    // poll: two clocks at a fixed, random offset for the session, and the top
+    // row drawn up to 33 ms late -- up to 7% of a beat at 128 BPM, enough to
+    // show a lined-up pair as us ahead.
+    m_pMasterBarPhase->connectValueChanged(this, [this](double) {
+        m_lastPublished.start();
+        update();
+    });
+    // The timer only covers a top row standing still -- a paused deck held at
+    // its beat, which is not republished -- while our own row moves; and
+    // nothing at all while there is nobody to follow.
     auto* pTimer = new QTimer(this);
     connect(pTimer, &QTimer::timeout, this, [this]() {
         if (m_idle && m_pMasterBarPhase->get() < 0.0) {
             return;
         }
+        if (m_lastPublished.isValid() && m_lastPublished.elapsed() < 2 * kRepaintIntervalMs) {
+            return;
+        }
         update();
     });
     pTimer->start(kRepaintIntervalMs);
+    // Every pixel is painted, starting with the background, so Qt need not
+    // repaint whatever is behind it first.
+    setAttribute(Qt::WA_OpaquePaintEvent);
 }
 
 WProLinkPhaseMeter::~WProLinkPhaseMeter() = default;
@@ -128,8 +146,10 @@ void WProLinkPhaseMeter::drawOverlayLabel(
     if (label.isEmpty()) {
         return;
     }
-    // Over the ticks, at the left, with a slab of background behind it so a
-    // tick passing underneath cannot make it unreadable.
+    // Over the ticks, at the right end, with a slab of background behind it
+    // so a tick passing underneath cannot make it unreadable. Not the left:
+    // that is where every tick lands on its beat, the one place the two rows
+    // most need comparing.
     QFont small = font();
     small.setPixelSize(static_cast<int>(rect.height() * 0.62));
     small.setBold(true);
@@ -137,10 +157,10 @@ void WProLinkPhaseMeter::drawOverlayLabel(
 
     const QRectF textRect(rect.left() + 2, rect.top(), rect.width() - 4, rect.height());
     const QRectF box = pPainter->boundingRect(
-            textRect, Qt::AlignLeft | Qt::AlignVCenter, label);
+            textRect, Qt::AlignRight | Qt::AlignVCenter, label);
     pPainter->fillRect(box.adjusted(-3, 0, 3, 0), QColor(0x0c, 0x0c, 0x0c));
     pPainter->setPen(QColor(0xdd, 0xdd, 0xdd));
-    pPainter->drawText(textRect, Qt::AlignLeft | Qt::AlignVCenter, label);
+    pPainter->drawText(textRect, Qt::AlignRight | Qt::AlignVCenter, label);
 }
 
 void WProLinkPhaseMeter::paintEvent(QPaintEvent* pEvent) {
@@ -172,13 +192,27 @@ void WProLinkPhaseMeter::paintEvent(QPaintEvent* pEvent) {
     const QRectF masterRect(margin, margin, width() - 2 * margin, rowHeight);
     const QRectF ourRect(margin, margin * 2 + rowHeight, width() - 2 * margin, rowHeight);
 
-    // Only the top row is labelled, with the number of the player it is
-    // following. The bottom row is always this deck, so saying so costs width
-    // and tells nobody anything.
+    // **What the top row is, at a glance.** "M3" is player 3 holding tempo
+    // master; "3" alone is a deck drawn because nobody holds it; and a deck
+    // held where its status says it stands -- paused, being cued -- is drawn
+    // dim, because it is a place and not a phase. They used to look the same,
+    // and a held deck looked like a deck sitting exactly on its beat.
     const int masterDevice = static_cast<int>(m_pMasterDevice->get());
-    const QString masterLabel = !m_idle && masterDevice > 0
-            ? QString::number(masterDevice)
-            : QStringLiteral("-");
-    paintRow(&painter, masterRect, masterPhase, m_masterColour, masterLabel);
-    paintRow(&painter, ourRect, ourPhase, m_ourColour, QString());
+    QString masterLabel = QStringLiteral("-");
+    if (!m_idle && masterDevice > 0) {
+        masterLabel = (m_pMeterIsMaster->get() > 0.0 ? QStringLiteral("M") : QString()) +
+                QString::number(masterDevice);
+    }
+    QColor masterColour = m_masterColour;
+    if (m_pMeterLive->get() <= 0.0) {
+        masterColour.setAlphaF(0.4);
+    }
+    paintRow(&painter, masterRect, masterPhase, masterColour, masterLabel);
+    // The bottom row is always this deck; it is labelled only when we hold
+    // tempo master, which is otherwise said nowhere near the meter.
+    paintRow(&painter,
+            ourRect,
+            ourPhase,
+            m_ourColour,
+            m_pWeAreMaster->get() > 0.0 ? QStringLiteral("M") : QString());
 }

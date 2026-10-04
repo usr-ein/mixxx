@@ -988,12 +988,16 @@ void ProLinkNetworkService::publishMaster() {
     }
     if (pShow != nullptr) {
         m_pControls->masterDevice()->forceSet(pShow->number);
+        m_pControls->meterIsMaster()->forceSet(pShow->is_master ? 1.0 : 0.0);
+        m_pControls->meterLive()->forceSet(shown.live ? 1.0 : 0.0);
         m_pControls->masterBarPhase()->forceSet(shown.barPhase);
         return;
     }
     // Nobody to draw. Not the same as a deck at phase zero, which is why the
     // phase goes to -1 rather than to 0.
     m_pControls->masterDevice()->forceSet(0.0);
+    m_pControls->meterIsMaster()->forceSet(0.0);
+    m_pControls->meterLive()->forceSet(0.0);
     m_pControls->masterBarPhase()->forceSet(-1.0);
 }
 
@@ -1004,6 +1008,8 @@ void ProLinkNetworkService::clearMaster() {
     m_phaseSamples.clear();
     m_pControls->isMaster()->forceSet(0.0);
     m_pControls->masterDevice()->forceSet(0.0);
+    m_pControls->meterIsMaster()->forceSet(0.0);
+    m_pControls->meterLive()->forceSet(0.0);
     m_pControls->masterBarPhase()->forceSet(-1.0);
     publishMasterTrack(MasterTrack());
 }

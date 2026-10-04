@@ -59,6 +59,17 @@ class ProLinkControls {
         return m_pMasterBarPhase.get();
     }
 
+    /// Whether the deck the meter draws (masterDevice()) is the tempo master,
+    /// rather than a deck drawn because nobody is. Read-only.
+    ControlObject* meterIsMaster() const {
+        return m_pMeterIsMaster.get();
+    }
+    /// Whether the meter's deck is playing, its phase drawn from its beats;
+    /// 0 for a deck held where its status says it stands. Read-only.
+    ControlObject* meterLive() const {
+        return m_pMeterLive.get();
+    }
+
     /// Pressed to take tempo master. A request, not a decision.
     ControlPushButton* takeMaster() const {
         return m_pTakeMaster.get();
@@ -110,6 +121,8 @@ class ProLinkControls {
     std::unique_ptr<ControlPushButton> m_pPullDb;
     std::unique_ptr<ControlObject> m_pMasterDevice;
     std::unique_ptr<ControlObject> m_pMasterBarPhase;
+    std::unique_ptr<ControlObject> m_pMeterIsMaster;
+    std::unique_ptr<ControlObject> m_pMeterLive;
     std::unique_ptr<ControlPushButton> m_pTakeMaster;
     std::unique_ptr<ControlObject> m_pIsMaster;
     std::unique_ptr<ControlPushButton> m_pSyncEnabled;

@@ -29,6 +29,10 @@ ProLinkControls::ProLinkControls() {
     m_pMasterDevice->setReadOnly();
     m_pMasterBarPhase->setReadOnly();
     m_pMasterBarPhase->forceSet(-1.0);
+    m_pMeterIsMaster = std::make_unique<ControlObject>(key("meter_is_master"));
+    m_pMeterIsMaster->setReadOnly();
+    m_pMeterLive = std::make_unique<ControlObject>(key("meter_live"));
+    m_pMeterLive->setReadOnly();
     m_pMasterDevice->forceSet(0.0);
 
     // TRIGGER, not TOGGLE: pressing MASTER is a request that may take a couple
