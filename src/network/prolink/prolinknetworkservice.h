@@ -304,12 +304,27 @@ class ProLinkNetworkService : public QObject {
     /// The deck the browser and the network both mean by "this deck".
     static const char* kDeckGroup;
 
-    /// Set when SYNC is engaged, cleared once the phase has been nudged.
+    /// Set when SYNC is engaged, and when the DJ lets go of the deck (which
+    /// includes the deck starting to play): see holdSuspended(). Cleared once
+    /// the phase has been nudged. A SYNC press while the deck is under the
+    /// DJ's hands waits for the release.
     ///
     /// The two halves of a sync cannot happen at the same moment: matching the
     /// tempo takes a poll or two, and a phase alignment applied before that has
     /// landed is measured at the old tempo and walked away from by the new one.
     bool m_alignWhenTempoMatches = false;
+    /// Whether the DJ is moving the deck by hand, so the phase hold must not.
+    ///
+    /// The jog touched (scratching) or bent, a loop or slip active, reverse,
+    /// a cue or hot cue preview, or the deck not playing at all. When this
+    /// clears the deck is landed on the beat again, after kSettleMs.
+    bool holdSuspended() const;
+    /// What holdSuspended() said on the last poll, to see it clear.
+    bool m_holdWasSuspended = true;
+    /// Since the hold last stopped being suspended; see kSettleMs.
+    QElapsedTimer m_holdSettle;
+    /// Since the last jog bend; see kBendQuietMs.
+    QElapsedTimer m_lastBend;
     /// Rate-limits reportPhaseDrift() to once a second.
     QElapsedTimer m_driftReport;
     /// Since the last phase correction; see kPhaseHoldMs.
@@ -391,6 +406,12 @@ class ProLinkNetworkService : public QObject {
     std::unique_ptr<ControlProxy> m_pDeckBeatDistance;
     /// `phase_nudge_beats`, the engine's exact move by a number of beats.
     std::unique_ptr<ControlProxy> m_pDeckPhaseNudge;
+    std::unique_ptr<ControlProxy> m_pDeckPlayLatched;
+    std::unique_ptr<ControlProxy> m_pDeckScratching;
+    std::unique_ptr<ControlProxy> m_pDeckLoopEnabled;
+    std::unique_ptr<ControlProxy> m_pDeckSlipEnabled;
+    std::unique_ptr<ControlProxy> m_pDeckReverse;
+    std::unique_ptr<ControlProxy> m_pDeckJog;
     QList<ProLinkDevice> m_devices;
     QHash<quint32, Pending> m_pending;
     bool m_listening = false;

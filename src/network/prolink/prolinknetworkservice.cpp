@@ -56,6 +56,19 @@ constexpr int kMasterSettleMs = 1500;
 /// one is considered, or one error is chased by a burst of overlapping seeks.
 constexpr int kPhaseHoldMs = 1500;
 
+/// How long after the last jog bend the phase hold stays off.
+///
+/// A bend arrives as a stream of encoder deltas with no "released" message,
+/// so the hold resumes once the stream has been quiet this long.
+constexpr int kBendQuietMs = 600;
+
+/// How long after the DJ lets go before the deck is put back on the beat.
+///
+/// Long enough for the engine to have processed what the release itself
+/// queued -- a slip return, a seek out of a loop -- and for the next poll to
+/// read the position that produced, rather than the one from before it.
+constexpr int kSettleMs = 150;
+
 /// The player range. A CDJ-3000 rig goes up to six; a mixer is 33 and
 /// rekordbox is 17 and up.
 constexpr int kFirstPlayer = 1;
@@ -351,15 +364,21 @@ ProLinkNetworkService::ProLinkNetworkService(QObject* parent)
     m_pDeckBeatDistance = deck("beat_distance");
     m_pDeckPhaseNudge = deck("phase_nudge_beats");
 
-    // **Dropping in on the beat.** Pressing SYNC aligns the phase once, but a
-    // track loaded afterwards starts wherever its cue happens to sit -- tempo
-    // matched, beat not, which is the one combination that sounds worse than
-    // no sync at all. A CDJ aligns when the deck starts playing, so this does
-    // too: the rising edge of `play` asks for an alignment, and followMaster()
-    // performs it as soon as the tempos agree.
-    m_pDeckPlay->connectValueChanged(this, [this](double value) {
-        if (value > 0.0 && m_pControls && m_pControls->syncEnabled()->get() > 0.0) {
-            m_alignWhenTempoMatches = true;
+    // The DJ's hands on the deck, which the phase hold must leave alone. See
+    // holdSuspended().
+    m_pDeckPlayLatched = deck("play_latched");
+    m_pDeckScratching = deck("scratch2_enable");
+    m_pDeckLoopEnabled = deck("loop_enabled");
+    m_pDeckSlipEnabled = deck("slip_enabled");
+    m_pDeckReverse = deck("reverse");
+    // A bend is a turn of the jog's side without touching its top: no state
+    // control says it is happening, only `jog` receiving deltas. The mapping
+    // writes a delta per encoder message and the engine reads it back to 0, so
+    // only a non-zero value is a hand on the wheel.
+    m_pDeckJog = deck("jog");
+    m_pDeckJog->connectValueChanged(this, [this](double value) {
+        if (value != 0.0) {
+            m_lastBend.start();
         }
     });
 }
@@ -464,6 +483,17 @@ void ProLinkNetworkService::followMaster() {
     // Nothing to do in the Fader case: not writing the tempo *is* letting the
     // fader have it. Catching up afterwards is `soft-takeover` in the mapping,
     // which is Mixxx's own.
+    // Tracked whatever the sync state, so the release is seen even if SYNC
+    // was pressed in the meantime.
+    const bool suspended = holdSuspended();
+    if (m_holdWasSuspended && !suspended) {
+        // **Back on the beat after the DJ lets go** -- of the jog, a loop,
+        // slip, a preview, or the deck's stop. Not at once: see kSettleMs.
+        m_alignWhenTempoMatches = true;
+        m_holdSettle.start();
+    }
+    m_holdWasSuspended = suspended;
+
     SyncTempo::State state;
     state.syncEnabled = m_pControls->syncEnabled()->get() > 0.0;
     state.isMaster = m_pControls->isMaster()->get() > 0.0;
@@ -501,10 +531,13 @@ void ProLinkNetworkService::followMaster() {
                 masterBpm);
     }
 
-    // **Only while playing.** A paused deck's playhead does not move, so the
-    // master walks away from it and the error grows without bound; there is
-    // nothing to correct until the deck is running.
-    if (tempoMatched && m_pDeckPlay->get() > 0.0) {
+    // **Only while the deck is running on its own.** A paused deck's playhead
+    // does not move, so the master walks away from it and the error grows
+    // without bound; and a deck under the DJ's hands -- scratched, bent,
+    // looped, slipping, previewed -- is being moved on purpose. See
+    // holdSuspended().
+    const bool settled = !m_holdSettle.isValid() || m_holdSettle.elapsed() > kSettleMs;
+    if (tempoMatched && !suspended && settled) {
         // **A sync that aligns once is not a sync.** Landing on the beat when
         // the button is pressed is the easy half; the two then drift apart
         // whenever the master's tempo is nudged, and nothing was closing that
@@ -524,6 +557,22 @@ void ProLinkNetworkService::followMaster() {
         }
     }
     reportPhaseDrift();
+}
+
+bool ProLinkNetworkService::holdSuspended() const {
+    // `play_latched`, not `play`: a cue or hot cue held while paused plays a
+    // preview with `play` up and `play_latched` down. Landing on the beat
+    // then would move the preview off the cue the DJ is listening to -- and
+    // could, before the cue's own seek had been processed, send it back to
+    // where the deck stood before the press.
+    if (m_pDeckPlayLatched->get() <= 0.0) {
+        return true;
+    }
+    if (m_pDeckScratching->get() > 0.0 || m_pDeckLoopEnabled->get() > 0.0 ||
+            m_pDeckSlipEnabled->get() > 0.0 || m_pDeckReverse->get() > 0.0) {
+        return true;
+    }
+    return m_lastBend.isValid() && m_lastBend.elapsed() < kBendQuietMs;
 }
 
 bool ProLinkNetworkService::phaseErrorBeats(double* pBeats) const {
