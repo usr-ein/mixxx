@@ -33,8 +33,10 @@ if [ -n "$DECK_CODENAME" ] && [ "$DECK_CODENAME" != "$CODENAME" ]; then
 	exit 1
 fi
 
+# This checkout's own build tree in Docker's cache: see checkout-id.sh.
 docker buildx build --platform linux/arm64 --target export \
 	--build-arg BASE="debian:${CODENAME}" \
+	--build-arg CHECKOUT_ID="$(./checkout-id.sh)" \
 	--output "type=local,dest=${DIST}" .
 
 # Where apt put it, rather than assuming /usr/bin/mixxx.

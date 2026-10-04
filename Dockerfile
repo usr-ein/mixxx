@@ -114,7 +114,15 @@ COPY . /src
 #
 # ccache does not need this -- it hashes the compiler into its keys -- and the
 # cargo registry is source only. This is the one that matters.
-RUN --mount=type=cache,target=/build,sharing=locked,id=mixxx-build-${BASE} \
+#
+# So is which checkout this is (./checkout-id.sh): empty for the main one, its
+# own for each git worktree. ninja rebuilds by mtime, so two checkouts taking
+# turns in one tree each ship the other's object files, and nothing errors.
+# ccache is shared -- it hashes contents -- so a worktree's first build is
+# mostly cache hits. Declared here, not with the other ARGs: every RUN after
+# an ARG sees it, and the dependency layers above must not rebuild per checkout.
+ARG CHECKOUT_ID=
+RUN --mount=type=cache,target=/build,sharing=locked,id=mixxx-build-${BASE}${CHECKOUT_ID} \
     --mount=type=cache,target=/ccache,sharing=locked \
     --mount=type=cache,target=/opt/cargo/registry,sharing=locked \
     export CCACHE_DIR=/ccache \
@@ -147,7 +155,8 @@ COPY --from=build /mixxx.debug /mixxx.debug
 
 # Unit tests, for the parts of the tree that can be checked without hardware.
 #
-#   docker build --target unittest --build-arg GTEST_FILTER='Library*' .
+#   docker build --target unittest --build-arg GTEST_FILTER='Library*' \
+#       --build-arg CHECKOUT_ID="$(./checkout-id.sh)" .
 #
 # **The Pro DJ Link tests are not here any more.** The protocol moved to
 # lib/prolink and its tests moved with it -- 659 of them, including a replay of
@@ -184,7 +193,9 @@ RUN apt-get update && apt-get install -y --no-install-recommends libgmock-dev \
 # off, and flipping that setting back and forth in a shared tree would make
 # every alternate build a near-full rebuild. The ccache is shared, so most
 # object files are hits anyway.
-RUN --mount=type=cache,target=/build-test,sharing=locked,id=mixxx-build-test-${BASE} \
+# Each checkout's own test tree, as for /build (declared here for the same reason).
+ARG CHECKOUT_ID=
+RUN --mount=type=cache,target=/build-test,sharing=locked,id=mixxx-build-test-${BASE}${CHECKOUT_ID} \
     --mount=type=cache,target=/ccache,sharing=locked \
     --mount=type=cache,target=/opt/cargo/registry,sharing=locked \
     export CCACHE_DIR=/ccache \
