@@ -68,6 +68,11 @@ struct SyncSource {
 /// sends one every ~200 ms.
 constexpr double kStatusFreshMs = 1000.0;
 
+/// Whether *peer*'s status is recent enough to describe it as it is now.
+inline bool isHeard(const SyncPeer& peer) {
+    return peer.hasStatus && peer.statusAgeMs >= 0.0 && peer.statusAgeMs < kStatusFreshMs;
+}
+
 /// Choose what a lit SYNC follows.
 ///
 /// *ours* is this deck's player number, 0 before one is held.

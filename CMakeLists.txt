@@ -1088,6 +1088,7 @@ add_library(mixxx-lib STATIC EXCLUDE_FROM_ALL
   src/network/prolink/prolinkcontrols.cpp
   src/network/prolink/keysync.cpp
   src/network/prolink/prolinkkeysync.cpp
+  src/network/prolink/automaster.cpp
   src/network/prolink/syncsource.cpp
   src/network/prolink/synctempo.cpp
   src/network/prolink/prolinknetworkservice.cpp
@@ -2255,6 +2256,7 @@ if(BUILD_TESTING)
     src/test/softtakeover_test.cpp
     src/test/streamingfile_test.cpp
     src/test/keysync_test.cpp
+  src/test/automaster_test.cpp
   src/test/prolinkkeysync_test.cpp
   src/test/syncsource_test.cpp
   src/test/synctempo_test.cpp

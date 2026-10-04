@@ -16,13 +16,9 @@ constexpr double kBeatOverdueMarginMs = 5.0;
 /// now: it stopped, or it has only just started again.
 constexpr double kBeatStaleIntervals = 1.25;
 
-bool isFresh(const SyncPeer& peer) {
-    return peer.hasStatus && peer.statusAgeMs >= 0.0 && peer.statusAgeMs < kStatusFreshMs;
-}
-
 bool isCandidate(const SyncPeer& peer, int ours) {
     return peer.number >= kFirstPlayer && peer.number <= kLastPlayer && peer.number != ours &&
-            isFresh(peer);
+            isHeard(peer);
 }
 
 /// Fill in tempo and phase for a deck that is playing.

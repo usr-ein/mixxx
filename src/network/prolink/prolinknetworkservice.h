@@ -277,6 +277,29 @@ class ProLinkNetworkService : public QObject {
     /// this header as everything else about them does.
     bool reconcileMastership(int rivalMaster);
 
+    /// Give up our claim on tempo master, and remember when.
+    void standDown();
+
+    /// Take and hand over tempo master on our own, as a CDJ does: take up a
+    /// handover another deck offers us, offer it to a synced deck playing on
+    /// when our deck stops, and claim it when the network has none. Returns
+    /// whether we now hold it. See automaster.
+    bool manageMasterLikeACdj(const std::vector<SyncPeer>& peers,
+            int ours,
+            int rivalMaster,
+            bool weAreMaster);
+    /// Whether our claim was an auto-claim, which yields to any rival at once.
+    bool m_autoClaimed = false;
+    /// Auto-claims that met a rival, for the back-off; reset by a settled
+    /// master.
+    int m_autoClaimCollisions = 0;
+    /// Since every condition for an auto-claim has held; invalid otherwise.
+    QElapsedTimer m_eligibleForAutoClaim;
+    /// Since we last stood down or handed over; see automaster::kHoldOffMs.
+    QElapsedTimer m_lastStoodDown;
+    /// Whether this stop of our deck has already offered master to someone.
+    bool m_offeredSinceStop = false;
+
     /// Tell the network what this deck is playing.
     ///
     /// **The only thing that makes us a tempo other players can see.**

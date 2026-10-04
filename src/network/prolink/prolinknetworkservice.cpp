@@ -15,6 +15,7 @@
 #include "control/controlpushbutton.h"
 #include "moc_prolinknetworkservice.cpp"
 #include "network/prolink/audiblebeatclock.h"
+#include "network/prolink/automaster.h"
 #include "network/prolink/prolinkbeatposition.h"
 #include "network/prolink/prolinkcontrols.h"
 #include "network/prolink/syncsource.h"
@@ -102,10 +103,6 @@ constexpr int kBendQuietMs = 600;
 /// queued -- a slip return, a seek out of a loop -- and for the next poll to
 /// read the position that produced, rather than the one from before it.
 constexpr int kSettleMs = 150;
-
-/// A status packet older than this describes a deck that may have gone. A
-/// deck sends one every ~200 ms.
-constexpr double kStatusFreshMs = mixxx::prolink::kStatusFreshMs;
 
 /// The player range. A CDJ-3000 rig goes up to six; a mixer is 33 and
 /// rekordbox is 17 and up.
@@ -772,7 +769,13 @@ void ProLinkNetworkService::alignPhaseToMaster(double beats) {
 
 bool ProLinkNetworkService::reconcileMastership(int rivalMaster) {
     if (!(*m_pImpl->pSession)->is_tempo_master()) {
+        if (m_masterSince.isValid()) {
+            // Lost since the last poll: handed over, or a rebind. Either way
+            // not to be taken straight back by an auto-claim.
+            m_lastStoodDown.start();
+        }
         m_masterSince.invalidate();
+        m_autoClaimed = false;
         return false;
     }
     if (!m_masterSince.isValid()) {
@@ -780,6 +783,16 @@ bool ProLinkNetworkService::reconcileMastership(int rivalMaster) {
     }
     if (rivalMaster == 0) {
         return true;
+    }
+    // **An auto-claim yields at once**, to anyone: it was only ever filling an
+    // empty mastership, and a deck that claims it -- a CDJ whose MASTER was
+    // pressed, another TriMixxx that got there first -- has the better claim.
+    // A collision makes the next auto-claim wait longer; see automaster.
+    if (m_autoClaimed) {
+        kLogger.info() << "player" << rivalMaster << "claims tempo master; our auto-claim yields";
+        m_autoClaimCollisions = std::min(m_autoClaimCollisions + 1, automaster::kMaxCollisions);
+        standDown();
+        return false;
     }
     // **Not during a handover.** A deck handing mastership over keeps claiming
     // it until its successor has picked it up, so for a moment after winning a
@@ -791,9 +804,88 @@ bool ProLinkNetworkService::reconcileMastership(int rivalMaster) {
     // Past the handover window with somebody else still claiming it: the
     // network has settled on a master and it is not this deck.
     kLogger.info() << "player" << rivalMaster << "holds tempo master; standing down";
+    standDown();
+    return false;
+}
+
+void ProLinkNetworkService::standDown() {
     (*m_pImpl->pSession)->release_tempo_master();
     m_masterSince.invalidate();
-    return false;
+    m_autoClaimed = false;
+    m_lastStoodDown.start();
+}
+
+bool ProLinkNetworkService::manageMasterLikeACdj(
+        const std::vector<mixxx::prolink::SyncPeer>& peers,
+        int ours,
+        int rivalMaster,
+        bool weAreMaster) {
+
+    // Owner decision 13, first half: a deck handing master to us unasked --
+    // a CDJ master stopping while our synced deck plays on -- is taken up.
+    if (!weAreMaster) {
+        for (const auto& peer : peers) {
+            if (peer.isMaster && peer.yieldingTo == ours && mixxx::prolink::isHeard(peer) &&
+                    (*m_pImpl->pSession)->accept_tempo_master()) {
+                return true;
+            }
+        }
+    }
+
+    const bool deckPlaying = m_pDeckPlay->get() > 0.0;
+    // Second half: when our deck stops while we are master, hand master to a
+    // synced deck playing on, once per stop. If it does not pick it up we keep
+    // it -- an empty mastership is worse.
+    if (deckPlaying) {
+        m_offeredSinceStop = false;
+    } else if (weAreMaster && !m_offeredSinceStop) {
+        const int successor = automaster::successorWhenStopped(peers, ours);
+        if (successor != 0) {
+            m_offeredSinceStop = true;
+            if ((*m_pImpl->pSession)->offer_tempo_master(static_cast<std::uint8_t>(successor))) {
+                kLogger.info() << "our deck stopped; offering tempo master to player"
+                               << successor;
+            }
+        }
+    }
+
+    // Owner decisions 2 and 3: with no master on the network, a deck that is
+    // playing and following nobody takes it, after a delay that orders decks
+    // by number. See automaster::claimDelayMs().
+    bool anyClaim = rivalMaster != 0;
+    for (const auto& peer : peers) {
+        if (peer.isMaster && peer.number != ours && mixxx::prolink::isHeard(peer)) {
+            anyClaim = true;
+        }
+    }
+    automaster::ClaimInputs inputs;
+    inputs.ours = ours;
+    inputs.weAreMaster = weAreMaster;
+    inputs.anyClaim = anyClaim;
+    inputs.playingWithTempo = deckPlaying && m_pDeckFileBpm->get() > 0.0;
+    inputs.following = m_followingDevice != 0;
+    inputs.holdingOff = m_lastStoodDown.isValid() &&
+            m_lastStoodDown.elapsed() < automaster::kHoldOffMs;
+    if (anyClaim && !weAreMaster) {
+        // A settled master: past collisions no longer say anything.
+        m_autoClaimCollisions = 0;
+    }
+    if (!automaster::mayClaim(inputs)) {
+        m_eligibleForAutoClaim.invalidate();
+        return weAreMaster;
+    }
+    if (!m_eligibleForAutoClaim.isValid()) {
+        m_eligibleForAutoClaim.start();
+    }
+    if (m_eligibleForAutoClaim.elapsed() <
+            automaster::claimDelayMs(ours, m_autoClaimCollisions)) {
+        return weAreMaster;
+    }
+    kLogger.info() << "nobody holds tempo master and our deck is playing; taking it";
+    m_eligibleForAutoClaim.invalidate();
+    (*m_pImpl->pSession)->take_tempo_master();
+    m_autoClaimed = (*m_pImpl->pSession)->is_tempo_master();
+    return m_autoClaimed;
 }
 
 void ProLinkNetworkService::publishMaster() {
@@ -821,30 +913,35 @@ void ProLinkNetworkService::publishMaster() {
     //
     // So it is asked every poll: who else is claiming it?
     const int ours = static_cast<int>((*m_pImpl->pSession)->device_number());
-    int rivalMaster = 0;
+    std::vector<mixxx::prolink::SyncPeer> peers;
+    peers.reserve(players.size());
     for (const ::prolink::Player& player : players) {
-        if (!player.is_master || static_cast<int>(player.number) == ours) {
+        peers.push_back(syncPeerOf(player));
+    }
+    int rivalMaster = 0;
+    for (const auto& peer : peers) {
+        if (!peer.isMaster || peer.number == ours) {
             continue;
         }
         // **Only a claim we are still hearing.** A deck that has gone -- cable
         // pulled, powered off -- keeps its last status, mastership included,
         // until it is forgotten some 30 s later. Believing it, MASTER asked a
         // deck that was not there and KEY SYNC offered its key.
-        if (player.status_age_ms < 0.0 || player.status_age_ms > kStatusFreshMs) {
+        if (!mixxx::prolink::isHeard(peer)) {
             continue;
         }
-        const int successor = static_cast<int>(player.yielding_to);
-        if (successor == ours) {
+        if (peer.yieldingTo == ours) {
             // Naming us its successor: a takeover of ours in flight, not a
             // rival claim (F52).
             continue;
         }
         // Handing over to another deck: that deck is the master, a packet or
         // two before its own status says so.
-        rivalMaster = successor != 0 ? successor : static_cast<int>(player.number);
+        rivalMaster = peer.yieldingTo != 0 ? peer.yieldingTo : peer.number;
         break;
     }
-    const bool weAreMaster = reconcileMastership(rivalMaster);
+    bool weAreMaster = reconcileMastership(rivalMaster);
+    weAreMaster = manageMasterLikeACdj(peers, ours, rivalMaster, weAreMaster);
     // Published here rather than beside the playback, because that returns
     // early when no track is loaded -- and holding tempo master with the deck
     // stopped is an ordinary state whose button must not go dark.
@@ -879,11 +976,6 @@ void ProLinkNetworkService::publishMaster() {
     // phase meter drew, and the meter's choice is a different question -- it
     // will show a deck being cued up, which nobody asked to follow. See
     // chooseSyncSource() for the rules.
-    std::vector<mixxx::prolink::SyncPeer> peers;
-    peers.reserve(players.size());
-    for (const ::prolink::Player& player : players) {
-        peers.push_back(syncPeerOf(player));
-    }
     m_syncSource = mixxx::prolink::chooseSyncSource(peers, ours);
     if (m_syncSource.device != m_followedDevice) {
         // A different deck's phase: what was measured against the last one
@@ -1066,6 +1158,8 @@ void ProLinkNetworkService::shutdown() {
     m_alignWhenTempoMatches = false;
     // A deck left playing a touch fast for a network that is gone.
     setPhaseTrim(0.0);
+    m_autoClaimed = false;
+    m_eligibleForAutoClaim.invalidate();
     if (m_pControls && ProLinkControls::instance() == m_pControls) {
         clearMaster();
     }
