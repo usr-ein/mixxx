@@ -1,5 +1,7 @@
 #include "sources/soundsourceprolink.h"
 
+#include <QFileInfo>
+
 #include <utility>
 
 #include "util/logger.h"
@@ -61,6 +63,18 @@ SoundSourceProLink::importTrackMetadataAndCoverImage(
     Q_UNUSED(pCoverImage)
     Q_UNUSED(resetMissingTagMetadata)
     return std::make_pair(ImportResult::Unavailable, QDateTime());
+}
+
+SoundSource::OpenResult SoundSourceProLink::tryOpen(OpenMode mode, const OpenParams& params) {
+    const QString suffix = QFileInfo(getLocalFileName()).suffix().toLower();
+    m_openingUnseekable = suffix == QLatin1String("wav") || suffix == QLatin1String("aif") ||
+            suffix == QLatin1String("aiff") || suffix == QLatin1String("aifc");
+    const OpenResult result = SoundSourceFFmpeg::tryOpen(mode, params);
+    m_openingUnseekable = false;
+    if (m_pAvioContext != nullptr) {
+        m_pAvioContext->seekable = AVIO_SEEKABLE_NORMAL;
+    }
+    return result;
 }
 
 int SoundSourceProLink::readPacket(void* pOpaque, uint8_t* pBuffer, int size) {
@@ -160,6 +174,9 @@ AVIOContext* SoundSourceProLink::createAvioContext() {
         av_free(pBuffer);
         kLogger.warning() << "could not allocate an AVIO context";
         return nullptr;
+    }
+    if (m_openingUnseekable) {
+        m_pAvioContext->seekable = 0; // until tryOpen() is done
     }
     kLogger.info() << "decoding" << getLocalFileName() << "as it arrives --"
                    << m_pStream->size() << "bytes";

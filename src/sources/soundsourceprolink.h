@@ -45,6 +45,17 @@ class SoundSourceProLink : public SoundSourceFFmpeg {
             bool resetMissingTagMetadata) const override;
 
   protected:
+    /// A WAV or an AIFF opens unseekable, and is seekable once open.
+    ///
+    /// Seekable, FFmpeg's WAV and AIFF demuxers skip from the header to the
+    /// end of the file for the tags that may follow the audio -- tags the deck
+    /// takes from the pdb anyway. For a track still arriving that means
+    /// waiting for its last bytes before the first sound, and for a copy off a
+    /// FAT stick it is the worst read of all: Linux walks the file's whole
+    /// cluster chain one 512-byte FAT sector at a time to find the end, which
+    /// took 2.6 s off a 2 MB/s stick a CDJ was reading too. Their headers say
+    /// everything a decoder needs, and seeking works as before afterwards.
+    OpenResult tryOpen(OpenMode mode, const OpenParams& params) override;
     AVIOContext* createAvioContext() override;
 
   private:
@@ -56,6 +67,8 @@ class SoundSourceProLink : public SoundSourceFFmpeg {
     /// Where the decoder has got to. FFmpeg's callbacks are a stream, not a
     /// random-access file, so the position has to be kept here.
     int64_t m_position = 0;
+    /// Opening unseekable (see tryOpen).
+    bool m_openingUnseekable = false;
 };
 
 /// Claims the same file types as the ordinary decoders, and declines anything
