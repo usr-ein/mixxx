@@ -48,13 +48,17 @@ constexpr int kTagChunk = 40;
 /// How long tag reads wait for a track copy to get off the USB bus.
 constexpr int kTagYieldMs = 500;
 
-/// Whether *path* is where something is mounted, rather than a directory on
-/// the filesystem it sits in. dj-usb removes a slot's directory on eject, but
-/// only best-effort, and an empty leftover is not a stick.
-bool isMountPoint(const QString& path) {
+/// Whether *path* is where a stick is mounted: a USB disk (/dev/sd*), as
+/// dj-usb mounts them, rather than a directory on the filesystem it sits in.
+/// dj-usb removes a slot's directory on eject, but only best-effort, and an
+/// empty leftover is not a stick. Nor is the system: a release card's
+/// read-only root mounts its two layers under /media too (overlayroot's
+/// /media/root-ro and /media/root-rw), and a deck listed them as drives.
+bool isStickMount(const QString& path) {
     const QStorageInfo info(path);
     return info.isValid() && info.isReady() &&
-            QDir::cleanPath(info.rootPath()) == QDir::cleanPath(path);
+            QDir::cleanPath(info.rootPath()) == QDir::cleanPath(path) &&
+            info.device().startsWith(QByteArrayLiteral("/dev/sd"));
 }
 
 #ifdef __PROLINK__
@@ -304,7 +308,7 @@ QStringList MediaRegistry::findLocalMountPoints() {
         // was dropped here once, silently, and a DJ with one saw nothing at
         // all. A rekordbox export still counts wherever it is, mounted or not,
         // as it did before -- a development box keeps one in a plain folder.
-        if (QFileInfo::exists(QDir(path).filePath(kPdbPath)) || isMountPoint(path)) {
+        if (QFileInfo::exists(QDir(path).filePath(kPdbPath)) || isStickMount(path)) {
             mountPoints.append(path);
         }
     }
