@@ -7,7 +7,11 @@
 #include <QFileInfo>
 #include <QStandardPaths>
 #include <QThread>
+#include <algorithm>
 #include <vector>
+#ifdef Q_OS_LINUX
+#include <fcntl.h>
+#endif
 
 #include "library/deck/ramstore.h"
 #include "library/deck/streamingfile.h"
@@ -39,7 +43,18 @@ constexpr qint64 kChunkBytes = 256 * 1024;
 /// and holes read back as silence; the marker is what says not to trust it.
 const QString kCopyingSuffix = QStringLiteral(".copying");
 
+/// Past TrackCache::kLeadBytes ahead of the deck, a copy reads a chunk and then
+/// lets the stick rest three times as long as that read took: a quarter of the
+/// stick for the copy, the rest for whoever else reads it -- a CDJ playing a
+/// track off our stick, most often. Measured per chunk, so it is a quarter of
+/// what the stick gives right now, however fast or busy it is.
+constexpr int kRestPerRead = 3;
+
+/// No rest is longer than this, so a copy off a stalled stick still moves.
+constexpr qint64 kMaxRestNs = 1000LL * 1000 * 1000;
+
 QAtomicInt s_chunkDelayMs;
+QAtomicInteger<qint64> s_leadBytes;
 
 mixxx::deck::TrackCache* s_pInstance = nullptr;
 } // namespace
@@ -58,6 +73,10 @@ QString TrackCache::diskTierRoot() {
 
 void TrackCache::setChunkDelayForTest(int milliseconds) {
     s_chunkDelayMs.storeRelaxed(milliseconds);
+}
+
+void TrackCache::setLeadForTest(qint64 bytes) {
+    s_leadBytes.storeRelaxed(bytes);
 }
 
 TrackCache::TrackCache(QObject* pParent)
@@ -205,6 +224,25 @@ bool TrackCache::copyInto(const QString& from,
         *pError = in.errorString();
         return false;
     }
+    // Readahead on while the deck needs the bytes, off while the copy rests.
+    //
+    // On: with the kernel reading ahead, the copy keeps requests queued on
+    // the stick as a CDJ's reads do, and holds its own against them.
+    //
+    // Off: resting is three times the last read, and with readahead the
+    // kernel would fetch the next stretch during the rest, so the next read
+    // would come out of the page cache looking instant and the rest would
+    // shrink to nothing. Each read then is the stick's own.
+    bool urgent = true;
+#ifdef Q_OS_LINUX
+    int advice = -1;
+    const auto advise = [&in, &advice](int wanted) {
+        if (wanted != advice) {
+            ::posix_fadvise(in.handle(), 0, 0, wanted);
+            advice = wanted;
+        }
+    };
+#endif
     // Unbuffered, so a chunk is in the file -- where the decoder's own handle
     // reads it -- before it is announced.
     QFile out(to);
@@ -224,7 +262,9 @@ bool TrackCache::copyInto(const QString& from,
     std::vector<bool> copied(static_cast<size_t>(chunks), false);
     qint64 cursor = 0;
     qint64 left = chunks;
+    const qint64 lead = s_leadBytes.loadRelaxed() > 0 ? s_leadBytes.loadRelaxed() : kLeadBytes;
     QByteArray buffer(static_cast<int>(kChunkBytes), Qt::Uninitialized);
+    QElapsedTimer readTime;
     while (left > 0) {
         if (stop.loadRelaxed()) {
             *pError = QStringLiteral("stopped");
@@ -235,6 +275,8 @@ bool TrackCache::copyInto(const QString& from,
         if (wanted >= 0 && wanted < size && !copied[static_cast<size_t>(wanted / kChunkBytes)]) {
             chunk = wanted / kChunkBytes;
             cursor = chunk;
+            kLogger.debug() << "copying from" << chunk * kChunkBytes << "of" << size
+                            << "next: a reader is waiting there";
         }
         if (chunk < 0) {
             // Onwards from the cursor, round to the front for anything a jump
@@ -249,22 +291,55 @@ bool TrackCache::copyInto(const QString& from,
         }
         const qint64 offset = chunk * kChunkBytes;
         const qint64 length = qMin(kChunkBytes, size - offset);
+#ifdef Q_OS_LINUX
+        advise(urgent || wanted >= 0 ? POSIX_FADV_SEQUENTIAL : POSIX_FADV_RANDOM);
+#endif
+        readTime.start();
         if (!in.seek(offset) || in.read(buffer.data(), length) != length) {
             *pError = in.error() != QFileDevice::NoError
                     ? in.errorString()
                     : QStringLiteral("the file ended at %1 of %2 bytes").arg(offset).arg(size);
             return false;
         }
+        if (const int delay = s_chunkDelayMs.loadRelaxed(); delay > 0) {
+            QThread::msleep(static_cast<unsigned long>(delay)); // a slow stick, in a test
+        }
+        const qint64 readNs = readTime.nsecsElapsed();
+        if (readNs > 1000LL * 1000 * 1000) {
+            kLogger.debug() << "a chunk at" << offset << "took" << readNs / 1000000
+                            << "ms off the stick";
+        }
         if (!out.seek(offset) || out.write(buffer.constData(), length) != length) {
             *pError = out.errorString();
             return false;
         }
+#ifdef Q_OS_LINUX
+        // And no second copy in RAM: this one is ours now, in the RAM store.
+        ::posix_fadvise(in.handle(), offset, length, POSIX_FADV_DONTNEED);
+#endif
         pStream->markPresent(offset, length);
         copied[static_cast<size_t>(chunk)] = true;
         cursor = chunk + 1;
         --left;
-        if (const int delay = s_chunkDelayMs.loadRelaxed(); delay > 0) {
-            QThread::msleep(static_cast<unsigned long>(delay));
+
+        // Far enough ahead of the deck, the stick is shared: rest, unless a
+        // reader is waiting on a byte not copied yet or the copy is stopped.
+        const qint64 reading = pStream->readPosition();
+        qint64 ahead = 0;
+        for (qint64 c = std::clamp<qint64>(reading / kChunkBytes, 0, chunks);
+                c < chunks && copied[static_cast<size_t>(c)] && ahead < lead;
+                ++c) {
+            ahead += kChunkBytes;
+        }
+        urgent = ahead < lead;
+        if (left > 0 && !urgent) {
+            const qint64 rest = qMin(readNs * kRestPerRead, kMaxRestNs);
+            QElapsedTimer resting;
+            resting.start();
+            while (resting.nsecsElapsed() < rest && !stop.loadRelaxed() && pStream->wantedOffset() < 0) {
+                QThread::usleep(static_cast<unsigned long>(
+                        std::clamp<qint64>((rest - resting.nsecsElapsed()) / 1000, 1, 5000)));
+            }
         }
     }
     return true;

@@ -23,8 +23,9 @@ namespace {
 // A stick's track, copied for the deck. What these pin down is the bugs they
 // came from: a load copied the whole file on the GUI thread before the deck
 // could play a note of it (eighteen seconds of a frozen deck for an AIFF off a
-// USB 2 stick); and copies started for rows the selection merely rested on
-// took a slow stick's bandwidth from the track on the deck.
+// USB 2 stick); copies started for rows the selection merely rested on took a
+// slow stick's bandwidth from the track on the deck; and a copy that kept the
+// stick to itself left none for a CDJ playing off it.
 class TrackCacheTest : public testing::Test {
   protected:
     void SetUp() override {
@@ -43,6 +44,7 @@ class TrackCacheTest : public testing::Test {
     void TearDown() override {
         m_pCache.reset();
         TrackCache::setChunkDelayForTest(0);
+        TrackCache::setLeadForTest(0);
         clearTier1();
     }
 
@@ -170,6 +172,45 @@ TEST_F(TrackCacheTest, ALoadStopsTheCopyOfTheTrackItReplaces) {
     EXPECT_EQ(0, reportsFor(firstLocal, true));
     EXPECT_FALSE(QFile::exists(firstLocal));
     EXPECT_FALSE(StreamingFileRegistry::lookup(firstLocal));
+    EXPECT_EQ(content, readFile(local));
+}
+
+TEST_F(TrackCacheTest, TheCopyEasesOffOnceItIsAheadOfTheDeck) {
+    // Past the lead, each chunk is followed by three times its read in rest,
+    // which leaves the stick to a CDJ reading it. 16 chunks of 10 ms: 160 ms
+    // flat out; 4 at full speed (the 1 MiB lead) and 12 at 40 ms paced.
+    TrackCache::setChunkDelayForTest(10);
+    TrackCache::setLeadForTest(1024 * 1024);
+    const QByteArray content = pattern(4 * 1024 * 1024, 11);
+    const QString source = makeSource(QStringLiteral("paced.aiff"), content);
+    QElapsedTimer timer;
+    timer.start();
+    const QString local = m_pCache->startLocal(m_medium, source);
+    ASSERT_TRUE(waitFor([&]() { return reportsFor(local, true) == 1; }));
+    const qint64 elapsed = timer.elapsed();
+    EXPECT_GE(elapsed, 350);
+    EXPECT_LT(elapsed, 3000);
+    EXPECT_EQ(content, readFile(local));
+}
+
+TEST_F(TrackCacheTest, ADeckThatCatchesUpIsServedAtFullSpeed) {
+    // Resting is for when the deck is far ahead: a read that has to wait --
+    // a seek past the copy -- ends the rest at once.
+    TrackCache::setChunkDelayForTest(10);
+    TrackCache::setLeadForTest(1024 * 1024);
+    const int size = 8 * 1024 * 1024;
+    const QByteArray content = pattern(size, 12);
+    const QString source = makeSource(QStringLiteral("seek.aiff"), content);
+    const QString local = m_pCache->startLocal(m_medium, source);
+    const auto pStream = StreamingFileRegistry::lookup(local);
+    ASSERT_TRUE(pStream);
+    QThread::msleep(200); // well into the paced part
+    const qint64 offset = 6 * 1024 * 1024 + 512;
+    qint64 elapsedMs = 0;
+    EXPECT_EQ(content.mid(static_cast<int>(offset), 4096),
+            readThroughStream(pStream, offset, 4096, &elapsedMs));
+    EXPECT_LT(elapsedMs, 120);
+    ASSERT_TRUE(waitFor([&]() { return reportsFor(local, true) == 1; }));
     EXPECT_EQ(content, readFile(local));
 }
 

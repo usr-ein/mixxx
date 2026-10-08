@@ -198,7 +198,16 @@ qint64 StreamingFile::read(qint64 offset, char* pBuffer, qint64 length) {
     if (!m_file.seek(offset)) {
         return -1;
     }
-    return m_file.read(pBuffer, wanted);
+    const qint64 read = m_file.read(pBuffer, wanted);
+    if (read > 0) {
+        m_readEnd = offset + read;
+    }
+    return read;
+}
+
+qint64 StreamingFile::readPosition() const {
+    QMutexLocker locked(&m_mutex);
+    return m_readEnd;
 }
 
 qint64 StreamingFile::wantedOffset() const {

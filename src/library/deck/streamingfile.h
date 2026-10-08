@@ -98,6 +98,9 @@ class StreamingFile {
     /// its own order fetches next, so a seek or a hot cue ahead of the copy
     /// waits for its own bytes and not for everything before them.
     qint64 wantedOffset() const;
+    /// Where the latest read ended: roughly where the deck is reading, which
+    /// is what a copy measures how far ahead it is against.
+    qint64 readPosition() const;
 
     /// How many reads had to wait, and how long in total. The number that says
     /// whether streaming is keeping ahead of the playhead: a healthy track
@@ -121,6 +124,7 @@ class StreamingFile {
     int m_waitCount = 0;
     qint64 m_waitedMs = 0;
     qint64 m_wanted = -1;
+    qint64 m_readEnd = 0;
 };
 
 /// Which local paths are being streamed right now.

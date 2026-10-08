@@ -34,6 +34,12 @@ class StreamingFile;
 /// scrolled, and on a slow stick they took the bandwidth that the track on the
 /// deck, and any CDJ reading the stick over the network, needed.
 ///
+/// **And the stick is shared.** The loaded track copies at full speed only
+/// until it is kLeadBytes ahead of where the deck reads; after that it finishes
+/// at a quarter of the stick's pace, which keeps the deck ahead (a quarter of a
+/// 3.7 MB/s stick is more than twice what a 32-bit float WAV plays) and leaves
+/// the rest to a CDJ playing off our stick.
+///
 /// Without it the deck survives about **fifteen seconds** after a stick is
 /// pulled — Mixxx holds 5 MB of decoded audio per deck (80 chunks × 8192 frames
 /// × 2 ch × 4 B in `cachingreader.cpp`), which at 44.1 kHz is 14.9 seconds of
@@ -67,10 +73,11 @@ class TrackCache : public QObject {
     /// it is already here, or a file of the track's full size, registered as a
     /// StreamingFile, that a decoder reads as the bytes land: in order from the
     /// start, except that a read waiting further on -- an M4A's index at the
-    /// end, a seek, a hot cue -- has the copy carry on from there. A copy already
-    /// running for the track is handed back as it is, never started a second
-    /// time; any other copy stops, since the deck holds one track. Empty when
-    /// the stick cannot be read at all.
+    /// end, a seek, a hot cue -- has the copy carry on from there, at full
+    /// speed. Once the copy is well ahead of the deck, it eases off (see the
+    /// class). A copy already running for the track is handed back as it is,
+    /// never started a second time; any other copy stops, since the deck holds
+    /// one track. Empty when the stick cannot be read at all.
     QString startLocal(const MediumId& medium, const QString& sourcePath);
 
     /// The deck let go of the track at *localPath*: if its copy is still
@@ -136,9 +143,17 @@ class TrackCache : public QObject {
         return m_diskBytesWritten;
     }
 
-    /// For tests: wait this long between chunks, so a copy lasts long enough
-    /// to be caught running.
+    /// For tests: each chunk's read takes this long more, so a copy lasts long
+    /// enough to be caught running, as off a slow stick.
     static void setChunkDelayForTest(int milliseconds);
+    /// For tests: how far ahead of the deck a copy goes at full speed (0: the
+    /// real kLeadBytes).
+    static void setLeadForTest(qint64 bytes);
+
+    /// How far ahead of where the deck reads a copy goes at full speed: 16 MiB,
+    /// which is a minute and a half of 16-bit AIFF, 44 s of a 32-bit float WAV
+    /// at 48 kHz, and seven minutes of a 320 kbps MP3.
+    static constexpr qint64 kLeadBytes = 16 * 1024 * 1024;
 
   signals:
     /// A background copy finished, or was stopped (ok false). Carries the local
