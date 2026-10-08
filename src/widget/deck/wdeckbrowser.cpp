@@ -467,6 +467,17 @@ WDeckBrowser::WDeckBrowser(QWidget* pParent, Library* pLibrary, UserSettingsPoin
                     m_pPreviews->forget(medium.id);
                 }
             });
+    // And when it comes back -- the same stick, by its mount and UUID -- what
+    // is cached from it can be read again, so it is dropped to make room
+    // rather than written to the card.
+    connect(m_pRegistry.get(),
+            &MediaRegistry::mediumAppeared,
+            this,
+            [this](mixxx::deck::MediumInfo medium) {
+                if (m_pCache && medium.id.isLocal()) {
+                    m_pCache->markReachable(medium.id);
+                }
+            });
     connect(m_pRegistry.get(),
             &MediaRegistry::mediaChanged,
             this,

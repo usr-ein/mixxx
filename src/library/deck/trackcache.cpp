@@ -554,6 +554,21 @@ void TrackCache::markUnreachable(const MediumId& medium) {
     }
 }
 
+void TrackCache::markReachable(const MediumId& medium) {
+    m_unreachable.remove(medium.key());
+    int count = 0;
+    for (auto it = m_entries.begin(); it != m_entries.end(); ++it) {
+        if (it->medium == medium && !it->reReadable) {
+            it->reReadable = true;
+            ++count;
+        }
+    }
+    if (count > 0) {
+        kLogger.info() << count << "cached files can be re-read from" << medium.key()
+                       << "again";
+    }
+}
+
 bool TrackCache::hasPinnedFrom(const MediumId& medium) const {
     for (auto it = m_entries.constBegin(); it != m_entries.constEnd(); ++it) {
         if (it->medium == medium && m_pinned.contains(it->localPath) &&

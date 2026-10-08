@@ -106,6 +106,12 @@ class TrackCache : public QObject {
     /// A medium is gone: everything cached from it can no longer be re-read, so
     /// nothing belonging to it may be dropped to reclaim space.
     void markUnreachable(const MediumId& medium);
+    /// The same medium is back: what is cached from it can be read again, and
+    /// is dropped to reclaim space rather than spilled to the card. Without
+    /// this, a stick pulled and pushed back in left every track ever copied off
+    /// it marked as the only copy, and the next squeeze on the RAM tier wrote
+    /// them to the SD card -- 148 MB for one WAV, the one time it was seen.
+    void markReachable(const MediumId& medium);
 
     /// Whether something pinned -- i.e. on the deck right now -- came from this
     /// medium and is here in full. What lets the eject notice say the track
