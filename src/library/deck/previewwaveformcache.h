@@ -29,9 +29,9 @@ namespace deck {
 ///  * **The worker returns a value; the GUI thread mutates the cache.** The
 ///    worker touches no member and no widget.
 ///  * **The worker is one thread, and it is ours.** Not the global pool, which
-///    carries Mixxx's analysers and the track cache's prefetch: four threads
-///    reading one stick is slower than one, and a private pool is also what
-///    makes "drop everything queued" mean anything.
+///    carries Mixxx's analysers: four threads reading one stick is slower than
+///    one, and a private pool is also what makes "drop everything queued" mean
+///    anything.
 ///
 /// # A late answer is normal
 ///

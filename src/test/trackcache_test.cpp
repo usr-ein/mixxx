@@ -20,11 +20,11 @@ using mixxx::deck::TrackCache;
 
 namespace {
 
-// A stick's track, copied for the deck. What these pin down is the bug they
+// A stick's track, copied for the deck. What these pin down is the bugs they
 // came from: a load copied the whole file on the GUI thread before the deck
 // could play a note of it (eighteen seconds of a frozen deck for an AIFF off a
-// USB 2 stick), and a load during the dwell prefetch of the same track started
-// a second copy whose loser played straight off the stick.
+// USB 2 stick); and copies started for rows the selection merely rested on
+// took a slow stick's bandwidth from the track on the deck.
 class TrackCacheTest : public testing::Test {
   protected:
     void SetUp() override {
@@ -155,44 +155,21 @@ TEST_F(TrackCacheTest, ALoadReturnsAtOnceAndPlaysWhileTheCopyArrives) {
     EXPECT_EQ(1, m_reports.size());
 }
 
-TEST_F(TrackCacheTest, ALoadTakesOverThePrefetchOfTheSameTrack) {
-    const QByteArray content = pattern(4 * 1024 * 1024, 2);
-    const QString source = makeSource(QStringLiteral("track.wav"), content);
-
-    m_pCache->prefetch(m_medium, source);
-    const QString local = m_pCache->localPathFor(m_medium, source);
-    const auto pPrefetched = StreamingFileRegistry::lookup(local);
-    ASSERT_TRUE(pPrefetched);
-
-    // The race this replaces: the load copied the file a second time, and
-    // whichever copy lost the rename made the deck play off the stick.
-    EXPECT_EQ(local, m_pCache->startLocal(m_medium, source));
-    EXPECT_EQ(pPrefetched, StreamingFileRegistry::lookup(local));
-
-    ASSERT_TRUE(waitFor([&]() { return !m_reports.isEmpty(); }));
-    QCoreApplication::processEvents();
-    EXPECT_EQ(1, reportsFor(local, true));
-    EXPECT_EQ(1, m_reports.size());
-    EXPECT_EQ(content, readFile(local));
-}
-
-TEST_F(TrackCacheTest, ALoadStopsThePrefetchOfAnotherTrack) {
-    const QString looked = makeSource(QStringLiteral("looked.aiff"), pattern(8 * 1024 * 1024, 3));
+TEST_F(TrackCacheTest, ALoadStopsTheCopyOfTheTrackItReplaces) {
+    // The deck holds one track: the one it held before is not worth the stick.
+    const QString first = makeSource(QStringLiteral("first.aiff"), pattern(8 * 1024 * 1024, 3));
     const QByteArray content = pattern(1024 * 1024, 4);
-    const QString loaded = makeSource(QStringLiteral("loaded.aiff"), content);
+    const QString second = makeSource(QStringLiteral("second.aiff"), content);
 
-    m_pCache->prefetch(m_medium, looked);
-    const QString lookedLocal = m_pCache->localPathFor(m_medium, looked);
-    const QString local = m_pCache->startLocal(m_medium, loaded);
+    const QString firstLocal = m_pCache->startLocal(m_medium, first);
+    const QString local = m_pCache->startLocal(m_medium, second);
     ASSERT_FALSE(local.isEmpty());
 
-    // The loaded track gets the stick; the prefetch stops at its next chunk
-    // rather than finishing 8 MB first.
     ASSERT_TRUE(waitFor([&]() { return reportsFor(local, true) == 1; }));
-    ASSERT_TRUE(waitFor([&]() { return reportsFor(lookedLocal, false) == 1; }));
-    EXPECT_EQ(0, reportsFor(lookedLocal, true));
-    EXPECT_FALSE(QFile::exists(lookedLocal));
-    EXPECT_FALSE(StreamingFileRegistry::lookup(lookedLocal));
+    ASSERT_TRUE(waitFor([&]() { return reportsFor(firstLocal, false) == 1; }));
+    EXPECT_EQ(0, reportsFor(firstLocal, true));
+    EXPECT_FALSE(QFile::exists(firstLocal));
+    EXPECT_FALSE(StreamingFileRegistry::lookup(firstLocal));
     EXPECT_EQ(content, readFile(local));
 }
 
@@ -215,23 +192,6 @@ TEST_F(TrackCacheTest, AReadAheadOfTheCopyIsFetchedNext) {
 
     ASSERT_TRUE(waitFor([&]() { return reportsFor(local, true) == 1; }));
     EXPECT_EQ(content, readFile(local));
-}
-
-TEST_F(TrackCacheTest, APrefetchWaitsUntilTheDecksTrackHasArrived) {
-    const QByteArray deckContent = pattern(3 * 1024 * 1024, 6);
-    const QString deck = makeSource(QStringLiteral("deck.aiff"), deckContent);
-    const QString next = makeSource(QStringLiteral("next.aiff"), pattern(1024 * 1024, 7));
-
-    const QString deckLocal = m_pCache->startLocal(m_medium, deck);
-    m_pCache->prefetch(m_medium, next);
-    const QString nextLocal = m_pCache->localPathFor(m_medium, next);
-    // Nothing of it yet: the deck's track has the stick.
-    EXPECT_FALSE(StreamingFileRegistry::lookup(nextLocal));
-
-    ASSERT_TRUE(waitFor([&]() { return reportsFor(nextLocal, true) == 1; }));
-    ASSERT_EQ(2, m_reports.size());
-    EXPECT_EQ(deckLocal, m_reports.at(0).first);
-    EXPECT_EQ(deckContent, readFile(deckLocal));
 }
 
 TEST_F(TrackCacheTest, ReleasingTheDecksTrackStopsItsCopy) {

@@ -29,6 +29,11 @@ class StreamingFile;
 /// 52 MB AIFF off a USB 2 stick at 3.7 MB/s, and nothing on the screen to say
 /// the push had been heard.
 ///
+/// **Only the loaded track is copied.** Nothing is copied ahead for a row the
+/// selection rests on: those copies queued whole files on the stick while a DJ
+/// scrolled, and on a slow stick they took the bandwidth that the track on the
+/// deck, and any CDJ reading the stick over the network, needed.
+///
 /// Without it the deck survives about **fifteen seconds** after a stick is
 /// pulled — Mixxx holds 5 MB of decoded audio per deck (80 chunks × 8192 frames
 /// × 2 ch × 4 B in `cachingreader.cpp`), which at 44.1 kHz is 14.9 seconds of
@@ -56,28 +61,16 @@ class TrackCache : public QObject {
     QString localPathFor(const MediumId& medium, const QString& sourcePath) const;
     bool isCached(const MediumId& medium, const QString& sourcePath) const;
 
-    /// Start copying in the background, if it is not already here.
-    ///
-    /// Called as the selection dwells on a row: a DJ looks at a track before
-    /// loading it, so by the time the encoder is pushed the copy is usually
-    /// well under way. One at a time, because the constraint is the USB bus,
-    /// not the CPU -- so only the latest row is copied: a prefetch for a row
-    /// scrolled past is dropped, and none starts while the track on the deck is
-    /// still arriving, which would take the stick away from it. That one runs
-    /// once the deck's copy is done.
-    void prefetch(const MediumId& medium, const QString& sourcePath);
-
     /// Start copying a stick's track for the deck, and return where it goes.
     ///
     /// **Never waits for the copy.** What comes back is the finished copy when
     /// it is already here, or a file of the track's full size, registered as a
     /// StreamingFile, that a decoder reads as the bytes land: in order from the
     /// start, except that a read waiting further on -- an M4A's index at the
-    /// end, a seek, a hot cue -- has the copy carry on from there. A copy already running for the track (a prefetch,
-    /// usually) is handed back as it is, never started a second time: two
-    /// copies of one file raced, and the loser fell back to playing straight
-    /// off the stick. Other prefetches give way. Empty when the stick cannot be
-    /// read at all.
+    /// end, a seek, a hot cue -- has the copy carry on from there. A copy already
+    /// running for the track is handed back as it is, never started a second
+    /// time; any other copy stops, since the deck holds one track. Empty when
+    /// the stick cannot be read at all.
     QString startLocal(const MediumId& medium, const QString& sourcePath);
 
     /// The deck let go of the track at *localPath*: if its copy is still
@@ -162,8 +155,6 @@ class TrackCache : public QObject {
         std::shared_ptr<StreamingFile> stream;
         /// Set to stop it at its next chunk. Shared with the copy itself.
         std::shared_ptr<QAtomicInt> stop;
-        /// The deck is reading it, so nothing but its own release stops it.
-        bool forDeck = false;
     };
 
     struct Entry {
@@ -190,13 +181,13 @@ class TrackCache : public QObject {
             QString* pError);
     /// Whether the whole of *localPath* is here, with no copy still writing it.
     bool isComplete(const QString& localPath) const;
-    QString beginCopy(const MediumId& medium, const QString& sourcePath, bool forDeck);
+    QString beginCopy(const MediumId& medium, const QString& sourcePath);
     void onCopyDone(const QString& localPath,
             const std::shared_ptr<StreamingFile>& pStream,
             bool ok,
             const QString& error);
-    /// Stop every prefetch but the one for *keep*.
-    void stopPrefetches(const QString& keep = QString());
+    /// Stop every copy but the one for *keep*.
+    void stopCopies(const QString& keep = QString());
     void touch(const QString& localPath);
     /// Bring tier 1 back under its cap, dropping what can be re-read and
     /// spilling to tier 2 only what cannot.
@@ -219,9 +210,6 @@ class TrackCache : public QObject {
     QHash<QString, Entry> m_entries;
     /// Copies under way, by local path.
     QHash<QString, Copy> m_copies;
-    /// The prefetch waiting for the deck's copy to finish: only the latest.
-    MediumId m_pendingPrefetchMedium;
-    QString m_pendingPrefetchSource;
     /// Media pulled out while a copy of theirs was running: what those copies
     /// leave behind is the only copy there is.
     QSet<QString> m_unreachable;

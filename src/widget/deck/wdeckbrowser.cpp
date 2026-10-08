@@ -391,33 +391,11 @@ WDeckBrowser::WDeckBrowser(QWidget* pParent, Library* pLibrary, UserSettingsPoin
                         m_pPreviews->lookup(m_previewMedium, rekordboxId));
             });
 
-    // A DJ looks at a track before loading it, so the dwell is what turns
-    // "selected" into "probably wanted" without copying everything scrolled
-    // past. 300 ms is short enough to be ready by the time the encoder is
-    // pushed and long enough that spinning through a list copies nothing.
-    m_prefetchDwell.setSingleShot(true);
-    m_prefetchDwell.setInterval(300);
-    connect(&m_prefetchDwell, &QTimer::timeout, this, [this]() {
-        if (!inTrackList() || !m_pCache) {
-            return;
-        }
-        const int row = m_pTrackView->selectedRow();
-        const int locationColumn = m_pTrackModel->fieldIndex(TRACKLOCATIONSTABLE_LOCATION);
-        if (row < 0 || locationColumn < 0) {
-            return;
-        }
-        const QString source =
-                m_pTrackModel->index(row, locationColumn).data(Qt::DisplayRole).toString();
-        // Local media only. A remote track has no file to copy -- its location
-        // is where the bytes will go, not where they are -- so a prefetch of
-        // one is a worker thread spawned to fail. Remote tracks are not
-        // pre-warmed at all: they stream on load, and starting a download for
-        // every row a DJ pauses on would fill the tmpfs with tracks nobody
-        // played and hold the player's one transfer slot while doing it.
-        if (currentMedium().isLocal()) {
-            m_pCache->prefetch(currentMedium(), source);
-        }
-    });
+    // Nothing is copied for a row the selection rests on, only for a track
+    // that is loaded. A copy started for every row a DJ paused on while
+    // looking for a track queued whole files on the stick, one after another,
+    // and on a slow one those took the bandwidth that the track on the deck,
+    // and any player reading the stick over the network, needed.
 
     m_pRegistry = std::make_unique<MediaRegistry>(m_pLibrary->dbConnectionPool(), this);
     // A cover asked for while a row was being drawn has landed. Both delegates
@@ -1217,9 +1195,6 @@ void WDeckBrowser::onSelectionMoved(int row) {
     Q_UNUSED(row);
     m_lastSelectionMove.restart();
     updateInfoPanel();
-    if (inTrackList()) {
-        m_prefetchDwell.start();
-    }
 }
 
 MediumId WDeckBrowser::currentMedium() const {
@@ -1632,10 +1607,10 @@ void WDeckBrowser::loadSelectedTrack() {
         QString local;
         if (medium.isLocal()) {
             // Played while it copies too, like a remote track: the copy is
-            // started (or, from the dwell prefetch, already running or done)
-            // and never waited for here. Waiting for it froze the deck for as
-            // long as the stick took to give up the whole file -- eighteen
-            // seconds for an AIFF off a slow stick.
+            // started (or found already done) and never waited for here.
+            // Waiting for it froze the deck for as long as the stick took to
+            // give up the whole file -- eighteen seconds for an AIFF off a
+            // slow stick.
             local = m_pCache->startLocal(medium, source);
         } else if (m_pRegistry) {
             // A remote track is not copied and then played -- it is played

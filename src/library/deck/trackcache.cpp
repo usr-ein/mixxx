@@ -270,7 +270,7 @@ bool TrackCache::copyInto(const QString& from,
     return true;
 }
 
-QString TrackCache::beginCopy(const MediumId& medium, const QString& sourcePath, bool forDeck) {
+QString TrackCache::beginCopy(const MediumId& medium, const QString& sourcePath) {
     const QFileInfo source(sourcePath);
     if (sourcePath.isEmpty() || !source.isFile()) {
         return QString();
@@ -327,7 +327,6 @@ QString TrackCache::beginCopy(const MediumId& medium, const QString& sourcePath,
     copy.size = size;
     copy.stream = pStream;
     copy.stop = std::make_shared<QAtomicInt>(0);
-    copy.forDeck = forDeck;
     m_copies.insert(local, copy);
     // Counted from the start, at its full size: it takes that much of the
     // tmpfs whatever has landed, so room is made for it now.
@@ -355,9 +354,7 @@ QString TrackCache::beginCopy(const MediumId& medium, const QString& sourcePath,
                             onCopyDone(local, pStream, ok, error);
                         },
                         Qt::QueuedConnection);
-            },
-            // The deck's copy goes before any prefetch still queued.
-            forDeck ? 1 : 0);
+            });
     return local;
 }
 
@@ -402,24 +399,11 @@ void TrackCache::onCopyDone(const QString& localPath,
         }
         emit cached(localPath, false);
     }
-
-    // The deck's copy is done (or gone): the prefetch that waited for it, if
-    // the selection is still where it was, goes now.
-    bool deckCopying = false;
-    for (const Copy& other : std::as_const(m_copies)) {
-        deckCopying |= other.forDeck;
-    }
-    if (!deckCopying && !m_pendingPrefetchSource.isEmpty()) {
-        const MediumId medium = m_pendingPrefetchMedium;
-        const QString source = m_pendingPrefetchSource;
-        m_pendingPrefetchSource.clear();
-        prefetch(medium, source);
-    }
 }
 
-void TrackCache::stopPrefetches(const QString& keep) {
+void TrackCache::stopCopies(const QString& keep) {
     for (auto it = m_copies.begin(); it != m_copies.end(); ++it) {
-        if (!it->forDeck && it.key() != keep) {
+        if (it.key() != keep) {
             it->stop->storeRelaxed(1);
         }
     }
@@ -430,21 +414,19 @@ QString TrackCache::startLocal(const MediumId& medium, const QString& sourcePath
     if (local.isEmpty()) {
         return QString();
     }
-    m_pendingPrefetchSource.clear();
     if (isComplete(local)) {
         touch(local);
         return local;
     }
     if (auto it = m_copies.find(local); it != m_copies.end() && !it->stop->loadRelaxed()) {
-        // Already coming, from a prefetch: it is the deck's now, and the rest
-        // make way for it.
-        it->forDeck = true;
-        stopPrefetches(local);
+        // The same track loaded again while it is still arriving.
+        stopCopies(local);
         kLogger.debug() << "loading the copy already under way:" << sourcePath;
         return local;
     }
-    stopPrefetches();
-    const QString started = beginCopy(medium, sourcePath, true);
+    // The deck holds one track: a copy for any other is not wanted any more.
+    stopCopies();
+    const QString started = beginCopy(medium, sourcePath);
     if (started.isEmpty()) {
         kLogger.warning() << "could not start copying" << sourcePath;
     }
@@ -453,40 +435,13 @@ QString TrackCache::startLocal(const MediumId& medium, const QString& sourcePath
 
 void TrackCache::release(const QString& localPath) {
     const auto it = m_copies.find(localPath);
-    if (it == m_copies.end() || !it->forDeck) {
+    if (it == m_copies.end() || it->stop->loadRelaxed()) {
         return;
     }
     // Nobody is going to play the rest, and copying it would only keep the
     // stick from the track that replaces it.
-    it->forDeck = false;
     it->stop->storeRelaxed(1);
     kLogger.debug() << "the deck let go of" << localPath << "before its copy finished";
-}
-
-void TrackCache::prefetch(const MediumId& medium, const QString& sourcePath) {
-    if (sourcePath.isEmpty()) {
-        return;
-    }
-    const QString local = localPathFor(medium, sourcePath);
-    if (local.isEmpty() || isComplete(local)) {
-        return;
-    }
-    if (auto it = m_copies.find(local); it != m_copies.end() && !it->stop->loadRelaxed()) {
-        return; // already coming
-    }
-    for (const Copy& copy : std::as_const(m_copies)) {
-        if (copy.forDeck) {
-            // The track on the deck is still arriving, and it has the stick to
-            // itself until it has: this waits, and only the latest row does.
-            m_pendingPrefetchMedium = medium;
-            m_pendingPrefetchSource = sourcePath;
-            return;
-        }
-    }
-    // Fire and forget, and only the latest: a row the selection has left is
-    // not worth the bus.
-    stopPrefetches();
-    beginCopy(medium, sourcePath, false);
 }
 
 void TrackCache::adopt(const MediumId& medium, const QString& localPath, qint64 size) {
