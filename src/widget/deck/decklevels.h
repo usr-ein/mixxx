@@ -29,7 +29,7 @@ namespace deck {
 /// backlight there, or a machine that is not a Pi, has no brightness to set.
 ///
 /// **Neither is kept in mixxx.cfg.** Mixxx persists neither, never writes that
-/// file back (CoreServices::finalize()), and mixxx_config/upload.sh replaces it
+/// file back (CoreServices::finalize()), and the config deploy step replaces it
 /// on every deploy, which would put both back to default for a mapping tweak.
 /// So they have a file of their own beside it, like sessionpurge's boot id,
 /// written a moment after the last change and applied when the skin loads. It

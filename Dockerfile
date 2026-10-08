@@ -5,15 +5,16 @@
 # things follow from that:
 #
 #   - BASE must be the same Debian release the Pi runs, which is trixie. It is
-#     pinned here and in upload.sh rather than read off the device, so a build
-#     does not need the deck switched on and cannot quietly change release;
-#     upload.sh checks the deck against the pin and stops if they disagree. A
+#     pinned here and in the deploy step rather than read off the device, so a
+#     build does not need the deck switched on and cannot quietly change
+#     release; the deploy step checks the deck against the pin and stops if
+#     they disagree. A
 #     newer release links against a newer glibc and the binary then refuses to
 #     start on the Pi; an older one fails at the link step, described further
 #     down beside the build tree's cache key.
 #   - Anything this build links dynamically has to already be on the Pi. The
 #     dependencies below are Mixxx's own Debian build-deps, so that holds by
-#     construction; upload.sh re-checks with ldd before installing anyway.
+#     construction; the deploy step re-checks with ldd before installing anyway.
 #
 # KeyFinder (musical key detection) is left ON, unlike packaging/debian/rules
 # which disables it: Debian has no libkeyfinder package at all, so find_package
@@ -26,7 +27,8 @@
 # this build never installs, so it is inert. Kept explicit so a later
 # `cmake --install` here cannot quietly start writing udev rules.
 #
-# Build and deploy with: ./upload.sh
+# Built and deployed by the TriMixxx repo's deploy step 004_mixxx
+# (pi-qemu/deploy/004_mixxx.sh): pi-qemu deck deploy TARGET mixxx.
 
 ARG BASE=debian:trixie
 FROM ${BASE} AS build
@@ -84,7 +86,7 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
 # source edit does not re-download it.
 #
 # Nothing from this reaches the Pi: a Rust staticlib is absorbed into the
-# binary, which is the point. upload.sh's ldd check stays as true as it was.
+# binary, which is the point. The deploy step's ldd check stays as true as it was.
 ENV RUSTUP_HOME=/opt/rustup CARGO_HOME=/opt/cargo PATH=/opt/cargo/bin:$PATH
 RUN curl --proto '=https' --tlsv1.2 -sSf https://sh.rustup.rs \
       | sh -s -- -y --no-modify-path --default-toolchain none

@@ -797,7 +797,7 @@ void CoreServices::finalize() {
     m_pLibrary->stopPendingTasks();
 
     // mixxx.cfg is not saved on the way out, or anywhere else. On the deck it
-    // is deployed by mixxx_config/upload.sh and only ever edited by hand, so
+    // is deployed by the config deploy step and only ever edited by hand, so
     // writing it back bought nothing, and the write landed seconds before the
     // power is cut. ConfigObject::save() deletes the old file and then renames
     // the new one in, with no fsync -- the one replace pattern that ext4's
