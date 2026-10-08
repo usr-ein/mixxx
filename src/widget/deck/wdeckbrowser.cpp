@@ -1550,11 +1550,11 @@ void WDeckBrowser::onBack() {
 ///  1. **Read the row.** Every field is taken now, before anything below can
 ///     run a nested event loop, because during one the model can be re-sorted
 ///     or reset underneath us.
-///  2. **Get a local file.** A stick is copied; a remote track is *started*
-///     downloading and comes back as a sparse file of the right size whose
-///     unwritten parts block a reader instead of handing it zeros. Either way
-///     the deck plays a copy, never the medium -- that is what lets a stick be
-///     pulled mid-track.
+///  2. **Get a local file.** A stick's track is *started* copying and a remote
+///     one *started* downloading; either comes back as a file of the right
+///     size whose unwritten parts block a reader instead of handing it zeros.
+///     Either way the deck plays a copy, never the medium -- that is what lets
+///     a stick be pulled mid-track.
 ///  3. **Make the Track.**
 ///  4. **Fill it in from the pdb**, never from the file: the metadata, and the
 ///     rekordbox grid, cues and waveform from the ANLZ files beside it.
@@ -1620,9 +1620,12 @@ void WDeckBrowser::loadSelectedTrack() {
     if (m_pCache && !source.isEmpty()) {
         QString local;
         if (medium.isLocal()) {
-            // Usually already there from the dwell prefetch; this is the slow
-            // path, and it copies the whole file before returning.
-            local = m_pCache->ensureLocal(medium, source);
+            // Played while it copies too, like a remote track: the copy is
+            // started (or, from the dwell prefetch, already running or done)
+            // and never waited for here. Waiting for it froze the deck for as
+            // long as the stick took to give up the whole file -- eighteen
+            // seconds for an AIFF off a slow stick.
+            local = m_pCache->startLocal(medium, source);
         } else if (m_pRegistry) {
             // A remote track is not copied and then played -- it is played
             // while it copies. What comes back is a file of the right size
@@ -1636,12 +1639,7 @@ void WDeckBrowser::loadSelectedTrack() {
             // back as the stream already in flight, and letting go of it there
             // would abandon the one about to be played.
             if (!m_pinnedPath.isEmpty() && m_pinnedPath != local) {
-                m_pCache->unpin(m_pinnedPath);
-                // The outgoing track: nothing is reading it any more, so wake
-                // anything that still is and let go of it.
-                if (m_pRegistry) {
-                    m_pRegistry->stopStreaming(m_pinnedPath);
-                }
+                releasePinned();
             }
             // Immediately, and with no event loop between this and the adopt
             // inside startStreaming(): an eviction sweep in that gap could drop
@@ -1653,6 +1651,10 @@ void WDeckBrowser::loadSelectedTrack() {
             // through to the original path keeps a local stick playable; a
             // remote one has nothing to fall through to and will not load.
             kLogger.warning() << "not cached, playing from source:" << source;
+            // The track on the deck is not the pinned one any more. Left
+            // pinned, the last track's copy made an eject say this one was
+            // cached and would keep playing, while it was reading the stick.
+            releasePinned();
         }
     }
 
@@ -1764,6 +1766,21 @@ void WDeckBrowser::loadSelectedTrack() {
                     << "waveform" << !pTrack->getWaveform().isNull()
                     << "summary" << !pTrack->getWaveformSummary().isNull();
     emit loadTrackToPlayer(pTrack, kDeckGroup, false);
+}
+
+void WDeckBrowser::releasePinned() {
+    if (m_pinnedPath.isEmpty() || !m_pCache) {
+        return;
+    }
+    m_pCache->unpin(m_pinnedPath);
+    // The outgoing track: nothing is reading it any more, so wake anything
+    // that still is and let go of it -- and of its copy, if that is still
+    // coming off a stick.
+    m_pCache->release(m_pinnedPath);
+    if (m_pRegistry) {
+        m_pRegistry->stopStreaming(m_pinnedPath);
+    }
+    m_pinnedPath.clear();
 }
 
 void WDeckBrowser::applyCoverArt(const TrackPointer& pTrack,

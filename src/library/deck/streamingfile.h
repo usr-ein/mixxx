@@ -94,6 +94,11 @@ class StreamingFile {
     bool isComplete() const;
     QString error() const;
 
+    /// Where a reader is waiting right now, or -1. What a copy that chooses
+    /// its own order fetches next, so a seek or a hot cue ahead of the copy
+    /// waits for its own bytes and not for everything before them.
+    qint64 wantedOffset() const;
+
     /// How many reads had to wait, and how long in total. The number that says
     /// whether streaming is keeping ahead of the playhead: a healthy track
     /// waits a handful of times at the start and then never again.
@@ -115,6 +120,7 @@ class StreamingFile {
     QString m_error;
     int m_waitCount = 0;
     qint64 m_waitedMs = 0;
+    qint64 m_wanted = -1;
 };
 
 /// Which local paths are being streamed right now.

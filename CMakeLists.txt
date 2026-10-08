@@ -2255,6 +2255,7 @@ if(BUILD_TESTING)
     src/test/skincontext_test.cpp
     src/test/softtakeover_test.cpp
     src/test/streamingfile_test.cpp
+    src/test/trackcache_test.cpp
     src/test/keysync_test.cpp
     src/test/audiblebeatclock_test.cpp
     src/test/automaster_test.cpp

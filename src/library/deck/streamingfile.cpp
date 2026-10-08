@@ -170,7 +170,12 @@ qint64 StreamingFile::read(qint64 offset, char* pBuffer, qint64 length) {
         // Waiting is the entire feature. The alternative -- returning what has
         // arrived so far -- reads to a decoder as end of stream, and it would
         // stop the track wherever the download happened to be.
-        if (!m_arrived.wait(&m_mutex, deadline)) {
+        m_wanted = offset;
+        const bool arrived = m_arrived.wait(&m_mutex, deadline);
+        if (m_wanted == offset) {
+            m_wanted = -1;
+        }
+        if (!arrived) {
             kLogger.warning() << "timed out waiting for" << wanted << "bytes at"
                               << offset;
             return -1;
@@ -194,6 +199,11 @@ qint64 StreamingFile::read(qint64 offset, char* pBuffer, qint64 length) {
         return -1;
     }
     return m_file.read(pBuffer, wanted);
+}
+
+qint64 StreamingFile::wantedOffset() const {
+    QMutexLocker locked(&m_mutex);
+    return m_wanted;
 }
 
 int StreamingFile::waitCount() const {

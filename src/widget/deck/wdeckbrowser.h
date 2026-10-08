@@ -187,6 +187,9 @@ class WDeckBrowser : public QWidget, public WBaseWidget {
     ///
     /// Taken by value because the caller may be handing over the pending-cover
     /// members, which this clears.
+    /// Unpin the track that was on the deck and let go of it: its stream, and
+    /// its copy if that is still coming off a stick.
+    void releasePinned();
     void applyCoverArt(const TrackPointer& pTrack,
             QString coverPath,
             QString artworkPath);
