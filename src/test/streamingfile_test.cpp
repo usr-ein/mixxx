@@ -1,5 +1,6 @@
 #include <gtest/gtest.h>
 
+#include <QElapsedTimer>
 #include <QTemporaryDir>
 #include <QThread>
 
@@ -203,10 +204,19 @@ TEST_F(StreamingFileTest, AReadBlocksUntilTheBytesArrive) {
     });
     pFetcher->start();
 
+    // Read as a decoder does, off the GUI thread: on that one a read that
+    // would wait is refused instead (TheGuiThreadIsRefusedRatherThanDeadlocked).
     QByteArray buffer(256, '\0');
-    const qint64 read = stream.read(0, buffer.data(), 256);
-    const qint64 elapsed = timer.elapsed();
+    qint64 read = -1;
+    qint64 elapsed = 0;
+    QThread* pReader = QThread::create([&]() {
+        read = stream.read(0, buffer.data(), 256);
+        elapsed = timer.elapsed();
+    });
+    pReader->start();
+    pReader->wait();
     pFetcher->wait();
+    delete pReader;
     delete pFetcher;
 
     EXPECT_EQ(256, read);
@@ -229,9 +239,16 @@ TEST_F(StreamingFileTest, AReadSpanningAHoleWaitsForTheHoleNotJustTheStart) {
     pFetcher->start();
 
     QByteArray buffer(2304, '\0');
-    EXPECT_EQ(2304, stream.read(0, buffer.data(), 2304));
+    qint64 read = -1;
+    QThread* pReader = QThread::create([&]() {
+        read = stream.read(0, buffer.data(), 2304);
+    });
+    pReader->start();
+    pReader->wait();
     pFetcher->wait();
+    delete pReader;
     delete pFetcher;
+    EXPECT_EQ(2304, read);
     EXPECT_EQ('h', buffer.at(0));
     EXPECT_EQ('m', buffer.at(300));
     EXPECT_EQ('t', buffer.at(2100));
@@ -245,10 +262,23 @@ TEST_F(StreamingFileTest, AFailedTransferWakesAReaderInsteadOfHangingIt) {
     });
     pFetcher->start();
 
+    // Off the GUI thread, which would be refused at once rather than woken:
+    // the time it took is what shows it really waited for the failure.
     QByteArray buffer(256, '\0');
-    EXPECT_EQ(-1, stream.read(0, buffer.data(), 256));
+    qint64 read = 0;
+    QElapsedTimer timer;
+    timer.start();
+    QThread* pReader = QThread::create([&]() {
+        read = stream.read(0, buffer.data(), 256);
+    });
+    pReader->start();
+    pReader->wait();
+    const qint64 elapsed = timer.elapsed();
     pFetcher->wait();
+    delete pReader;
     delete pFetcher;
+    EXPECT_EQ(-1, read);
+    EXPECT_GE(elapsed, 40);
     EXPECT_EQ(QStringLiteral("the player went away"), stream.error());
 }
 
@@ -263,9 +293,22 @@ TEST_F(StreamingFileTest, AbandoningWakesAReader) {
     pFetcher->start();
 
     QByteArray buffer(256, '\0');
-    EXPECT_EQ(-1, stream.read(0, buffer.data(), 256));
+    qint64 read = 0;
+    QElapsedTimer timer;
+    timer.start();
+    QThread* pReader = QThread::create([&]() {
+        read = stream.read(0, buffer.data(), 256);
+    });
+    pReader->start();
+    pReader->wait();
+    const qint64 elapsed = timer.elapsed();
     pFetcher->wait();
+    delete pReader;
     delete pFetcher;
+    EXPECT_EQ(-1, read);
+    // Woken by the abandon, not refused on the spot nor left to time out.
+    EXPECT_GE(elapsed, 40);
+    EXPECT_LT(elapsed, StreamingFile::kReadTimeoutMs);
 }
 
 TEST_F(StreamingFileTest, CompleteSatisfiesEveryRange) {
@@ -436,24 +479,37 @@ TEST_F(StreamingArrivalTest, ADecoderReadingFrontToBackNeverSeesAHole) {
     });
     pFetcher->start();
 
-    // Read it the way FFmpeg does: forward, in buffer-sized bites.
+    // Read it the way FFmpeg does: forward, in buffer-sized bites, and off the
+    // GUI thread, as a decoder's thread is.
     constexpr qint64 kBite = 8 * 1024;
-    QByteArray buffer(kBite, '\0');
     qint64 at = 0;
-    while (at < kSize) {
-        const qint64 read = stream.read(at, buffer.data(), kBite);
-        ASSERT_GT(read, 0) << "read failed at " << at;
-        for (qint64 i = 0; i < read; ++i) {
-            // The assertion that matters. A zero here is a byte the decoder
-            // would have turned into silence.
-            ASSERT_EQ(expectedAt(at + i), buffer.at(static_cast<int>(i)))
-                    << "hole at " << (at + i);
+    QString failure;
+    QThread* pReader = QThread::create([&]() {
+        QByteArray buffer(kBite, '\0');
+        while (at < kSize) {
+            const qint64 read = stream.read(at, buffer.data(), kBite);
+            if (read <= 0) {
+                failure = QStringLiteral("read failed at %1").arg(at);
+                return;
+            }
+            for (qint64 i = 0; i < read; ++i) {
+                // The check that matters. A zero here is a byte the decoder
+                // would have turned into silence.
+                if (buffer.at(static_cast<int>(i)) != expectedAt(at + i)) {
+                    failure = QStringLiteral("hole at %1").arg(at + i);
+                    return;
+                }
+            }
+            at += read;
         }
-        at += read;
-    }
+    });
+    pReader->start();
+    pReader->wait();
     pFetcher->wait();
+    delete pReader;
     delete pFetcher;
 
+    EXPECT_TRUE(failure.isEmpty()) << failure.toStdString();
     EXPECT_EQ(kSize, at);
     // It really did have to wait, so the read-ahead path above was exercised.
     EXPECT_GT(stream.waitCount(), 0);
