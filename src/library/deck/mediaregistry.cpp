@@ -1,9 +1,8 @@
 #include "library/deck/mediaregistry.h"
 
 #include <QDir>
-#include <algorithm>
-#include <utility>
 #include <QElapsedTimer>
+#include <QEventLoop>
 #include <QFile>
 #include <QFileInfo>
 #include <QSqlDatabase>
@@ -11,25 +10,21 @@
 #include <QStorageInfo>
 #include <QUrl>
 #include <QtConcurrentRun>
-
-#include <QStandardPaths>
+#include <algorithm>
+#include <utility>
 
 #include "library/deck/deckqueries.h"
 #include "library/deck/folderlibrary.h"
 #include "library/deck/ramstore.h"
+#include "library/deck/streamingfile.h"
 #include "library/deck/trackcache.h"
 #include "library/deck/volumelabel.h"
-#include "network/prolink/prolinkpdb.h"
-#include "util/db/dbconnectionpooler.h"
-#ifdef __PROLINK__
-#include <QEventLoop>
-
-#include "library/deck/streamingfile.h"
 #include "network/prolink/prolinkkeysync.h"
 #include "network/prolink/prolinknetworkservice.h"
+#include "network/prolink/prolinkpdb.h"
 #include "track/keyutils.h"
-#endif
 #include "util/db/dbconnectionpooled.h"
+#include "util/db/dbconnectionpooler.h"
 #include "util/logger.h"
 
 namespace {
@@ -61,7 +56,6 @@ bool isStickMount(const QString& path) {
             info.device().startsWith(QByteArrayLiteral("/dev/sd"));
 }
 
-#ifdef __PROLINK__
 /// How much of a track to pull before anything else.
 ///
 /// Runway, measured in seconds of playback rather than in bytes: 1 MB is about
@@ -87,7 +81,6 @@ constexpr int kStreamStartTimeoutMs = 20000;
 /// How long to wait for a beat grid. Tens of kilobytes, so this is only ever
 /// hit when something is wrong.
 constexpr int kCompanionTimeoutMs = 10000;
-#endif
 } // namespace
 
 namespace mixxx {
@@ -152,7 +145,6 @@ MediaRegistry::MediaRegistry(mixxx::DbConnectionPoolPtr dbConnectionPool, QObjec
 
     rescanLocal();
 
-#ifdef __PROLINK__
     // The players on the network, watched from here. Passive: it binds and
     // listens, and the counts on a source row come out of the status packets a
     // player already sends, so a remote medium is fully described before
@@ -245,7 +237,6 @@ MediaRegistry::MediaRegistry(mixxx::DbConnectionPoolPtr dbConnectionPool, QObjec
     // can be the moment the answer becomes knowable.
     connect(this, &MediaRegistry::mediaChanged, this, &MediaRegistry::resolveMasterKey);
     m_pNetwork->start();
-#endif
 
     // Whoever asked for us before we existed. Drained *last*, deliberately:
     // the rescan above emits mediumAppeared for the sticks that were already
@@ -660,8 +651,6 @@ void MediaRegistry::onReadFinished() {
 
     startNextRead();
 }
-
-#ifdef __PROLINK__
 
 int MediaRegistry::playerNumberFor(const QByteArray& mac) const {
     for (const mixxx::prolink::ProLinkDevice& device : m_devices) {
@@ -1384,49 +1373,6 @@ void MediaRegistry::onDeviceLost(const QByteArray& mac) {
         emit mediaChanged();
     }
 }
-
-#else // __PROLINK__
-
-QString MediaRegistry::startStreaming(const MediumId& medium,
-        const QString& sourcePath,
-        const QString& analyzePath) {
-    // Without Pro DJ Link there are no remote media to stream from, so this is
-    // never reached rather than merely unsupported.
-    Q_UNUSED(medium);
-    Q_UNUSED(sourcePath);
-    Q_UNUSED(analyzePath);
-    return QString();
-}
-
-void MediaRegistry::announceLoadedTrack(const MediumId& medium, quint32 rekordboxId) {
-    Q_UNUSED(medium);
-    Q_UNUSED(rekordboxId);
-}
-
-void MediaRegistry::announceNothingLoaded() {
-}
-
-void MediaRegistry::stopStreaming(const QString& localPath) {
-    Q_UNUSED(localPath);
-}
-
-void MediaRegistry::requestArtwork(const QString& coverPath) {
-    // A local medium carries its own images, so there is never anything to ask
-    // for without Pro DJ Link.
-    Q_UNUSED(coverPath);
-}
-
-void MediaRegistry::requestPreview(const MediumId& medium, quint32 rekordboxId) {
-    // Likewise: without Pro DJ Link there are no remote media to ask.
-    Q_UNUSED(medium);
-    Q_UNUSED(rekordboxId);
-}
-
-mixxx::prolink::server::ServeStatus MediaRegistry::serveStatus() const {
-    return {};
-}
-
-#endif // __PROLINK__
 
 } // namespace deck
 } // namespace mixxx

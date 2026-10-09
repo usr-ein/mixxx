@@ -239,7 +239,6 @@ class MediaRegistry : public QObject {
 
   private slots:
     void onReadFinished();
-#ifdef __PROLINK__
     /// A player answered about one of its slots. This is where a remote medium
     /// is born -- and it already carries the counts, straight from the status
     /// packet, so the source row is complete before a byte is fetched.
@@ -299,10 +298,8 @@ class MediaRegistry : public QObject {
     /// Cheap enough to run on every media change: one lookup on a unique index,
     /// and it publishes nothing unless the answer moved.
     void resolveMasterKey();
-#endif
 
   private:
-#ifdef __PROLINK__
     /// The MAC and slot behind a remote medium's id, or false if it is not one
     /// of ours or its player has gone.
     bool addressOf(const MediumId& medium,
@@ -316,7 +313,6 @@ class MediaRegistry : public QObject {
             mixxx::prolink::MediaSlot slot,
             const QString& remotePath,
             const QString& localPath);
-#endif
 
     /// Directories under /media the deck can read: every real mount -- a
     /// stick of loose files is as much a medium as a rekordbox one -- and any
@@ -327,7 +323,6 @@ class MediaRegistry : public QObject {
     int indexOfLocal(const QString& mountPoint) const;
     void startNextRead();
 
-#ifdef __PROLINK__
     /// Player number for a MAC, or 0. Linear over a handful of devices.
     int playerNumberFor(const QByteArray& mac) const;
     /// The medium *player* keeps in *slot*, or an invalid id.
@@ -336,7 +331,6 @@ class MediaRegistry : public QObject {
     /// master playing a track off a stick that is in **this** deck, over LINK.
     /// That medium is one of ours and is not on the network at all.
     MediumId mediumOf(int player, mixxx::prolink::MediaSlot slot) const;
-#endif
 
     /// One pending read. A local medium names a mount to read from; a remote
     /// one arrives with the bytes already in hand, because the network layer
@@ -407,7 +401,6 @@ class MediaRegistry : public QObject {
     /// unmounted without its directory going away. See the constructor.
     QTimer m_rescanPoll;
 
-#ifdef __PROLINK__
     /// Owned here, because the browser is the only thing that shows media.
     std::unique_ptr<mixxx::prolink::ProLinkNetworkService> m_pNetwork;
     /// What announceLoadedTrack() was last asked to say, so it can be asked
@@ -450,7 +443,6 @@ class MediaRegistry : public QObject {
     /// every redraw, so without this a cover the player does not have would be
     /// requested for as long as its row is on screen.
     QSet<QString> m_artworkAsked;
-#endif
 };
 
 } // namespace deck

@@ -2488,30 +2488,15 @@ elseif(SQLite3_IS_STATIC)
   target_link_libraries(mixxx-lib PRIVATE SQLite::SQLite3)
 endif()
 
-# Pioneer Pro DJ Link support, in both directions: see other CDJs' media in the
-# sidebar, and let them see ours.
-#
-# Default ON but inert unless [Library]/ShowProLinkLibrary is set. Note what
-# "inert" no longer means: once shown, the feature announces itself as a player
-# and claims a device number, then emits status and serves NFS and dbserver, so
-# it does transmit on Pro DJ Link ports and it is a participant on the rig
-# rather than an observer of it. Serving needs UDP/111 to be bindable -- see
+# Pioneer Pro DJ Link, in both directions: other players' media in the deck's
+# browser, and ours offered to them. The protocol lives in lib/prolink, a Rust
+# workspace linked statically: this binary is swapped onto a Pi that runs the
+# rest of Mixxx from apt, so anything dynamic would have to already be on the
+# device. Serving needs UDP/111 to be bindable -- see
 # pi_config/99-prolink-ports.conf; without it the rest still works and only the
 # serve side goes quiet.
-#
-# The library half is what this switch controls. The protocol half under
-# The protocol itself lives in lib/prolink, a Rust workspace linked statically:
-# this binary is swapped onto a Pi that runs the rest of Mixxx from apt, so
-# anything dynamic would have to already be on the device.
 include(ProlinkRust)
 target_link_libraries(mixxx-lib PRIVATE prolink::rust)
-
-# src/network/prolink/ is compiled unconditionally, so it stays buildable and
-# testable without a Library.
-option(PROLINK "Support for the Pioneer Pro DJ Link network protocol" ON)
-if(PROLINK)
-  target_compile_definitions(mixxx-lib PUBLIC __PROLINK__)
-endif()
 
 # Denon Engine Prime library export support (using libdjinterop)
 option(ENGINEPRIME "Support for library export to Denon Engine Prime" ON)

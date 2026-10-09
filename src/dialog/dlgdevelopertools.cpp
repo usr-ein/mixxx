@@ -74,10 +74,6 @@ DlgDeveloperTools::DlgDeveloperTools(QWidget* pParent,
                 }
                 slotControlSearch(checked ? QStringLiteral("prolink") : QString());
             });
-#ifndef __PROLINK__
-    // Built without the feature, so there is nothing for it to find.
-    controlFilterProLink->hide();
-#endif
 
     // Set up the log search box
     connect(logSearch,
