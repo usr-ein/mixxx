@@ -182,7 +182,7 @@ void CachingReaderWorker::loadTrack(const TrackPointer& pTrack) {
                 << pTrack->getFileInfo();
         const auto update = ReaderStatusUpdate::trackUnloaded();
         m_pReaderStatusFIFO->writeBlocking(&update, 1);
-        emit trackLoadFailed(pTrack,
+        reportLoadFailed(pTrack,
                 tr("The file '%1' could not be found.")
                         .arg(QDir::toNativeSeparators(pTrack->getLocation())));
         return;
@@ -198,7 +198,7 @@ void CachingReaderWorker::loadTrack(const TrackPointer& pTrack) {
                 << pTrack->getFileInfo();
         const auto update = ReaderStatusUpdate::trackUnloaded();
         m_pReaderStatusFIFO->writeBlocking(&update, 1);
-        emit trackLoadFailed(pTrack,
+        reportLoadFailed(pTrack,
                 tr("The file '%1' could not be loaded.")
                         .arg(QDir::toNativeSeparators(pTrack->getLocation())));
         return;
@@ -215,7 +215,7 @@ void CachingReaderWorker::loadTrack(const TrackPointer& pTrack) {
                 << pTrack->getFileInfo();
         const auto update = ReaderStatusUpdate::trackUnloaded();
         m_pReaderStatusFIFO->writeBlocking(&update, 1);
-        emit trackLoadFailed(pTrack,
+        reportLoadFailed(pTrack,
                 tr("The file '%1' is empty and could not be loaded.")
                         .arg(QDir::toNativeSeparators(pTrack->getLocation())));
         return;
@@ -255,6 +255,24 @@ void CachingReaderWorker::loadTrack(const TrackPointer& pTrack) {
             pTrack,
             m_pAudioSource->getSignalInfo().getSampleRate(),
             sampleCount);
+}
+
+void CachingReaderWorker::reportLoadFailed(
+        const TrackPointer& pTrack, const QString& reason) {
+    // A newer track already waiting means this one was replaced while it
+    // opened. Reported, the failure would eject the deck
+    // (EngineBuffer::slotTrackLoadFailed()), and the eject would cancel that
+    // newer track too, so neither would load. Not reported, the newer track
+    // loads next, and nobody hears about the one they had moved on from.
+    // On the deck the replacement is often what failed the open: a new load
+    // stops the old track's copy off the stick, and the read waiting on it
+    // fails.
+    if (m_newTrackAvailable.loadAcquire()) {
+        kLogger.info() << m_group << "Replaced while it opened, not loaded:"
+                       << pTrack->getFileInfo() << reason;
+        return;
+    }
+    emit trackLoadFailed(pTrack, reason);
 }
 
 void CachingReaderWorker::quitWait() {

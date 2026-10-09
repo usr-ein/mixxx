@@ -144,6 +144,8 @@ class CachingReaderWorker : public EngineWorker {
 
     /// Internal method to load a track. Emits trackLoaded when finished.
     void loadTrack(const TrackPointer& pTrack);
+    /// Emits trackLoadFailed, unless a newer track is already waiting to load.
+    void reportLoadFailed(const TrackPointer& pTrack, const QString& reason);
 
     ReaderStatusUpdate processReadRequest(
             const CachingReaderChunkReadRequest& request);

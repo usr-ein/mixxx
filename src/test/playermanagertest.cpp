@@ -1,5 +1,7 @@
 #include <gtest/gtest.h>
 
+#include <QScopeGuard>
+#include <QTemporaryDir>
 #include <QTest>
 
 #include "control/controlindicatortimer.h"
@@ -9,6 +11,7 @@
 #include "engine/enginebuffer.h"
 #include "engine/enginemixer.h"
 #include "library/coverartcache.h"
+#include "library/deck/streamingfile.h"
 #include "library/library.h"
 #include "library/trackcollectionmanager.h"
 #include "mixer/basetrackplayer.h"
@@ -263,6 +266,51 @@ TEST_F(PlayerManagerTest, DoubleTapClonesADeckWithATrack) {
     ASSERT_NE(nullptr, deck1->getLoadedTrack());
     EXPECT_EQ(pTrack2->getId(), deck1->getLoadedTrack()->getId());
     EXPECT_TRUE(engineLoads(deck1, pTrack2));
+}
+
+// A load that replaces one still opening loads, even when the first open then
+// fails. On the deck the replacement is what fails it: the new load stops the
+// old track's copy off the stick. The failure used to eject the deck, and the
+// eject cancelled the new load waiting behind it, so nothing loaded at all.
+TEST_F(PlayerManagerTest, AFailedLoadDoesNotCancelTheLoadThatReplacedIt) {
+    auto deck1 = m_pPlayerManager->getDeck(0);
+
+    // A track still arriving, as off a stick: its open waits for bytes that
+    // have not come yet.
+    QTemporaryDir dir;
+    ASSERT_TRUE(dir.isValid());
+    const QString arriving = dir.filePath(QStringLiteral("arriving.mp3"));
+    constexpr qint64 kSize = 65536;
+    {
+        QFile file(arriving);
+        ASSERT_TRUE(file.open(QIODevice::WriteOnly));
+        ASSERT_TRUE(file.resize(kSize));
+    }
+    auto pStream = std::make_shared<mixxx::deck::StreamingFile>(arriving, kSize);
+    mixxx::deck::StreamingFileRegistry::add(arriving, pStream);
+    const auto cleanup = qScopeGuard([&] {
+        pStream->fail(QStringLiteral("test over"));
+        mixxx::deck::StreamingFileRegistry::remove(arriving);
+    });
+    TrackPointer pArriving = getOrAddTrackByLocation(arriving);
+    ASSERT_NE(nullptr, pArriving);
+    TrackPointer pTrack2 = getOrAddTrackByLocation(getTestDir().filePath(kTrackLocationTest2));
+    ASSERT_NE(nullptr, pTrack2);
+
+    deck1->slotLoadTrack(pArriving, false);
+    m_pEngine->process(1024);
+    for (int i = 0; i < 100 && pStream->wantedOffset() < 0; ++i) {
+        QTest::qSleep(50);
+    }
+    ASSERT_GE(pStream->wantedOffset(), 0) << "the reader never started opening it";
+
+    // Replaced while it opens, then its bytes stop coming.
+    deck1->slotLoadTrack(pTrack2, false);
+    m_pEngine->process(1024);
+    pStream->fail(QStringLiteral("stopped"));
+
+    EXPECT_TRUE(engineLoads(deck1, pTrack2));
+    EXPECT_EQ(pTrack2, deck1->getLoadedTrack());
 }
 
 TEST_F(PlayerManagerTest, UnReplaceTest) {
