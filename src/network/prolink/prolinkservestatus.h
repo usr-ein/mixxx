@@ -9,7 +9,6 @@
 
 namespace mixxx {
 namespace prolink {
-namespace server {
 
 /// One of our slots, as the network sees it.
 struct ServedSlot {
@@ -72,8 +71,7 @@ struct ServeStatus {
     QList<ServeConsumer> consumers;
 };
 
-} // namespace server
 } // namespace prolink
 } // namespace mixxx
 
-Q_DECLARE_METATYPE(mixxx::prolink::server::ServeStatus)
+Q_DECLARE_METATYPE(mixxx::prolink::ServeStatus)

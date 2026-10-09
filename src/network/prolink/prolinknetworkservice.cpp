@@ -180,8 +180,8 @@ QString toQString(const ::rust::String& text) {
 /// Field by field rather than a memcmp or an operator==: the struct is the
 /// pages' vocabulary, and adding a comparison to it would put a definition of
 /// "changed" somewhere nothing else looks.
-bool sameServeStatus(const mixxx::prolink::server::ServeStatus& left,
-        const mixxx::prolink::server::ServeStatus& right) {
+bool sameServeStatus(const mixxx::prolink::ServeStatus& left,
+        const mixxx::prolink::ServeStatus& right) {
     if (left.active != right.active || left.deviceNumber != right.deviceNumber ||
             left.address != right.address || left.interfaceName != right.interfaceName ||
             left.portmapPort != right.portmapPort || left.mountdPort != right.mountdPort ||
@@ -191,8 +191,8 @@ bool sameServeStatus(const mixxx::prolink::server::ServeStatus& left,
         return false;
     }
     for (int i = 0; i < left.media.size(); ++i) {
-        const mixxx::prolink::server::ServedSlot& a = left.media.at(i);
-        const mixxx::prolink::server::ServedSlot& b = right.media.at(i);
+        const mixxx::prolink::ServedSlot& a = left.media.at(i);
+        const mixxx::prolink::ServedSlot& b = right.media.at(i);
         if (a.slot != b.slot || a.volumeName != b.volumeName ||
                 a.localPath != b.localPath || a.trackCount != b.trackCount ||
                 a.phantom != b.phantom) {
@@ -200,8 +200,8 @@ bool sameServeStatus(const mixxx::prolink::server::ServeStatus& left,
         }
     }
     for (int i = 0; i < left.consumers.size(); ++i) {
-        const mixxx::prolink::server::ServeConsumer& a = left.consumers.at(i);
-        const mixxx::prolink::server::ServeConsumer& b = right.consumers.at(i);
+        const mixxx::prolink::ServeConsumer& a = left.consumers.at(i);
+        const mixxx::prolink::ServeConsumer& b = right.consumers.at(i);
         if (a.deviceNumber != b.deviceNumber || a.slot != b.slot ||
                 a.trackId != b.trackId || a.playing != b.playing) {
             return false;
@@ -1042,7 +1042,7 @@ void ProLinkNetworkService::shutdown() {
     m_devices.clear();
     m_pending.clear();
     m_publishedNumber = 0;
-    m_serveStatus = server::ServeStatus();
+    m_serveStatus = ServeStatus();
     emit serveStatusChanged(m_serveStatus);
     for (const ProLinkDevice& device : had) {
         emit deviceLost(device.mac);
@@ -1381,7 +1381,7 @@ void ProLinkNetworkService::poll() {
 void ProLinkNetworkService::syncServeStatus() {
     const ::prolink::ServeStatus fresh = (*m_pImpl->pSession)->serve_status();
 
-    server::ServeStatus status;
+    ServeStatus status;
     status.active = fresh.active;
     status.deviceNumber = static_cast<int>(fresh.device_number);
     status.address = QHostAddress(toQString(fresh.address));
@@ -1391,7 +1391,7 @@ void ProLinkNetworkService::syncServeStatus() {
     status.nfsdPort = fresh.nfs_port;
     status.dbserverPort = fresh.dbserver_port;
     for (const ::prolink::ServedSlot& slot : fresh.media) {
-        server::ServedSlot served;
+        ServedSlot served;
         served.slot = toMixxxSlot(slot.slot);
         served.exportPath = toQString(slot.export_path);
         served.volumeName = toQString(slot.volume_name);
@@ -1402,7 +1402,7 @@ void ProLinkNetworkService::syncServeStatus() {
         status.media.append(served);
     }
     for (const ::prolink::ServeConsumer& reader : fresh.consumers) {
-        server::ServeConsumer consumer;
+        ServeConsumer consumer;
         consumer.deviceNumber = static_cast<int>(reader.device_number);
         consumer.slot = toMixxxSlot(reader.slot);
         consumer.trackId = reader.track_id;

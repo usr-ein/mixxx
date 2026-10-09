@@ -64,7 +64,7 @@ class ProLinkNetworkService : public QObject {
         return m_announcedNumber;
     }
 
-    server::ServeStatus serveStatus() const {
+    ServeStatus serveStatus() const {
         return m_serveStatus;
     }
 
@@ -140,7 +140,7 @@ class ProLinkNetworkService : public QObject {
     void deviceChanged(const mixxx::prolink::ProLinkDevice& device);
     void deviceLost(const QByteArray& mac);
     void announceChanged(int deviceNumber, const QString& detail);
-    void serveStatusChanged(const mixxx::prolink::server::ServeStatus& status);
+    void serveStatusChanged(const mixxx::prolink::ServeStatus& status);
     void mediaInfoFound(const QByteArray& mac,
             mixxx::prolink::MediaSlot slot,
             const mixxx::prolink::MediaInfo& info);
@@ -440,7 +440,7 @@ class ProLinkNetworkService : public QObject {
     int m_publishedNumber = 0;
     QString m_announceDetail;
     QString m_lastError;
-    server::ServeStatus m_serveStatus;
+    ServeStatus m_serveStatus;
 };
 
 } // namespace prolink

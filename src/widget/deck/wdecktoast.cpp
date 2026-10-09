@@ -103,13 +103,13 @@ void WDeckToast::onVanished(mixxx::deck::MediumInfo medium) {
     // side of the booth about to stop is theirs.
     MediaRegistry* pRegistry = MediaRegistry::instance();
     if (pRegistry) {
-        const mixxx::prolink::server::ServeStatus serve = pRegistry->serveStatus();
+        const mixxx::prolink::ServeStatus serve = pRegistry->serveStatus();
         QList<int> fed;
-        for (const mixxx::prolink::server::ServedSlot& slot : serve.media) {
+        for (const mixxx::prolink::ServedSlot& slot : serve.media) {
             if (!slot.phantom || slot.localPath != medium.id.mountPoint()) {
                 continue;
             }
-            for (const mixxx::prolink::server::ServeConsumer& reader : serve.consumers) {
+            for (const mixxx::prolink::ServeConsumer& reader : serve.consumers) {
                 if (reader.slot == slot.slot && !fed.contains(reader.deviceNumber)) {
                     fed.append(reader.deviceNumber);
                 }

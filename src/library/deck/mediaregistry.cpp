@@ -1079,7 +1079,7 @@ void MediaRegistry::announceLoadedTrack(const MediumId& medium, quint32 rekordbo
         // A folder medium is never served (docs/plain-usb-plan.md D5), so for
         // one of those this is the only right answer.
         bool served = false;
-        for (const mixxx::prolink::server::ServedSlot& candidate :
+        for (const mixxx::prolink::ServedSlot& candidate :
                 m_pNetwork->serveStatus().media) {
             if (!candidate.localPath.isEmpty() && medium.mountPoint() == candidate.localPath) {
                 slot = candidate.slot;
@@ -1153,8 +1153,8 @@ void MediaRegistry::stopStreaming(const QString& localPath) {
                    << "waits /" << pStream->waitedMs() << "ms:" << localPath;
 }
 
-mixxx::prolink::server::ServeStatus MediaRegistry::serveStatus() const {
-    return m_pNetwork ? m_pNetwork->serveStatus() : mixxx::prolink::server::ServeStatus();
+mixxx::prolink::ServeStatus MediaRegistry::serveStatus() const {
+    return m_pNetwork ? m_pNetwork->serveStatus() : mixxx::prolink::ServeStatus();
 }
 
 void MediaRegistry::requestArtwork(const QString& coverPath) {

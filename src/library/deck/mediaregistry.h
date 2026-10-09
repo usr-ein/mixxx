@@ -181,7 +181,7 @@ class MediaRegistry : public QObject {
     ///
     /// Includes whether a slot has gone **phantom** — the stick pulled while a
     /// player was still playing off it, now being fed from a copy.
-    mixxx::prolink::server::ServeStatus serveStatus() const;
+    mixxx::prolink::ServeStatus serveStatus() const;
 
     /// Ask for a cover that is not on disk yet, if it belongs to a remote
     /// medium. Cheap, idempotent, and safe to call from a paint.
