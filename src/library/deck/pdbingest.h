@@ -5,7 +5,7 @@
 #include <QString>
 
 #include "library/deck/mediumid.h"
-#include "network/prolink/prolinkpdb.h"
+#include "library/rekordbox/rekordboxpdb.h"
 
 namespace mixxx {
 namespace deck {

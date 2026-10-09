@@ -3,7 +3,7 @@
 #include <QtConcurrentRun>
 
 #include "library/deck/mediaregistry.h"
-#include "network/prolink/prolinkanlz.h"
+#include "library/rekordbox/rekordboxanlz.h"
 #include "util/logger.h"
 
 namespace {

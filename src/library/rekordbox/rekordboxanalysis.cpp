@@ -7,9 +7,9 @@
 
 #include <algorithm>
 
+#include "library/rekordbox/rekordboxanlz.h"
 #include "library/rekordbox/rekordboxconstants.h"
 #include "library/rekordbox/rekordboxwaveform.h"
-#include "network/prolink/prolinkanlz.h"
 #include "track/beats.h"
 #include "track/cue.h"
 #include "track/track.h"

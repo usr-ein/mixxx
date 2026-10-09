@@ -1004,6 +1004,8 @@ add_library(mixxx-lib STATIC EXCLUDE_FROM_ALL
   src/library/recording/dlgrecording.ui
   src/library/recording/recordingfeature.cpp
   src/library/rekordbox/rekordboxanalysis.cpp
+  src/library/rekordbox/rekordboxanlz.cpp
+  src/library/rekordbox/rekordboxpdb.cpp
   src/library/rekordbox/rekordboxwaveform.cpp
   src/library/deck/autoplay.cpp
   src/library/deck/deckqueries.cpp
@@ -1093,8 +1095,6 @@ add_library(mixxx-lib STATIC EXCLUDE_FROM_ALL
   src/network/prolink/syncsource.cpp
   src/network/prolink/synctempo.cpp
   src/network/prolink/prolinknetworkservice.cpp
-  src/network/prolink/prolinkanlz.cpp
-  src/network/prolink/prolinkpdb.cpp
   src/network/webtask.cpp
   src/preferences/colorpaletteeditor.cpp
   src/preferences/colorpaletteeditor.cpp

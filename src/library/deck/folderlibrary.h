@@ -5,7 +5,7 @@
 #include <QList>
 #include <QString>
 
-#include "network/prolink/prolinkpdb.h"
+#include "library/rekordbox/rekordboxpdb.h"
 
 namespace mixxx {
 namespace deck {

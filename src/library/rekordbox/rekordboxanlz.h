@@ -7,7 +7,7 @@
 /// Reading rekordbox's per-track analysis files, `ANLZ####.DAT` and `.EXT`.
 ///
 /// A Qt-native view of what `prolink-rekordbox` parses, in the same shape and
-/// for the same reason as `prolinkpdb.h` beside it: nothing outside this pair
+/// for the same reason as `rekordboxpdb.h` beside it: nothing outside this pair
 /// includes the generated cxx header, so the bridge stays one file wide.
 ///
 /// **One parser for one file format.** These files used to be read a second

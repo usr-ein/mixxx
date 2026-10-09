@@ -544,7 +544,7 @@ IngestResult writeMedium(QSqlDatabase& database,
     // ascends with the session, which is all the ordering "Last played" needs.
     //
     // The export does hold dates for sessions, in an undecoded table; see
-    // PdbHistoryPlaylist in prolinkpdb.h for what is known and what is not.
+    // PdbHistoryPlaylist in rekordboxpdb.h for what is known and what is not.
     QSqlQuery insertHistory(database);
     insertHistory.prepare(QStringLiteral(
             "INSERT INTO deck_history (medium, track_id, session, position) "

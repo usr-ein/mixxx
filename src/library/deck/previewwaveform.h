@@ -3,7 +3,7 @@
 #include <QByteArray>
 #include <QVector>
 
-#include "network/prolink/prolinkanlz.h"
+#include "library/rekordbox/rekordboxanlz.h"
 
 namespace mixxx {
 namespace deck {

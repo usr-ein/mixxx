@@ -17,7 +17,7 @@ class AnalysisDao;
 /// arithmetic is how two copies drift apart.
 ///
 /// **This module applies; it does not parse.** The files are read by
-/// `prolink-rekordbox` through `network/prolink/prolinkanlz.h`, which is also
+/// `prolink-rekordbox` through `library/rekordbox/rekordboxanlz.h`, which is also
 /// what the Pro DJ Link serve side reads them with. What lives here is
 /// everything that is Mixxx's rather than rekordbox's: milliseconds into frame
 /// positions, the decoder timing offset, and Mixxx's own cue objects.

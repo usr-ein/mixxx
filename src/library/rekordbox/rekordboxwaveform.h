@@ -1,7 +1,7 @@
 #pragma once
 
 #include "audio/types.h"
-#include "network/prolink/prolinkanlz.h"
+#include "library/rekordbox/rekordboxanlz.h"
 #include "track/track_decl.h"
 
 class AnalysisDao;
