@@ -105,8 +105,6 @@ class DeckAutoplay : public QObject {
     void onMediumVanished(const mixxx::deck::MediumInfo& medium);
     /// The track has ended: pick the next and load it.
     void advance();
-    /// m_loadRow(), timing the load once it has reached the deck.
-    bool load(int rowId);
     void onLoadFailed();
     /// Where the drive's files sit under, which a track's path on it is taken
     /// relative to (autoplay::trackKey()).
@@ -138,13 +136,10 @@ class DeckAutoplay : public QObject {
 
     /// Tracks in a row that would not load.
     int m_failures = 0;
-    /// The next pick, later: after a track that would not load, or when it
-    /// came too soon after the last load (autoplay::holdMs()).
+    /// The next pick, a second after a track that would not load.
     QTimer m_retry;
     /// From the end of a track, for the gap in the log.
     QElapsedTimer m_sinceEnd;
-    /// From autoplay's last load that reached the deck.
-    QElapsedTimer m_sinceLoad;
 
     std::unique_ptr<ControlProxy> m_pPlayPosition;
     std::unique_ptr<ControlProxy> m_pTrackLoaded;
