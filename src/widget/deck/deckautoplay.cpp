@@ -147,7 +147,8 @@ void DeckAutoplay::start(const MediumId& medium,
     emit stateChanged();
 
     if (!m_loadRow(rowId)) {
-        stop();
+        // Nothing reached the deck, so nothing will say why: this has to.
+        stop(tr("Autoplay off — %1 would not load").arg(pStart->title));
     }
 }
 

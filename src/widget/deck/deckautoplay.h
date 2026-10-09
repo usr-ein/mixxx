@@ -41,7 +41,9 @@ class DeckAutoplay : public QObject {
 
   public:
     /// What the browser does for it: put a `deck_library` row on the deck, and
-    /// start it. False when it could not even try -- the row has gone.
+    /// start it. False when nothing reached the deck -- the row has gone, or
+    /// Mixxx would not make a Track of its file -- and so nothing ever will
+    /// say how the load went.
     using LoadRow = std::function<bool(int rowId)>;
 
     DeckAutoplay(MediaRegistry* pRegistry,

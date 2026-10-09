@@ -1682,7 +1682,7 @@ void WDeckBrowser::onBack() {
 ///  * **A file that is still arriving is only ever read through
 ///     StreamingFile.** An ordinary read of a sparse hole returns zeros and
 ///     succeeds, so the failure mode is not an error, it is silence.
-void WDeckBrowser::loadRow(const LoadableRow& row, bool play, const QModelIndex& index) {
+bool WDeckBrowser::loadRow(const LoadableRow& row, bool play, const QModelIndex& index) {
     const QString& source = row.source;
     const QString& analyzePath = row.analyzePath;
     const int sampleRate = row.sampleRate;
@@ -1746,7 +1746,7 @@ void WDeckBrowser::loadRow(const LoadableRow& row, bool play, const QModelIndex&
                       TrackRef::fromFilePath(playPath));
     if (!pTrack) {
         kLogger.warning() << "no track for" << source;
-        return;
+        return false;
     }
     if (!fromModel) {
         // The cached file has no tags worth reading -- it is a byte copy of
@@ -1848,6 +1848,7 @@ void WDeckBrowser::loadRow(const LoadableRow& row, bool play, const QModelIndex&
                     << "waveform" << !pTrack->getWaveform().isNull()
                     << "summary" << !pTrack->getWaveformSummary().isNull();
     emit loadTrackToPlayer(pTrack, kDeckGroup, play);
+    return true;
 }
 
 void WDeckBrowser::loadSelectedTrack() {
@@ -1872,8 +1873,7 @@ bool WDeckBrowser::loadLibraryRow(int rowId) {
     if (!readLibraryRow(rowId, &loadable)) {
         return false;
     }
-    loadRow(loadable, true, QModelIndex());
-    return true;
+    return loadRow(loadable, true, QModelIndex());
 }
 
 WDeckBrowser::LoadableRow WDeckBrowser::readModelRow(int row) const {

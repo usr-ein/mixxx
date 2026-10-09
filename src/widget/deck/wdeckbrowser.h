@@ -215,8 +215,10 @@ class WDeckBrowser : public QWidget, public WBaseWidget {
     bool readLibraryRow(int rowId, LoadableRow* pRow);
     /// Put *row* on the deck. *index* is its row in the track model when the
     /// load came from the list, which is where a track not copied off its
-    /// medium is fetched from.
-    void loadRow(const LoadableRow& row, bool play, const QModelIndex& index);
+    /// medium is fetched from. False when nothing was handed to the deck --
+    /// Mixxx would not make a Track of the file -- so that neither a
+    /// `track_loaded` nor a failed load will ever come of it.
+    bool loadRow(const LoadableRow& row, bool play, const QModelIndex& index);
     /// The selected track of an autoplay track list starts autoplay.
     void startAutoplay();
     /// Autoplay went on or off: the rows that say so are redrawn.
