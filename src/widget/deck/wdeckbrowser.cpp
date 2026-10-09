@@ -1857,7 +1857,6 @@ void WDeckBrowser::loadSelectedTrack() {
         return;
     }
     const QModelIndex index = m_pTrackModel->index(row, 0);
-    m_pTrackModel->willLoadTrack(index);
     const LoadableRow loadable = readModelRow(row);
     // A track the DJ chose is the end of autoplay: they have taken the deck
     // back. Said before the load, so the mapping already knows this one is
