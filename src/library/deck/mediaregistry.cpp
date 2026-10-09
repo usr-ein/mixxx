@@ -1095,7 +1095,7 @@ void MediaRegistry::announceLoadedTrack(const MediumId& medium, quint32 rekordbo
         // Not announcedNumber(), which is 0 for the first seconds of a session
         // and may change on a rebind: the service resolves this to whatever
         // number we hold each time it publishes.
-        player = mixxx::prolink::ProLinkNetworkService::kThisPlayer;
+        player = mixxx::prolink::kThisPlayer;
     } else {
         QByteArray mac;
         if (!addressOf(medium, &mac, &slot)) {

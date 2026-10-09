@@ -43,8 +43,8 @@ class SkinContext;
 ///
 /// # States
 ///
-/// Which deck the top row follows is decided by ProLinkNetworkService, not
-/// here: it publishes `[ProLink] master_bar_phase`, `-1` when there is nobody to
+/// Which deck the top row follows is decided by ProLinkSync, not here: it
+/// publishes `[ProLink] master_bar_phase`, `-1` when there is nobody to
 /// follow. So the meter has two states and no others:
 ///
 ///  * **Nobody to follow** (`master_bar_phase < 0`): both rows idle, `-` in

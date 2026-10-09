@@ -1096,6 +1096,7 @@ add_library(mixxx-lib STATIC EXCLUDE_FROM_ALL
   src/network/prolink/syncsource.cpp
   src/network/prolink/synctempo.cpp
   src/network/prolink/prolinknetworkservice.cpp
+  src/network/prolink/prolinksync.cpp
   src/network/webtask.cpp
   src/preferences/colorpaletteeditor.cpp
   src/preferences/colorpaletteeditor.cpp

@@ -28,6 +28,10 @@ enum class MediaSlot : quint8 {
     Rekordbox = 4,
 };
 
+/// The source player ProLinkSync::setLoadedTrack() takes for a track on a
+/// medium we serve ourselves.
+constexpr int kThisPlayer = -1;
+
 /// One player, mixer or other device seen on the Pro DJ Link network.
 ///
 /// A value type, so it can cross the thread boundary between the network thread
