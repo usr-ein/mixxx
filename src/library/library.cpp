@@ -85,27 +85,10 @@ Library::Library(
 
     // TODO(rryan) -- turn this construction / adding of features into a static
     // method or something -- CreateDefaultLibrary
-    //
-    // ORDER IS THE SIDEBAR ORDER. SidebarModel keeps features in the order they
-    // are added and renders row N as the Nth addFeature() call, so the sequence
-    // below is the menu top to bottom. The ones that lead are what a deck
-    // actually reaches for -- your own collection, and the players on the
-    // network -- and everything else follows.
-    //
-    // The rekordbox feature used to lead this list and is gone. The browser
-    // reads sticks now (browser-prd.md 2), and the feature went on parsing every
-    // export.pdb it found into a table nobody read -- with a second Pro DJ Link
-    // session behind it, which is how the deck came to announce that no player
-    // number was free against itself.
-
     m_pMixxxLibraryFeature = new MixxxLibraryFeature(
             this,
             m_pConfig);
     addFeature(m_pMixxxLibraryFeature);
-    // Derived from the row count rather than hard-coded, so it survives the
-    // next reshuffle of the order above.
-    m_pSidebarModel->setDefaultSelection(
-            static_cast<unsigned int>(m_pSidebarModel->rowCount() - 1));
 #ifdef __ENGINEPRIME__
     connect(m_pMixxxLibraryFeature,
             &MixxxLibraryFeature::exportLibrary,
