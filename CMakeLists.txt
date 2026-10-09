@@ -1281,6 +1281,7 @@ add_library(mixxx-lib STATIC EXCLUDE_FROM_ALL
   src/waveform/renderers/deprecated/glwaveformrendererfilteredsignal.cpp
   src/waveform/renderers/deprecated/glwaveformrendererrgb.cpp
   src/waveform/renderers/deprecated/glwaveformrenderersimplesignal.cpp
+  src/waveform/renderers/stackedwaveform.cpp
   src/waveform/renderers/waveformmark.cpp
   src/waveform/renderers/waveformmarkrange.cpp
   src/waveform/renderers/waveformmarkset.cpp
