@@ -20,15 +20,6 @@ QHash<quint32, QString> toHash(const ::rust::Vec<::prolink::PdbNamed>& table) {
 namespace mixxx {
 namespace prolink {
 
-QString PdbTrack::analyzeExtPath() const {
-    if (!analyzePath.endsWith(QStringLiteral(".DAT"))) {
-        return QString();
-    }
-    // Upper case deliberately: rekordbox writes both extensions that way and a
-    // deck looks for exactly those names.
-    return analyzePath.left(analyzePath.size() - 4) + QStringLiteral(".EXT");
-}
-
 int PdbContents::folderCount() const {
     int count = 0;
     for (const PdbPlaylist& playlist : playlists) {

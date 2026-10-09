@@ -4,7 +4,6 @@
 
 #include "audio/types.h"
 #include "track/track_decl.h"
-#include "util/color/rgbcolor.h"
 
 class AnalysisDao;
 
@@ -24,9 +23,6 @@ class AnalysisDao;
 /// positions, the decoder timing offset, and Mixxx's own cue objects.
 namespace mixxx {
 namespace rekordbox {
-
-/// Rekordbox's eight fixed cue colours, by the id stored in the pdb.
-RgbColor colorFromID(int colorID);
 
 /// The decoder timing offset for a local audio file, in frames.
 ///

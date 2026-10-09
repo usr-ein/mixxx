@@ -50,9 +50,6 @@ struct PdbTrack {
     quint32 keyId = 0;
     quint32 labelId = 0;
     quint32 colorId = 0;
-
-    /// The `.EXT` beside the `.DAT`, holding what the newer players read.
-    QString analyzeExtPath() const;
 };
 
 /// A playlist, or a folder of them.

@@ -13,6 +13,7 @@
 #include "track/beats.h"
 #include "track/cue.h"
 #include "track/track.h"
+#include "util/color/rgbcolor.h"
 #include "util/logger.h"
 
 namespace {
@@ -300,10 +301,6 @@ void applyCues(TrackPointer track,
 
 namespace mixxx {
 namespace rekordbox {
-
-RgbColor colorFromID(int colorID) {
-    return colorFromIDLocal(colorID);
-}
 
 int timingOffsetForFile(const QString& location) {
     // The following accounts for timing offsets required to correctly align
