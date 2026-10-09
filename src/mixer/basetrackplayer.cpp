@@ -688,11 +688,12 @@ TrackPointer BaseTrackPlayerImpl::getLoadedTrack() const {
     return m_pLoadedTrack;
 }
 
-void BaseTrackPlayerImpl::slotCloneDeck() {
+bool BaseTrackPlayerImpl::slotCloneDeck() {
     Syncable* syncable = m_pEngineMixer->getEngineSync()->pickNonSyncSyncTarget(m_pChannel);
     if (syncable) {
-        slotCloneChannel(syncable->getChannel());
+        return slotCloneChannel(syncable->getChannel());
     }
+    return false;
 }
 
 void BaseTrackPlayerImpl::slotCloneFromGroup(const QString& group) {
@@ -720,20 +721,21 @@ void BaseTrackPlayerImpl::slotCloneFromSampler(double d) {
     }
 }
 
-void BaseTrackPlayerImpl::slotCloneChannel(EngineChannel* pChannel) {
+bool BaseTrackPlayerImpl::slotCloneChannel(EngineChannel* pChannel) {
     // don't clone from ourselves
     if (!pChannel || pChannel == m_pChannel) {
-        return;
+        return false;
     }
 
     TrackPointer pTrack = pChannel->getEngineBuffer()->getLoadedTrack();
     if (!pTrack) {
-        return;
+        return false;
     }
 
     m_pChannelToCloneFrom = pChannel;
     bool play = ControlObject::toBool(ConfigKey(m_pChannelToCloneFrom->getGroup(), "play"));
     slotLoadTrack(pTrack, play);
+    return true;
 }
 
 void BaseTrackPlayerImpl::slotLoadTrackFromDeck(double d) {

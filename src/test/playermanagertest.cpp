@@ -209,6 +209,47 @@ TEST_F(PlayerManagerTest, UnEjectInvalidTrackIdTest) {
     ASSERT_EQ(nullptr, deck1->getLoadedTrack());
 }
 
+// A second load to a deck within half a second of the last is the DJ's double
+// tap, which clones another deck ([Controls],CloneDeckOnLoadDoubleTap, on by
+// default). With no deck to clone, it loads the track like any load.
+TEST_F(PlayerManagerTest, DoubleTapWithNoDeckToCloneLoads) {
+    auto deck1 = m_pPlayerManager->getDeck(0);
+    TrackPointer pTrack1 = getOrAddTrackByLocation(getTestDir().filePath(kTrackLocationTest1));
+    ASSERT_NE(nullptr, pTrack1);
+    TrackPointer pTrack2 = getOrAddTrackByLocation(getTestDir().filePath(kTrackLocationTest2));
+    ASSERT_NE(nullptr, pTrack2);
+
+    // Every other deck is empty.
+    m_pPlayerManager->slotLoadTrackToPlayer(pTrack1, deck1->getGroup(), false);
+    m_pPlayerManager->slotLoadTrackToPlayer(pTrack2, deck1->getGroup(), false);
+
+    ASSERT_NE(nullptr, deck1->getLoadedTrack());
+    EXPECT_EQ(pTrack2->getId(), deck1->getLoadedTrack()->getId());
+}
+
+// The same double tap with a deck to clone still clones it.
+TEST_F(PlayerManagerTest, DoubleTapClonesADeckWithATrack) {
+    auto deck1 = m_pPlayerManager->getDeck(0);
+    auto deck2 = m_pPlayerManager->getDeck(1);
+    TrackPointer pTrack1 = getOrAddTrackByLocation(getTestDir().filePath(kTrackLocationTest1));
+    ASSERT_NE(nullptr, pTrack1);
+    TrackPointer pTrack2 = getOrAddTrackByLocation(getTestDir().filePath(kTrackLocationTest2));
+    ASSERT_NE(nullptr, pTrack2);
+
+    // Deck 2 has a track with a tempo, which is what a deck to clone needs.
+    ASSERT_TRUE(pTrack2->trySetBpm(120.0));
+    deck2->slotLoadTrack(pTrack2, false);
+    m_pEngine->process(1024);
+    waitForTrackToBeLoaded(deck2);
+    m_pEngine->process(1024);
+
+    m_pPlayerManager->slotLoadTrackToPlayer(pTrack1, deck1->getGroup(), false);
+    m_pPlayerManager->slotLoadTrackToPlayer(pTrack1, deck1->getGroup(), false);
+
+    ASSERT_NE(nullptr, deck1->getLoadedTrack());
+    EXPECT_EQ(pTrack2->getId(), deck1->getLoadedTrack()->getId());
+}
+
 TEST_F(PlayerManagerTest, UnReplaceTest) {
     // Trigger eject twice within 500 ms to undo track replacement
     auto deck1 = m_pPlayerManager->getDeck(0);

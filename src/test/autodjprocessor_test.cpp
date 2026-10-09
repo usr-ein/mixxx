@@ -108,7 +108,7 @@ class FakeDeck : public BaseTrackPlayer {
     }
 
     MOCK_METHOD1(slotCloneFromGroup, void(const QString& group));
-    MOCK_METHOD0(slotCloneDeck, void());
+    MOCK_METHOD0(slotCloneDeck, bool());
 
     TrackPointer loadedTrack;
     ControlObject trackSamples;

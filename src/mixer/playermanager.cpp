@@ -656,9 +656,11 @@ void PlayerManager::slotLoadTrackToPlayer(TrackPointer pTrack, const QString& gr
         }
     }
 
-    if (clone) {
-        pPlayer->slotCloneDeck();
-    } else {
+    // A double tap with no deck to clone is an ordinary load. Upstream does
+    // nothing then: the track asked for never loads, and nothing says so. On
+    // the deck, with [Channel1] alone, that was every load within half a
+    // second of the last: the DJ's quick second load, or autoplay's next track.
+    if (!clone || !pPlayer->slotCloneDeck()) {
         pPlayer->slotLoadTrack(pTrack, play);
     }
 

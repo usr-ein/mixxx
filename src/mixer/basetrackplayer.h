@@ -47,7 +47,8 @@ class BaseTrackPlayer : public BasePlayer {
   public slots:
     virtual void slotLoadTrack(TrackPointer pTrack, bool bPlay = false) = 0;
     virtual void slotCloneFromGroup(const QString& group) = 0;
-    virtual void slotCloneDeck() = 0;
+    /// False when there was no deck to clone, and nothing happened.
+    virtual bool slotCloneDeck() = 0;
     virtual void slotEjectTrack(double) = 0;
     virtual void slotSetAndConfirmTrackMenuControl(bool){};
     virtual void slotTrackRatingChangeRequest(int){};
@@ -98,7 +99,7 @@ class BaseTrackPlayerImpl : public BaseTrackPlayer {
     void slotLoadTrack(TrackPointer track, bool bPlay) final;
     void slotEjectTrack(double) final;
     void slotCloneFromGroup(const QString& group) final;
-    void slotCloneDeck() final;
+    bool slotCloneDeck() final;
     void slotTrackLoaded(TrackPointer pNewTrack, TrackPointer pOldTrack);
     void slotLoadFailed(TrackPointer pTrack, const QString& reason);
     void slotSetReplayGain(mixxx::ReplayGain replayGain);
@@ -115,7 +116,7 @@ class BaseTrackPlayerImpl : public BaseTrackPlayer {
     void slotPlayToggled(double);
 
   private slots:
-    void slotCloneChannel(EngineChannel* pChannel);
+    bool slotCloneChannel(EngineChannel* pChannel);
     void slotCloneFromDeck(double deck);
     void slotCloneFromSampler(double sampler);
     void loadTrackFromGroup(const QString& group);
