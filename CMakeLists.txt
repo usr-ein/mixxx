@@ -1005,6 +1005,7 @@ add_library(mixxx-lib STATIC EXCLUDE_FROM_ALL
   src/library/recording/recordingfeature.cpp
   src/library/rekordbox/rekordboxanalysis.cpp
   src/library/rekordbox/rekordboxwaveform.cpp
+  src/library/deck/autoplay.cpp
   src/library/deck/deckqueries.cpp
   src/library/deck/decktrackmodel.cpp
   src/library/deck/folderlibrary.cpp
@@ -2164,6 +2165,7 @@ if(BUILD_TESTING)
     src/test/analyzersilence_test.cpp
     src/test/audiotaperpot_test.cpp
     src/test/autodjprocessor_test.cpp
+    src/test/autoplay_test.cpp
     src/test/beatgridtest.cpp
     src/test/beatmaptest.cpp
     src/test/beatstest.cpp
