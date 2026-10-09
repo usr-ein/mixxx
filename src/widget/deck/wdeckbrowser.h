@@ -270,6 +270,9 @@ class WDeckBrowser : public QWidget, public WBaseWidget {
     UserSettingsPointer m_pConfig;
     /// This deck's accent (deckaccent.h), for the breadcrumb's rich text.
     const QColor m_accent;
+    /// The Pro DJ Link session. Before the registry, so it goes after it: the
+    /// registry listens to it.
+    std::unique_ptr<mixxx::prolink::ProLinkNetworkService> m_pNetwork;
     std::unique_ptr<MediaRegistry> m_pRegistry;
     /// After the registry, so it goes first: it listens to it.
     std::unique_ptr<DeckAutoplay> m_pAutoplay;

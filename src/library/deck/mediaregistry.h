@@ -87,9 +87,20 @@ class MediaRegistry : public QObject {
     Q_OBJECT
 
   public:
-    explicit MediaRegistry(mixxx::DbConnectionPoolPtr dbConnectionPool,
+    /// Reads the sticks already in, and watches for more. The players on the
+    /// network are watched through *pNetwork*, which is used and not owned,
+    /// from start().
+    MediaRegistry(mixxx::DbConnectionPoolPtr dbConnectionPool,
+            mixxx::prolink::ProLinkNetworkService* pNetwork,
             QObject* pParent = nullptr);
     ~MediaRegistry() override;
+
+    /// Join the network, and hand the registry to whoever asked for it before
+    /// it existed (whenReady()).
+    ///
+    /// Apart from the constructor so that what listens to the registry can be
+    /// connected first: the session's first answers come out of this.
+    void start();
 
     /// The one that exists, or null before the browser is built.
     ///
@@ -398,8 +409,8 @@ class MediaRegistry : public QObject {
     /// unmounted without its directory going away. See the constructor.
     QTimer m_rescanPoll;
 
-    /// Owned here, because the browser is the only thing that shows media.
-    std::unique_ptr<mixxx::prolink::ProLinkNetworkService> m_pNetwork;
+    /// The Pro DJ Link session, used and not owned.
+    mixxx::prolink::ProLinkNetworkService* const m_pNetwork;
     /// What announceLoadedTrack() was last asked to say, so it can be asked
     /// again when what we serve changes.
     MediumId m_announcedMedium;

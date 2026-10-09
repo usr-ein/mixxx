@@ -110,9 +110,12 @@ void MediaRegistry::whenReady(QObject* pContext, std::function<void(MediaRegistr
     s_pending.append({QPointer<QObject>(pContext), std::move(callback)});
 }
 
-MediaRegistry::MediaRegistry(mixxx::DbConnectionPoolPtr dbConnectionPool, QObject* pParent)
+MediaRegistry::MediaRegistry(mixxx::DbConnectionPoolPtr dbConnectionPool,
+        mixxx::prolink::ProLinkNetworkService* pNetwork,
+        QObject* pParent)
         : QObject(pParent),
-          m_dbConnectionPool(std::move(dbConnectionPool)) {
+          m_dbConnectionPool(std::move(dbConnectionPool)),
+          m_pNetwork(pNetwork) {
     qRegisterMetaType<mixxx::deck::MediumInfo>("mixxx::deck::MediumInfo");
     s_pInstance = this;
 
@@ -155,20 +158,19 @@ MediaRegistry::MediaRegistry(mixxx::DbConnectionPoolPtr dbConnectionPool, QObjec
     // listens, and the counts on a source row come out of the status packets a
     // player already sends, so a remote medium is fully described before
     // anything is fetched.
-    m_pNetwork = std::make_unique<mixxx::prolink::ProLinkNetworkService>();
-    connect(m_pNetwork.get(),
+    connect(m_pNetwork,
             &mixxx::prolink::ProLinkNetworkService::mediaInfoFound,
             this,
             &MediaRegistry::onMediaInfo);
-    connect(m_pNetwork.get(),
+    connect(m_pNetwork,
             &mixxx::prolink::ProLinkNetworkService::databaseFetched,
             this,
             &MediaRegistry::onDatabaseFetched);
-    connect(m_pNetwork.get(),
+    connect(m_pNetwork,
             &mixxx::prolink::ProLinkNetworkService::deviceLost,
             this,
             &MediaRegistry::onDeviceLost);
-    connect(m_pNetwork.get(),
+    connect(m_pNetwork,
             &mixxx::prolink::ProLinkNetworkService::deviceFound,
             this,
             [this](const mixxx::prolink::ProLinkDevice& device) {
@@ -179,7 +181,7 @@ MediaRegistry::MediaRegistry(mixxx::DbConnectionPoolPtr dbConnectionPool, QObjec
     // number stayed here for the session, and a master on that player
     // resolved to nothing -- or, after two decks swapped, to the other deck's
     // stick and the wrong key.
-    connect(m_pNetwork.get(),
+    connect(m_pNetwork,
             &mixxx::prolink::ProLinkNetworkService::deviceChanged,
             this,
             [this](const mixxx::prolink::ProLinkDevice& device) {
@@ -190,19 +192,19 @@ MediaRegistry::MediaRegistry(mixxx::DbConnectionPoolPtr dbConnectionPool, QObjec
     // A streamed file's ranges must be recorded even while nothing is waiting
     // on them -- the deck is decoding out of it the whole time -- so there is
     // no window in which these can be off.
-    connect(m_pNetwork.get(),
+    connect(m_pNetwork,
             &mixxx::prolink::ProLinkNetworkService::fileFetchProgress,
             this,
             &MediaRegistry::onFetchProgress);
-    connect(m_pNetwork.get(),
+    connect(m_pNetwork,
             &mixxx::prolink::ProLinkNetworkService::fileFetched,
             this,
             &MediaRegistry::onFetchFinished);
-    connect(m_pNetwork.get(),
+    connect(m_pNetwork,
             &mixxx::prolink::ProLinkNetworkService::artworkFetched,
             this,
             &MediaRegistry::onArtworkFetched);
-    connect(m_pNetwork.get(),
+    connect(m_pNetwork,
             &mixxx::prolink::ProLinkNetworkService::previewFetched,
             this,
             &MediaRegistry::onPreviewFetched);
@@ -212,7 +214,7 @@ MediaRegistry::MediaRegistry(mixxx::DbConnectionPoolPtr dbConnectionPool, QObjec
     // that window was announced as nothing at all, and stayed that way: no CDJ
     // would follow us or draw our phase until the next load. So it is asked
     // again whenever the answer could have changed.
-    connect(m_pNetwork.get(),
+    connect(m_pNetwork,
             &mixxx::prolink::ProLinkNetworkService::serveStatusChanged,
             this,
             [this]() {
@@ -225,14 +227,14 @@ MediaRegistry::MediaRegistry(mixxx::DbConnectionPoolPtr dbConnectionPool, QObjec
             });
     // ...and through our own player number, which arrives some seconds into a
     // session and may change on a rebind.
-    connect(m_pNetwork.get(),
+    connect(m_pNetwork,
             &mixxx::prolink::ProLinkNetworkService::announceChanged,
             this,
             [this]() {
                 resolveMasterKey();
             });
     m_pKeySync = std::make_unique<mixxx::prolink::ProLinkKeySync>();
-    connect(m_pNetwork.get(),
+    connect(m_pNetwork,
             &mixxx::prolink::ProLinkNetworkService::masterTrackChanged,
             this,
             &MediaRegistry::onMasterTrackChanged);
@@ -242,12 +244,15 @@ MediaRegistry::MediaRegistry(mixxx::DbConnectionPoolPtr dbConnectionPool, QObjec
     // every path that changes the media list emits this one and any of them
     // can be the moment the answer becomes knowable.
     connect(this, &MediaRegistry::mediaChanged, this, &MediaRegistry::resolveMasterKey);
+}
+
+void MediaRegistry::start() {
     m_pNetwork->start();
 
     // Whoever asked for us before we existed. Drained *last*, deliberately:
-    // the rescan above emits mediumAppeared for the sticks that were already
-    // plugged in at boot, and a toast for each of those on every startup is
-    // noise rather than news.
+    // the constructor's rescan emits mediumAppeared for the sticks that were
+    // already plugged in at boot, and a toast for each of those on every
+    // startup is noise rather than news.
     const auto waiting = std::exchange(s_pending, {});
     for (const auto& entry : waiting) {
         if (!entry.first.isNull()) {
@@ -260,17 +265,17 @@ MediaRegistry::~MediaRegistry() {
     if (s_pInstance == this) {
         s_pInstance = nullptr;
     }
-    // Stop listening to the ProLink service before it is torn down, because
-    // tearing it down is not silent.
+    // Stop listening to the ProLink service first, because tearing it down is
+    // not silent.
     //
     // ~ProLinkNetworkService calls shutdown(), which reports every device it
-    // still had as lost -- and this object is what listens for that. The
-    // service is a member, so by the time it is destroyed this destructor's
-    // body has already run and member destruction is under way: onDeviceLost()
-    // would then run a database query against a half-destroyed registry.
+    // still had as lost -- and this object is what listens for that. Heard
+    // while this registry is part-way destroyed, onDeviceLost() runs a
+    // database query against it.
     //
-    // That is exactly what it did. glibc aborted inside malloc during
-    // clearMedium()'s QSqlResult::savePrepare, part-way through
+    // That is exactly what it did, when the service was a member of this
+    // class. glibc aborted inside malloc during clearMedium()'s
+    // QSqlResult::savePrepare, part-way through
     // QObjectPrivate::deleteChildren -- so Mixxx segfaulted on every shutdown,
     // before CoreServices::finalize() had saved anything, mixxx.cfg included,
     // because of a signal emitted from a destructor.
@@ -855,7 +860,7 @@ void MediaRegistry::fetchCompanionBlocking(const QByteArray& mac,
     QElapsedTimer elapsed;
     elapsed.start();
     bool finished = false;
-    const auto connection = connect(m_pNetwork.get(),
+    const auto connection = connect(m_pNetwork,
             &mixxx::prolink::ProLinkNetworkService::fileFetched,
             &loop,
             [&loop, &finished, localPath](const QString& path, const QString&) {
@@ -995,7 +1000,7 @@ QString MediaRegistry::startStreaming(const MediumId& medium,
                 }
             });
     // A transfer that fails before it ever reports a size ends here instead.
-    const auto failed = connect(m_pNetwork.get(),
+    const auto failed = connect(m_pNetwork,
             &mixxx::prolink::ProLinkNetworkService::fileFetched,
             &loop,
             [&loop, &error, localPath](const QString& path, const QString& reason) {

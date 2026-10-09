@@ -32,6 +32,7 @@
 #include "track/track.h"
 #include "track/trackref.h"
 #include "moc_wdeckbrowser.cpp"
+#include "network/prolink/prolinknetworkservice.h"
 #include "util/logger.h"
 #include "widget/deck/deckaccent.h"
 #include "widget/deck/deckbezel.h"
@@ -392,7 +393,10 @@ WDeckBrowser::WDeckBrowser(QWidget* pParent, Library* pLibrary, UserSettingsPoin
     // and on a slow one those took the bandwidth that the track on the deck,
     // and any player reading the stick over the network, needed.
 
-    m_pRegistry = std::make_unique<MediaRegistry>(m_pLibrary->dbConnectionPool(), this);
+    m_pNetwork = std::make_unique<mixxx::prolink::ProLinkNetworkService>();
+    m_pRegistry = std::make_unique<MediaRegistry>(
+            m_pLibrary->dbConnectionPool(), m_pNetwork.get(), this);
+    m_pRegistry->start();
     // Autoplay loads through the browser's own load path, so a track it picks
     // is copied off its medium, announced and marked in the list exactly like
     // one the DJ loads.
