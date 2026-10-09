@@ -39,7 +39,11 @@ class ProLinkSync : public QObject {
     Q_OBJECT
 
   public:
-    explicit ProLinkSync(QObject* pParent = nullptr);
+    /// *deckGroup* is the deck synced and published. *pControls* are the
+    /// `[ProLink]` controls, used and not owned; null only in a test.
+    ProLinkSync(const QString& deckGroup,
+            ProLinkControls* pControls,
+            QObject* pParent = nullptr);
     ~ProLinkSync() override;
 
     /// The session to act on, or null when there is none. Not owned.
@@ -190,9 +194,6 @@ class ProLinkSync : public QObject {
     /// setPhaseTrim() instead. SYNC holds the phase for as long as it is lit.
     void alignPhaseToMaster(double beats);
 
-    /// The deck the browser and the network both mean by "this deck".
-    static const char* kDeckGroup;
-
     /// Set when SYNC is engaged, and when the DJ lets go of the deck (which
     /// includes the deck starting to play): see holdSuspended(). Cleared once
     /// the landing is decided, with a jump or without one. A SYNC press while
@@ -245,13 +246,14 @@ class ProLinkSync : public QObject {
     /// The session, while the service has one open.
     ::prolink::Session* m_pSession = nullptr;
 
+    /// The deck the browser and the network both mean by "this deck".
+    const QString m_deckGroup;
     /// The `[ProLink]` controls, which this class **uses and does not own**.
     ///
-    /// They belong to ProLinkControls, created by CoreServices long before any
-    /// skin exists — see that class for why owning them here does not work.
-    /// Null only in a test or a build with no core services, and every use
-    /// below is guarded accordingly.
-    ProLinkControls* m_pControls = nullptr;
+    /// They exist before any skin does -- see ProLinkControls for why owning
+    /// them here does not work. Null only in a test, and every use below is
+    /// guarded accordingly.
+    ProLinkControls* const m_pControls;
     /// The deck's own controls, read every poll to publish what we are doing.
     std::unique_ptr<ControlProxy> m_pDeckBpm;
     std::unique_ptr<ControlProxy> m_pDeckFileBpm;

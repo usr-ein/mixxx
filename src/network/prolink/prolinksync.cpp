@@ -130,9 +130,12 @@ mixxx::prolink::SyncPeer syncPeerOf(const ::prolink::Player& player) {
 namespace mixxx {
 namespace prolink {
 
-ProLinkSync::ProLinkSync(QObject* pParent)
+ProLinkSync::ProLinkSync(const QString& deckGroup,
+        ProLinkControls* pControls,
+        QObject* pParent)
         : QObject(pParent),
-          m_pControls(ProLinkControls::instance()) {
+          m_deckGroup(deckGroup),
+          m_pControls(pControls) {
     VERIFY_OR_DEBUG_ASSERT(m_pControls) {
         // Nothing to hang the buttons off, and nowhere to publish the master.
         // The network half still runs; the UI half simply does not exist.
@@ -192,7 +195,7 @@ ProLinkSync::ProLinkSync(QObject* pParent)
     // thirty times a second and a lookup by name each time is a lookup by name
     // thirty times a second.
     const auto deck = [this](const char* item) {
-        return std::make_unique<ControlProxy>(QString::fromLatin1(kDeckGroup),
+        return std::make_unique<ControlProxy>(m_deckGroup,
                 QString::fromLatin1(item),
                 this,
                 ControlFlag::NoWarnIfMissing);
@@ -203,7 +206,7 @@ ProLinkSync::ProLinkSync(QObject* pParent)
     m_pDeckDuration = deck("duration");
     m_pDeckBeatJump = deck("beatjump");
     m_pDeckPhaseTrim = deck("phase_trim");
-    m_pOurBeat = std::make_unique<AudibleBeatClock>(QString::fromLatin1(kDeckGroup), this);
+    m_pOurBeat = std::make_unique<AudibleBeatClock>(m_deckGroup, this);
 
     // The DJ's hands on the deck, which the phase hold must leave alone. See
     // holdSuspended().
@@ -258,8 +261,6 @@ void ProLinkSync::sessionStopped() {
         clearMaster();
     }
 }
-
-/*static*/ const char* ProLinkSync::kDeckGroup = "[Channel1]";
 
 void ProLinkSync::setLoadedTrack(int sourcePlayer,
         MediaSlot slot,

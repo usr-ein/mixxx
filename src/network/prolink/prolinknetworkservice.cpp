@@ -89,17 +89,17 @@ struct ProLinkNetworkService::Impl {
     }
 };
 
-ProLinkNetworkService::ProLinkNetworkService(QObject* parent)
+ProLinkNetworkService::ProLinkNetworkService(const QString& deckGroup,
+        ProLinkControls* pControls,
+        QObject* parent)
         : QObject(parent),
           m_pImpl(std::make_unique<Impl>()),
-          m_pSync(std::make_unique<ProLinkSync>()) {
+          m_pSync(std::make_unique<ProLinkSync>(deckGroup, pControls)) {
     connect(m_pSync.get(),
             &ProLinkSync::masterTrackChanged,
             this,
             &ProLinkNetworkService::masterTrackChanged);
-    // Null only in a test or a build with no core services, which ProLinkSync
-    // warns about.
-    ProLinkControls* pControls = ProLinkControls::instance();
+    // Null only in a test, which ProLinkSync warns about.
     if (!pControls) {
         return;
     }

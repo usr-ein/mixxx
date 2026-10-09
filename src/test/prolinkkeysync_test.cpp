@@ -26,7 +26,8 @@ class ProLinkKeySyncTest : public MockedEngineBackendTest {
     void SetUp() override {
         MockedEngineBackendTest::SetUp();
         m_pControls = std::make_unique<mixxx::prolink::ProLinkControls>();
-        m_pKeySync = std::make_unique<mixxx::prolink::ProLinkKeySync>();
+        m_pKeySync = std::make_unique<mixxx::prolink::ProLinkKeySync>(
+                m_sGroup1, m_pControls.get());
         m_pEnabled = std::make_unique<ControlProxy>(
                 QStringLiteral("[ProLink]"), QStringLiteral("key_sync_enabled"));
     }
@@ -148,7 +149,8 @@ TEST_F(ProLinkKeySyncTest, ARebuiltShellResumesAndCanStillRelease) {
     QCoreApplication::processEvents();
     ASSERT_NE(0.0, pitchAdjust());
 
-    m_pKeySync = std::make_unique<mixxx::prolink::ProLinkKeySync>();
+    m_pKeySync = std::make_unique<mixxx::prolink::ProLinkKeySync>(
+            m_sGroup1, m_pControls.get());
     // Still holding the key: a load is pitched into it.
     loadTrackInKey(C_MINOR);
     EXPECT_NEAR(stepsFrom(C_MINOR, F_SHARP_MINOR), pitchAdjust(), 1e-9);

@@ -27,6 +27,7 @@
 #include "track/keyutils.h"
 #include "track/track.h"
 #include "moc_wdeckbrowser.cpp"
+#include "network/prolink/prolinkcontrols.h"
 #include "network/prolink/prolinkkeysync.h"
 #include "network/prolink/prolinknetworkservice.h"
 #include "util/logger.h"
@@ -384,7 +385,8 @@ WDeckBrowser::WDeckBrowser(QWidget* pParent, Library* pLibrary, UserSettingsPoin
     // and on a slow one those took the bandwidth that the track on the deck,
     // and any player reading the stick over the network, needed.
 
-    m_pNetwork = std::make_unique<mixxx::prolink::ProLinkNetworkService>();
+    m_pNetwork = std::make_unique<mixxx::prolink::ProLinkNetworkService>(
+            kDeckGroup, mixxx::prolink::ProLinkControls::instance());
     m_pRegistry = std::make_unique<MediaRegistry>(
             m_pLibrary->dbConnectionPool(), m_pNetwork.get(), this);
     m_pStreamer = std::make_unique<RemoteTrackStreamer>(
@@ -393,7 +395,8 @@ WDeckBrowser::WDeckBrowser(QWidget* pParent, Library* pLibrary, UserSettingsPoin
     // it is in the copy of the master's medium database the registry read.
     // Listening before the session starts, which is when the first answer
     // comes.
-    m_pKeySync = std::make_unique<mixxx::prolink::ProLinkKeySync>();
+    m_pKeySync = std::make_unique<mixxx::prolink::ProLinkKeySync>(
+            kDeckGroup, mixxx::prolink::ProLinkControls::instance());
     connect(m_pRegistry.get(),
             &MediaRegistry::masterKeyChanged,
             m_pKeySync.get(),

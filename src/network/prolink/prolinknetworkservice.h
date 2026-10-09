@@ -16,6 +16,7 @@ class QTimer;
 namespace mixxx {
 namespace prolink {
 
+class ProLinkControls;
 class ProLinkSync;
 
 /// The single object the rest of Mixxx talks to about Pro DJ Link.
@@ -44,7 +45,12 @@ class ProLinkNetworkService : public QObject {
     Q_OBJECT
 
   public:
-    explicit ProLinkNetworkService(QObject* parent = nullptr);
+    /// *deckGroup* is the deck whose tempo is synced and published.
+    /// *pControls* are the `[ProLink]` controls, used and not owned; null only
+    /// in a test.
+    ProLinkNetworkService(const QString& deckGroup,
+            ProLinkControls* pControls,
+            QObject* parent = nullptr);
     ~ProLinkNetworkService() override;
 
     /// Start listening. Safe to call twice.

@@ -13,16 +13,17 @@ namespace {
 
 const mixxx::Logger kLogger("ProLinkKeySync");
 
-/// The deck the network and the browser both mean by "this deck".
-const char* kDeckGroup = "[Channel1]";
-
 } // namespace
 
 namespace mixxx {
 namespace prolink {
 
-ProLinkKeySync::ProLinkKeySync(QObject* pParent)
-        : QObject(pParent), m_pControls(ProLinkControls::instance()) {
+ProLinkKeySync::ProLinkKeySync(const QString& deckGroup,
+        ProLinkControls* pControls,
+        QObject* pParent)
+        : QObject(pParent),
+          m_deckGroup(deckGroup),
+          m_pControls(pControls) {
     VERIFY_OR_DEBUG_ASSERT(m_pControls) {
         kLogger.warning() << "the [ProLink] controls were never created;"
                           << "KEY SYNC will do nothing";
@@ -30,7 +31,7 @@ ProLinkKeySync::ProLinkKeySync(QObject* pParent)
     }
 
     const auto deck = [this](const char* item) {
-        return std::make_unique<ControlProxy>(QString::fromLatin1(kDeckGroup),
+        return std::make_unique<ControlProxy>(m_deckGroup,
                 QString::fromLatin1(item),
                 this,
                 ControlFlag::NoWarnIfMissing);
@@ -74,7 +75,7 @@ ProLinkKeySync::ProLinkKeySync(QObject* pParent)
             &PlayerInfo::trackChanged,
             this,
             [this](const QString& group, TrackPointer pNewTrack, TrackPointer) {
-                if (group == QLatin1String(kDeckGroup) && pNewTrack) {
+                if (group == m_deckGroup && pNewTrack) {
                     reapply();
                 }
             });

@@ -1,6 +1,7 @@
 #pragma once
 
 #include <QObject>
+#include <QString>
 #include <atomic>
 #include <limits>
 #include <memory>
@@ -33,7 +34,11 @@ class ProLinkKeySync : public QObject {
     Q_OBJECT
 
   public:
-    explicit ProLinkKeySync(QObject* pParent = nullptr);
+    /// *deckGroup* is the deck pitched. *pControls* are the `[ProLink]`
+    /// controls, used and not owned; null only in a build that has none.
+    ProLinkKeySync(const QString& deckGroup,
+            ProLinkControls* pControls,
+            QObject* pParent = nullptr);
     ~ProLinkKeySync() override;
 
     /// What the network is offering, as often as it changes.
@@ -62,9 +67,10 @@ class ProLinkKeySync : public QObject {
     KeySync m_state;
     KeySync::Link m_link;
 
+    const QString m_deckGroup;
     /// The `[ProLink]` controls, used and not owned. Null in a build with no
     /// core services, and every use is guarded.
-    ProLinkControls* m_pControls = nullptr;
+    ProLinkControls* const m_pControls;
     std::unique_ptr<ControlProxy> m_pDeckPitchAdjust;
     std::unique_ptr<ControlProxy> m_pDeckFileKey;
     std::unique_ptr<ControlProxy> m_pDeckKeylock;
