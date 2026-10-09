@@ -141,24 +141,6 @@ void WLibrary::slotSelectTrackInActiveTrackView(const TrackId& trackId) {
     }
 }
 
-void WLibrary::showEvent(QShowEvent* pEvent) {
-    QStackedWidget::showEvent(pEvent);
-    WTrackTableView* pTracksView = getCurrentTrackTableView();
-    if (!pTracksView) {
-        // A feature whose view is not a track table -- the ProLink status page
-        // or a device summary, say. Nothing to focus, and stealing focus would
-        // be worse than leaving it where the user put it.
-        return;
-    }
-    const QAbstractItemModel* pModel = pTracksView->model();
-    if (!pModel || pModel->rowCount() == 0) {
-        // An empty list is no better than no list: focus there has nothing to
-        // move through and no obvious way back to the tree.
-        return;
-    }
-    pTracksView->setFocus();
-}
-
 void WLibrary::saveCurrentViewState() const {
     WTrackTableView* pTracksView = getCurrentTrackTableView();
     if (!pTracksView) {
