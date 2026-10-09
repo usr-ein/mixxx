@@ -10,7 +10,7 @@
 #include <vector>
 
 #include "network/prolink/prolinktypes.h"
-#include "network/prolink/server/prolinkservestatus.h"
+#include "network/prolink/prolinkservestatus.h"
 #include "network/prolink/syncsource.h"
 
 class ControlObject;
