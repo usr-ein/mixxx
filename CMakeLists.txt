@@ -1153,6 +1153,7 @@ add_library(mixxx-lib STATIC EXCLUDE_FROM_ALL
   src/skin/legacy/launchimage.cpp
   src/skin/legacy/legacyskin.cpp
   src/skin/legacy/legacyskinparser.cpp
+  src/skin/legacy/legacyskinparser_deck.cpp
   src/skin/legacy/pixmapsource.cpp
   src/skin/legacy/skincontext.cpp
   src/skin/legacy/tooltips.cpp

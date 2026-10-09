@@ -75,11 +75,8 @@ class LegacySkinParser : public QObject, public SkinParser {
     template <class T>
     QWidget* parseLabelWidget(const QDomElement& element);
     void setupLabelWidget(const QDomElement& element, WLabel* pLabel);
-    QWidget* parseDeckBrowser(const QDomElement& node);
-    QWidget* parseDeckToast(const QDomElement& node);
-    QWidget* parseDeckAutoplayBadge(const QDomElement& node);
-    QWidget* parseProLinkPhaseMeter(const QDomElement& node);
-    QWidget* parseTempoPanel(const QDomElement& node);
+    /// The deck's own nodes, or null for any other (legacyskinparser_deck.cpp).
+    QWidget* parseDeckNode(const QDomElement& node);
     QWidget* parseText(const QDomElement& node);
     QWidget* parseTrackProperty(const QDomElement& node);
     QWidget* parseStarRating(const QDomElement& node);
