@@ -1529,13 +1529,14 @@ void WDeckBrowser::onBack() {
     popLevel();
 }
 
-/// Put the selected track on the deck.
+/// Put a track on the deck.
 ///
 /// Five steps, in this order, and the order is the whole design:
 ///
-///  1. **Read the row.** Every field is taken now, before anything below can
-///     run a nested event loop, because during one the model can be re-sorted
-///     or reset underneath us.
+///  1. **Read the row.** Every field is taken before this is called, by
+///     readModelRow() or readLibraryRow(), because anything below can run a
+///     nested event loop, and during one the model can be re-sorted or reset
+///     underneath us.
 ///  2. **Get a local file.** A stick's track is *started* copying and a remote
 ///     one *started* downloading; either comes back as a file of the right
 ///     size whose unwritten parts block a reader instead of handing it zeros.
@@ -1559,45 +1560,15 @@ void WDeckBrowser::onBack() {
 ///  * **A file that is still arriving is only ever read through
 ///     StreamingFile.** An ordinary read of a sparse hole returns zeros and
 ///     succeeds, so the failure mode is not an error, it is silence.
-void WDeckBrowser::loadSelectedTrack() {
-    const int row = m_pTrackView->selectedRow();
-    if (row < 0) {
-        return;
-    }
-    const QModelIndex index = m_pTrackModel->index(row, 0);
-    m_pTrackModel->willLoadTrack(index);
-
-    // EVERYTHING off the row is read here, before anything below can run a
-    // nested event loop. Streaming a remote track spins one, and during it the
-    // model can be re-sorted or reset -- so `row` and `index` are not touched
-    // again past this block.
-    const auto field = [this, row](const QString& column) {
-        const int c = m_pTrackModel->fieldIndex(column);
-        return c < 0 ? QString()
-                     : m_pTrackModel->index(row, c).data(Qt::DisplayRole).toString();
-    };
-    const QString source = field(TRACKLOCATIONSTABLE_LOCATION);
-    const QString analyzePath = field(QStringLiteral("analyze_path"));
-    const int sampleRate = field(LIBRARYTABLE_SAMPLERATE).toInt();
-    const auto rekordboxId = static_cast<quint32>(field(QStringLiteral("rb_id")).toUInt());
-    const QString artist = field(LIBRARYTABLE_ARTIST);
-    const QString title = field(LIBRARYTABLE_TITLE);
-    const QString album = field(LIBRARYTABLE_ALBUM);
-    // As rekordbox spelled it -- Camelot on one export, classical on another.
-    // Track normalises it on the way in, so which one it is does not matter
-    // here and must not be guessed at.
-    const QString key = field(LIBRARYTABLE_KEY);
-    // The two halves of one cover: where the image is (or will be) on this
-    // machine, and what it is called on the medium. The second is the one the
-    // cache key is derived from, and the pdb writes both or neither.
-    const QString coverPath = field(LIBRARYTABLE_COVERART_LOCATION);
-    const QString artworkPath = field(QStringLiteral("artwork_path"));
-    // Which deck_library row this is, kept for the play log. Taken here because
-    // this is the only moment it is unambiguous: two sticks can hold clones of
-    // the same file, so afterwards the path alone does not say which medium it
-    // came from.
-    const int trackRowId = field(QStringLiteral("track_id")).toInt();
-    const MediumId medium = currentMedium();
+void WDeckBrowser::loadRow(const LoadableRow& row, bool play, const QModelIndex& index) {
+    const QString& source = row.source;
+    const QString& analyzePath = row.analyzePath;
+    const int sampleRate = row.sampleRate;
+    const quint32 rekordboxId = row.rekordboxId;
+    const QString& title = row.title;
+    const QString& key = row.key;
+    const int trackRowId = row.trackRowId;
+    const MediumId& medium = row.medium;
 
     // Play the COPY, never the medium. This is the whole point of the cache:
     // the file under the playhead has to be one that survives the stick being
@@ -1644,21 +1615,24 @@ void WDeckBrowser::loadSelectedTrack() {
         }
     }
 
-    TrackPointer pTrack = playPath == source
+    // Off the list's model when it is the medium's own file and there is a
+    // list, which fills a track new to the library in from the row.
+    const bool fromModel = playPath == source && index.isValid();
+    TrackPointer pTrack = fromModel
             ? m_pTrackModel->getTrack(index)
             : m_pLibrary->trackCollectionManager()->getOrAddTrack(
                       TrackRef::fromFilePath(playPath));
     if (!pTrack) {
-        kLogger.warning() << "no track at row" << row;
+        kLogger.warning() << "no track for" << source;
         return;
     }
-    if (playPath != source) {
+    if (!fromModel) {
         // The cached file has no tags worth reading -- it is a byte copy of
         // somebody else's file -- so the metadata comes from the pdb, as it
         // does for the row itself.
-        pTrack->setArtist(artist);
+        pTrack->setArtist(row.artist);
         pTrack->setTitle(title);
-        pTrack->setAlbum(album);
+        pTrack->setAlbum(row.album);
         // Genre is deliberately not set: Track has no plain setter for it (only
         // setGenreFromTrackDAO, which is the DAO's business), and the browser
         // reads genre off the pdb row anyway.
@@ -1679,7 +1653,7 @@ void WDeckBrowser::loadSelectedTrack() {
     // art is not in the file and not beside it. Unconditional, unlike the
     // metadata -- a stick's tracks are played from a copy *and* read through
     // getTrack(), and neither route finds a cover on its own.
-    applyCoverArt(pTrack, coverPath, artworkPath);
+    applyCoverArt(pTrack, row.coverPath, row.artworkPath);
 
     // The beat grid, hot cues, loops and memory cues rekordbox already worked
     // out, from the ANLZ files beside the track.
@@ -1751,7 +1725,91 @@ void WDeckBrowser::loadSelectedTrack() {
     kLogger.debug() << "loading" << title << "-- beats" << (pTrack->getBeats() != nullptr)
                     << "waveform" << !pTrack->getWaveform().isNull()
                     << "summary" << !pTrack->getWaveformSummary().isNull();
-    emit loadTrackToPlayer(pTrack, kDeckGroup, false);
+    emit loadTrackToPlayer(pTrack, kDeckGroup, play);
+}
+
+void WDeckBrowser::loadSelectedTrack() {
+    const int row = m_pTrackView->selectedRow();
+    if (row < 0) {
+        return;
+    }
+    const QModelIndex index = m_pTrackModel->index(row, 0);
+    m_pTrackModel->willLoadTrack(index);
+    loadRow(readModelRow(row), false, index);
+}
+
+bool WDeckBrowser::loadLibraryRow(int rowId) {
+    LoadableRow loadable;
+    if (!readLibraryRow(rowId, &loadable)) {
+        return false;
+    }
+    loadRow(loadable, true, QModelIndex());
+    return true;
+}
+
+WDeckBrowser::LoadableRow WDeckBrowser::readModelRow(int row) const {
+    const auto field = [this, row](const QString& column) {
+        const int c = m_pTrackModel->fieldIndex(column);
+        return c < 0 ? QString()
+                     : m_pTrackModel->index(row, c).data(Qt::DisplayRole).toString();
+    };
+    LoadableRow loadable;
+    loadable.source = field(TRACKLOCATIONSTABLE_LOCATION);
+    loadable.analyzePath = field(QStringLiteral("analyze_path"));
+    loadable.sampleRate = field(LIBRARYTABLE_SAMPLERATE).toInt();
+    loadable.rekordboxId = static_cast<quint32>(field(QStringLiteral("rb_id")).toUInt());
+    loadable.artist = field(LIBRARYTABLE_ARTIST);
+    loadable.title = field(LIBRARYTABLE_TITLE);
+    loadable.album = field(LIBRARYTABLE_ALBUM);
+    // As rekordbox spelled it -- Camelot on one export, classical on another.
+    // Track normalises it on the way in, so which one it is does not matter
+    // here and must not be guessed at.
+    loadable.key = field(LIBRARYTABLE_KEY);
+    // The two halves of one cover: where the image is (or will be) on this
+    // machine, and what it is called on the medium. The second is the one the
+    // cache key is derived from, and the pdb writes both or neither.
+    loadable.coverPath = field(LIBRARYTABLE_COVERART_LOCATION);
+    loadable.artworkPath = field(QStringLiteral("artwork_path"));
+    // Which deck_library row this is, kept for the play log. Taken here because
+    // this is the only moment it is unambiguous: two sticks can hold clones of
+    // the same file, so afterwards the path alone does not say which medium it
+    // came from.
+    loadable.trackRowId = field(QStringLiteral("track_id")).toInt();
+    loadable.medium = currentMedium();
+    return loadable;
+}
+
+bool WDeckBrowser::readLibraryRow(int rowId, LoadableRow* pRow) {
+    // The same fields readModelRow() takes off the list, straight from the
+    // table: autoplay's next track is in no list on screen -- the DJ may be
+    // anywhere in the browser, or not in it at all.
+    QSqlDatabase db = database();
+    QSqlQuery query(db);
+    query.prepare(QStringLiteral(
+            "SELECT location, analyze_path, samplerate, rb_id, artist, title, album, "
+            "key, coverart_location, artwork_path, medium FROM %1 WHERE id = :id")
+                          .arg(kLibraryTable));
+    query.bindValue(QStringLiteral(":id"), rowId);
+    if (!query.exec()) {
+        LOG_FAILED_QUERY(query);
+        return false;
+    }
+    if (!query.next()) {
+        return false;
+    }
+    pRow->source = query.value(0).toString();
+    pRow->analyzePath = query.value(1).toString();
+    pRow->sampleRate = query.value(2).toInt();
+    pRow->rekordboxId = static_cast<quint32>(query.value(3).toUInt());
+    pRow->artist = query.value(4).toString();
+    pRow->title = query.value(5).toString();
+    pRow->album = query.value(6).toString();
+    pRow->key = query.value(7).toString();
+    pRow->coverPath = query.value(8).toString();
+    pRow->artworkPath = query.value(9).toString();
+    pRow->trackRowId = rowId;
+    pRow->medium = MediumId::fromKey(query.value(10).toString());
+    return true;
 }
 
 void WDeckBrowser::releasePinned() {

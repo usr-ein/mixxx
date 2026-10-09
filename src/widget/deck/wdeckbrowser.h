@@ -156,6 +156,23 @@ class WDeckBrowser : public QWidget, public WBaseWidget {
         int selectedRow = 0;
     };
 
+    /// Everything a load needs off a track's row, read in one go: see
+    /// loadRow() for why it has to be.
+    struct LoadableRow {
+        QString source;
+        QString analyzePath;
+        int sampleRate = 0;
+        quint32 rekordboxId = 0;
+        QString artist;
+        QString title;
+        QString album;
+        QString key;
+        QString coverPath;
+        QString artworkPath;
+        int trackRowId = -1;
+        MediumId medium;
+    };
+
     void pushLevel(Level level);
     void popLevel();
     void rebuildCurrentLevel();
@@ -174,7 +191,17 @@ class WDeckBrowser : public QWidget, public WBaseWidget {
     /// The page currently on the stack, if it wants the deck's controls.
     mixxx::deck::DeckPage* currentPage() const;
     void updateBreadcrumb();
+    /// The DJ's load: the selected row, onto the deck, not playing.
     void loadSelectedTrack();
+    /// A `deck_library` row by its id, wherever the browser is, and playing.
+    /// False when the row has gone.
+    bool loadLibraryRow(int rowId);
+    LoadableRow readModelRow(int row) const;
+    bool readLibraryRow(int rowId, LoadableRow* pRow);
+    /// Put *row* on the deck. *index* is its row in the track model when the
+    /// load came from the list, which is where a track not copied off its
+    /// medium is fetched from.
+    void loadRow(const LoadableRow& row, bool play, const QModelIndex& index);
     /// Point a Track at the cover its medium carries, so the deck's header
     /// draws it.
     ///
