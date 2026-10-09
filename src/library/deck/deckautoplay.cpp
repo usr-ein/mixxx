@@ -1,4 +1,4 @@
-#include "widget/deck/deckautoplay.h"
+#include "library/deck/deckautoplay.h"
 
 #include <QList>
 #include <QPair>

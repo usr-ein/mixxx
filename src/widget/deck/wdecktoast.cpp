@@ -5,10 +5,10 @@
 #include <QMouseEvent>
 #include <QVBoxLayout>
 
+#include "library/deck/deckautoplay.h"
 #include "library/deck/trackcache.h"
 #include "track/track.h"
 #include "util/logger.h"
-#include "widget/deck/deckautoplay.h"
 
 namespace {
 const mixxx::Logger kLogger("DeckToast");

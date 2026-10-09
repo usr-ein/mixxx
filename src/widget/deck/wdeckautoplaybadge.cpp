@@ -4,9 +4,9 @@
 #include <QPainter>
 #include <algorithm>
 
+#include "library/deck/deckautoplay.h"
 #include "moc_wdeckautoplaybadge.cpp"
 #include "widget/deck/deckaccent.h"
-#include "widget/deck/deckautoplay.h"
 
 namespace {
 /// The tempo box's margins (wtempopanel.cpp), mirrored: the two boxes sit in

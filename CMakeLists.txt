@@ -1008,6 +1008,7 @@ add_library(mixxx-lib STATIC EXCLUDE_FROM_ALL
   src/library/rekordbox/rekordboxpdb.cpp
   src/library/rekordbox/rekordboxwaveform.cpp
   src/library/deck/autoplay.cpp
+  src/library/deck/deckautoplay.cpp
   src/library/deck/deckqueries.cpp
   src/library/deck/decktrackmodel.cpp
   src/library/deck/folderlibrary.cpp
@@ -1361,7 +1362,6 @@ add_library(mixxx-lib STATIC EXCLUDE_FROM_ALL
   src/widget/wnumberrate.cpp
   src/widget/woverview.cpp
   src/widget/wprolinkphasemeter.cpp
-  src/widget/deck/deckautoplay.cpp
   src/widget/deck/deckdelegates.cpp
   src/widget/deck/decklevels.cpp
   src/widget/deck/decklistview.cpp
