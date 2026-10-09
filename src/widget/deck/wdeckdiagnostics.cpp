@@ -14,6 +14,7 @@
 #include <QStorageInfo>
 #include <QStringList>
 #include <QSysInfo>
+#include <QUrl>
 #include <cmath>
 
 #include "control/controlobject.h"
@@ -81,6 +82,35 @@ QString ipv4Of(const QNetworkInterface& iface) {
     return QString();
 }
 
+/// What RESTART INTO links to. Not a URL anything opens: the page takes it.
+const QString kSwitchSlotHref = QStringLiteral("trimixxx:switch-slot");
+
+QString warn(const QString& html) {
+    return QStringLiteral("<span class='warn'>%1</span>").arg(html);
+}
+
+/// A button drawn in text, as the sparklines are: three lines of the page's
+/// monospaced font, the label on the middle one, every character of it one
+/// link, so a fingertip anywhere on the block is a tap on it -- a link alone
+/// is as tall as its letters. Without *href* it is the same block, dimmed.
+QString textButton(const QString& label, const QString& href) {
+    const QChar space(0x00A0); // no-break, so the rows keep their width
+    const QString pad(3, space);
+    const QString blank(label.size() + 2 * pad.size(), space);
+    const QString block = blank + QStringLiteral("<br>") + pad + label.toHtmlEscaped() + pad +
+            QStringLiteral("<br>") + blank;
+    if (href.isEmpty()) {
+        return QStringLiteral(
+                "<span style='font-size:20px; font-weight:bold; color:#5a5a5a; "
+                "background-color:#1c1c1c;'>%1</span>")
+                .arg(block);
+    }
+    return QStringLiteral(
+            "<a href='%1' style='font-size:20px; font-weight:bold; color:#ff8833; "
+            "background-color:#2a2a2a; text-decoration:none;'>%2</a>")
+            .arg(href, block);
+}
+
 /// `key=value` lines, the format pi_config/wifi-fallback writes to
 /// /run/trimixxx/wifi.
 QHash<QString, QString> keyValues(const QString& text) {
@@ -127,6 +157,7 @@ WDeckDiagnostics::WDeckDiagnostics(const QString& settingsPath, QWidget* pParent
     QScroller::scroller(viewport())->setScrollerProperties(properties);
     m_timer.setInterval(1000);
     connect(&m_timer, &QTimer::timeout, this, &WDeckDiagnostics::sample);
+    connect(this, &QTextBrowser::anchorClicked, this, &WDeckDiagnostics::onAnchorClicked);
 
     // Either edge: the light coming on is a clip starting, and going out is the
     // last one ending. Both mean the output was clipping just now.
@@ -314,6 +345,9 @@ void WDeckDiagnostics::sample() {
     // detent while a level is being adjusted, and a process per detent makes
     // the encoder lag behind the hand.
     m_throttled = runCommand(QStringLiteral("vcgencmd"), {QStringLiteral("get_throttled")});
+    // A handful of small files, and nothing asked of RAUC (deckrelease.h).
+    // Each second, so a trial being kept shows as it happens.
+    m_release = DeckRelease::read();
 
     render();
 }
@@ -338,13 +372,15 @@ QString WDeckDiagnostics::html() const {
 
     // ---- identity ----------------------------------------------------------
     out += QStringLiteral("<h2>Identity</h2><table>");
+    out += releaseRows();
     out += row(tr("Mixxx"), VersionStore::version().toHtmlEscaped());
     out += row(tr("Now"),
             QDateTime::currentDateTime().toString(QStringLiteral("yyyy-MM-dd HH:mm:ss")));
     const QString uptime = readFile(QStringLiteral("/proc/uptime")).section(QChar(' '), 0, 0);
-    out += row(tr("Uptime"),
-            QStringLiteral("%1 h").arg(uptime.toDouble() / 3600.0, 0, 'f', 1));
+    out += row(tr("Uptime"), uptimeText(static_cast<qint64>(uptime.toDouble())));
     out += QStringLiteral("</table>");
+
+    out += slotsHtml();
 
     // ---- network -----------------------------------------------------------
     //
@@ -580,6 +616,174 @@ QString WDeckDiagnostics::html() const {
     out += QStringLiteral("</table>");
 
     return out;
+}
+
+QString WDeckDiagnostics::uptimeText(qint64 seconds) {
+    if (seconds < 60) {
+        return tr("%1 s").arg(qMax<qint64>(seconds, 0));
+    }
+    const qint64 minutes = seconds / 60;
+    if (minutes < 60) {
+        return tr("%1 min").arg(minutes);
+    }
+    const qint64 hours = minutes / 60;
+    if (hours < 24) {
+        return tr("%1 h %2 min").arg(hours).arg(minutes % 60, 2, 10, QChar('0'));
+    }
+    return tr("%1 d %2 h").arg(hours / 24).arg(hours % 24);
+}
+
+QString WDeckDiagnostics::releaseRows() const {
+    // ---- the release -------------------------------------------------------
+    //
+    // A dev card has none: its system is whatever the deploy steps last put
+    // on it, and Mixxx's own version below is all there is to say.
+    if (!m_release.isReleaseCard()) {
+        return row(tr("Release"),
+                QStringLiteral("<span class='hint'>%1</span>")
+                        .arg(tr("a dev card: no release, no A/B slots")));
+    }
+    const DeckRelease::Release& release = m_release.release;
+    QString version = release.version.isEmpty() ? QStringLiteral("&mdash;")
+                                                : release.version.toHtmlEscaped();
+    if (!release.built.isEmpty()) {
+        // 2026-10-09T10:00Z, as sealed.
+        QString built = release.built;
+        built.replace(QChar('T'), QChar(' '));
+        if (built.endsWith(QChar('Z'))) {
+            built.chop(1);
+            built += QStringLiteral(" UTC");
+        }
+        version += QStringLiteral(" &middot; ") + tr("built %1").arg(built.toHtmlEscaped());
+    }
+    QString commit = release.hash.left(12).toHtmlEscaped();
+    if (!release.commit.isEmpty()) {
+        if (!commit.isEmpty()) {
+            commit += QStringLiteral(" &middot; ");
+        }
+        commit += release.commit.toHtmlEscaped();
+    }
+    return row(tr("Release"), version) +
+            row(tr("Commit"), commit.isEmpty() ? QStringLiteral("&mdash;") : commit);
+}
+
+QString WDeckDiagnostics::slotsHtml() const {
+    // ---- slots -------------------------------------------------------------
+    //
+    // Which of the card's two slots started, whether the health check has
+    // kept it, and what the other one holds: what a restart into it would
+    // run, or why it can't. The facts and the decision are deckrelease.h's.
+    if (!m_release.isReleaseCard()) {
+        return QString();
+    }
+    using Blocked = DeckRelease::Blocked;
+    const DeckRelease& card = m_release;
+    const Blocked blocked = card.blocked();
+    QString out = QStringLiteral("<h2>%1</h2><table>").arg(tr("Slots"));
+
+    QString running = QString(card.booted) + QStringLiteral(" &middot; ");
+    if (card.committed.isNull()) {
+        running += warn(tr("which slot is committed can't be read"));
+    } else if (card.committed == card.booted) {
+        running += card.trial ? tr("started as a trial, kept") : tr("committed");
+    } else if (card.trial) {
+        running += warn(tr("on trial: not committed yet"));
+    } else {
+        running += warn(tr("%1 is committed: the deck fell back to this one").arg(card.committed));
+    }
+    out += row(tr("Running"), running);
+
+    QStringList other{QString(card.other)};
+    const QString version = card.otherVersion();
+    if (!version.isEmpty()) {
+        other.append(version.toHtmlEscaped());
+    }
+    if (!card.otherInstall) {
+        other.append(card.other == QChar('A') ? tr("came with the card") : tr("empty"));
+    } else if (!card.otherInstall->ok()) {
+        other.append(warn(card.otherInstall->status == QLatin1String("failed")
+                        ? tr("its install failed")
+                        : tr("its install didn't finish")));
+    } else {
+        if (!card.otherInstall->build.isEmpty() &&
+                card.otherInstall->build != card.otherInstall->version) {
+            other.append(card.otherInstall->build.toHtmlEscaped());
+        }
+        if (!card.otherInstall->timestamp.isEmpty()) {
+            // RAUC's 2026-10-09T09:43:09Z, by the deck's clock then.
+            QString installed = card.otherInstall->timestamp.left(16);
+            installed.replace(QChar('T'), QChar(' '));
+            other.append(tr("installed %1 UTC").arg(installed.toHtmlEscaped()));
+        }
+    }
+    if (card.otherFailed()) {
+        other.append(warn(tr("failed its trial: %1").arg(card.otherVerdict.why.toHtmlEscaped())));
+    } else if (card.otherVerdict.kind == DeckRelease::Verdict::Kind::OnTrial) {
+        other.append(tr("its last trial didn't finish"));
+    }
+    out += row(tr("Other"), other.join(QStringLiteral(" &middot; ")));
+    out += QStringLiteral("</table>");
+
+    // RESTART INTO, always there on a release card, so where it lives is not
+    // a surprise the day it is needed; dimmed, with the reason, when the
+    // other slot can't be started.
+    const QString label = tr("RESTART INTO %1").arg(card.other);
+    QString why;
+    switch (blocked) {
+    case Blocked::No:
+        why = tr(
+                "%1 starts as a trial: the deck keeps it if it comes up with a "
+                "network and ssh, and otherwise comes back to %2.")
+                      .arg(QString(card.other), QString(card.booted));
+        break;
+    case Blocked::DevCard: // no Slots at all
+    case Blocked::CommittedUnknown:
+        why = tr(
+                "Which slot is committed can't be read: RAUC's partition is "
+                "missing.");
+        break;
+    case Blocked::TrialPending:
+        why = tr("This start is a trial: wait for the health check to keep it.");
+        break;
+    case Blocked::FellBack:
+        why = tr(
+                "%1 is committed but %2 started: wait for the health check to "
+                "settle it.")
+                      .arg(QString(card.committed), QString(card.booted));
+        break;
+    case Blocked::OtherEmpty:
+        why = tr("Nothing has been installed in %1 yet.").arg(card.other);
+        break;
+    case Blocked::OtherUnfinished:
+        why = tr("%1 holds no whole release: install one there first.").arg(card.other);
+        break;
+    case Blocked::OtherFailed:
+        why = tr("%1 failed its last trial: install another release there first.")
+                      .arg(card.other);
+        break;
+    }
+    out += QStringLiteral("<p>%1</p><p class='hint'>%2</p>")
+                   .arg(textButton(label, blocked == Blocked::No ? kSwitchSlotHref : QString()),
+                           why.toHtmlEscaped());
+    return out;
+}
+
+void WDeckDiagnostics::onAnchorClicked(const QUrl& url) {
+    if (url.toString() != kSwitchSlotHref) {
+        return;
+    }
+    // Asked again rather than taken from the page as drawn, up to a second
+    // ago: the health check may have spoken since.
+    m_release = DeckRelease::read();
+    if (m_release.blocked() != DeckRelease::Blocked::No) {
+        render();
+        return;
+    }
+    // The skin's confirm (skin.xml, SlotSwitchOverlay), as the browser raises
+    // Shut down's: its RESTART pulses [TriMixxx],slot_switch_now, which the
+    // pi-midi-daemon mapping sends to trimixxx-launchd.
+    ControlObject::set(ConfigKey(QStringLiteral("[TriMixxx]"), QStringLiteral("slot_switch_confirm")),
+            1.0);
 }
 
 QString WDeckDiagnostics::adjustHtml() const {

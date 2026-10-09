@@ -8,6 +8,7 @@
 #include <memory>
 
 #include "widget/deck/deckpage.h"
+#include "widget/deck/deckrelease.h"
 
 class ControlProxy;
 
@@ -24,6 +25,11 @@ class DeckLevels;
 /// change only once the encoder has been pressed to start adjusting, so the
 /// page can still be opened mid-set without thinking about it -- turning the
 /// encoder on arrival scrolls, as it always has.
+///
+/// The one other thing it does is on a release card: Slots says what each of
+/// the card's A/B slots holds (deckrelease.h), and RESTART INTO, a tap only,
+/// raises the skin's confirm for starting the other slot as a trial. The
+/// restart itself is trimixxx-launchd's, as root: Mixxx only pulses a control.
 ///
 /// **The sparklines are text.** Qt's rich text has no canvas and no JavaScript,
 /// so a real chart would have to be painted to an image and inserted as a
@@ -56,6 +62,10 @@ class WDeckDiagnostics : public QTextBrowser, public DeckPage {
     bool handleSelect() override;
     bool handleBack() override;
 
+    /// How long the deck has been up, to the minute past the first: "40 s",
+    /// "12 min", "2 h 05 min", "3 d 4 h".
+    static QString uptimeText(qint64 seconds);
+
   protected:
     /// Adjusting stops when the page goes, BACK held to the deck included:
     /// coming back to an encoder still wired to a level is a trap.
@@ -63,6 +73,8 @@ class WDeckDiagnostics : public QTextBrowser, public DeckPage {
 
   private slots:
     void sample();
+    /// RESTART INTO: the skin's confirm, if the slot can still be switched to.
+    void onAnchorClicked(const QUrl& url);
 
   private:
     /// What a turn of the encoder moves. Nothing is the page's own default: it
@@ -79,6 +91,10 @@ class WDeckDiagnostics : public QTextBrowser, public DeckPage {
     QString html() const;
     /// The Adjust section: the two levels, and whether the output is clipping.
     QString adjustHtml() const;
+    /// Identity's rows for the release running, or for a dev card's none.
+    QString releaseRows() const;
+    /// The Slots section and its RESTART INTO, on a release card only.
+    QString slotsHtml() const;
     /// CPU busy fraction since the last sample, from /proc/stat.
     double sampleCpu();
     static QString readFile(const QString& path);
@@ -97,6 +113,8 @@ class WDeckDiagnostics : public QTextBrowser, public DeckPage {
     quint64 m_lastCpuTotal = 0;
     /// `vcgencmd get_throttled`, as of the last sample.
     QString m_throttled;
+    /// The release and the slots, as of the last sample.
+    DeckRelease m_release;
 
     std::unique_ptr<DeckLevels> m_pLevels;
     Adjusting m_adjusting = Adjusting::Nothing;
