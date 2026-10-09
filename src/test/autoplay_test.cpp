@@ -16,6 +16,7 @@ using mixxx::deck::autoplay::next;
 using mixxx::deck::autoplay::Pick;
 using mixxx::deck::autoplay::PlayedMemory;
 using mixxx::deck::autoplay::scopeKey;
+using mixxx::deck::autoplay::start;
 using mixxx::deck::autoplay::trackKey;
 
 /// A genre whose tracks are named after their tempo, which keeps the
@@ -292,6 +293,56 @@ TEST(AutoplayRoundTest, ANewRoundOpensNearTheLastTrack) {
     EXPECT_TRUE(pick.newRound);
     EXPECT_EQ(120, bpmAt(genre, pick.index));
     EXPECT_EQ((QSet<QString>{keyOf(120)}), memory.played(kScope));
+}
+
+TEST(AutoplayRoundTest, StartingAFinishedGenreOpensItsNewRoundThere) {
+    // 121 and 127 tie from 124, so the seeds take both ways round.
+    const QList<Candidate> genre = genreOf({121, 124, 127, 130});
+    for (quint32 seed = 0; seed < 16; ++seed) {
+        QRandomGenerator random(seed);
+        PlayedMemory memory;
+        // The genre's last round finished before this start.
+        for (const Candidate& candidate : genre) {
+            memory.insert(kScope, candidate.key);
+        }
+        EXPECT_TRUE(start(genre, &memory, kScope, keyOf(124)));
+        EXPECT_EQ((QSet<QString>{keyOf(124)}), memory.played(kScope));
+
+        // The track started from does not come back until the other three
+        // have played -- it is in this round, not left out of it.
+        QString current = keyOf(124);
+        double reference = 124;
+        for (int step = 0; step < 3; ++step) {
+            const Pick pick = next(genre, &memory, kScope, current, reference, &random);
+            ASSERT_GE(pick.index, 0);
+            ASSERT_FALSE(pick.newRound) << "seed " << seed << ", step " << step;
+            current = genre.at(pick.index).key;
+            reference = genre.at(pick.index).bpm;
+            ASSERT_NE(keyOf(124), current) << "seed " << seed << ", step " << step;
+        }
+        EXPECT_TRUE(next(genre, &memory, kScope, current, reference, &random).newRound);
+    }
+}
+
+TEST(AutoplayRoundTest, StartingAGenreMidRoundCarriesItsRoundOn) {
+    const QList<Candidate> genre = genreOf({120, 124, 126, 128});
+    PlayedMemory memory;
+    memory.insert(kScope, keyOf(120));
+    memory.insert(kScope, keyOf(126));
+
+    EXPECT_FALSE(start(genre, &memory, kScope, keyOf(124)));
+    EXPECT_EQ((QSet<QString>{keyOf(120), keyOf(124), keyOf(126)}), memory.played(kScope));
+    // A start on a track this round has already played forgets nothing.
+    EXPECT_FALSE(start(genre, &memory, kScope, keyOf(120)));
+    EXPECT_EQ(3, memory.played(kScope).size());
+
+    // The last unplayed track as the start finishes the round; the new one
+    // opens at the next pick, and not on it.
+    QRandomGenerator random(1);
+    EXPECT_FALSE(start(genre, &memory, kScope, keyOf(128)));
+    const Pick pick = next(genre, &memory, kScope, keyOf(128), 128, &random);
+    EXPECT_TRUE(pick.newRound);
+    EXPECT_EQ(126, bpmAt(genre, pick.index));
 }
 
 TEST(AutoplayRoundTest, AGenreOfOneFollowsItself) {

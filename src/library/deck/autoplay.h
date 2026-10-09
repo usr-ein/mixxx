@@ -81,6 +81,19 @@ struct Pick {
     int unplayed = 0;
 };
 
+/// The track the DJ starts autoplay on, recorded as played under *scope*.
+///
+/// A genre whose last round had finished before this start opens its new round
+/// here, with the starting track in it. Left to the first pick, the round would
+/// open without it, and the track the DJ started from would come back before
+/// the rest of the genre had played once.
+///
+/// True when it opened a new round.
+bool start(const QList<Candidate>& candidates,
+        PlayedMemory* pMemory,
+        const QString& scope,
+        const QString& startKey);
+
 /// One step of autoplay: the next track after *currentKey*, which is playing at
 /// *referenceBpm*, recorded as played under *scope*.
 ///

@@ -74,6 +74,25 @@ int nearestUnplayed(const QList<Candidate>& candidates,
     return -1;
 }
 
+bool start(const QList<Candidate>& candidates,
+        PlayedMemory* pMemory,
+        const QString& scope,
+        const QString& startKey) {
+    const QSet<QString> played = pMemory->played(scope);
+    bool everyOnePlayed = !candidates.isEmpty();
+    for (const Candidate& candidate : candidates) {
+        if (!played.contains(candidate.key)) {
+            everyOnePlayed = false;
+            break;
+        }
+    }
+    if (everyOnePlayed) {
+        pMemory->clear(scope);
+    }
+    pMemory->insert(scope, startKey);
+    return everyOnePlayed;
+}
+
 Pick next(const QList<Candidate>& candidates,
         PlayedMemory* pMemory,
         const QString& scope,

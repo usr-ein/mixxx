@@ -128,8 +128,8 @@ void DeckAutoplay::start(const MediumId& medium,
     m_sinceEnd.invalidate();
 
     // The starting track counts as played: the round is the genre, and the DJ
-    // has just played one of it.
-    m_memory.insert(m_scope, pStart->key);
+    // has just played one of it -- in a new round, if the last had finished.
+    const bool newRound = autoplay::start(candidates, &m_memory, m_scope, pStart->key);
     m_pendingKey = pStart->key;
     m_pendingTitle = pStart->title;
     m_pendingBpm = pStart->bpm;
@@ -140,6 +140,10 @@ void DeckAutoplay::start(const MediumId& medium,
     m_pPicked->forceSet(0.0);
     kLogger.info() << "on:" << genreTitle() << "on" << mediumName << "from" << pStart->title
                    << pStart->bpm << "BPM," << candidates.size() << "tracks";
+    if (newRound) {
+        kLogger.info() << "every" << genreTitle() << "track had played: a new round from"
+                       << pStart->title;
+    }
     emit stateChanged();
 
     if (!m_loadRow(rowId)) {
