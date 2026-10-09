@@ -106,9 +106,6 @@ class LibraryControl : public QObject {
     void slotNumSamplersChanged(double v);
     void slotNumPreviewDecksChanged(double v);
 
-    /// Whether the pane the sidebar would hand focus to actually has tracks.
-    bool currentViewHasTracks() const;
-    void slotSortReset(double v);
     void slotSortColumn(double v);
     void slotSortColumnToggle(double v);
 
@@ -164,7 +161,6 @@ class LibraryControl : public QObject {
     std::unique_ptr<ControlEncoder> m_pSortColumnToggle;
     std::unique_ptr<ControlPushButton> m_pSortOrder;
     std::unique_ptr<ControlPushButton> m_pSortFocusedColumn;
-    std::unique_ptr<ControlPushButton> m_pSortReset;
 
     // Controls to change track color
     std::unique_ptr<ControlPushButton> m_pTrackColorPrev;

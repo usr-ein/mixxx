@@ -289,17 +289,6 @@ LibraryControl::LibraryControl(Library* pLibrary)
     m_pSortColumnToggle = std::make_unique<ControlEncoder>(ConfigKey("[Library]", "sort_column_toggle"), false);
     m_pSortFocusedColumn = std::make_unique<ControlPushButton>(
             ConfigKey("[Library]", "sort_focused_column"));
-    // "Show these rows in the order the model produces them."
-    //
-    // There is no column id that means "unsorted", and no natural column to
-    // fall back on either: a playlist has position, the library has nothing.
-    // Only the model can put itself back, so this asks it to.
-    m_pSortReset = std::make_unique<ControlPushButton>(
-            ConfigKey("[Library]", "sort_reset"));
-    connect(m_pSortReset.get(),
-            &ControlPushButton::valueChanged,
-            this,
-            &LibraryControl::slotSortReset);
 #ifdef MIXXX_USE_QML
     if (!CmdlineArgs::Instance().isQml())
 #endif
@@ -1032,7 +1021,7 @@ void LibraryControl::slotGoToItem(double v) {
         // Note that Tracks and AutoDJ always return 'false':
         // expanding those root items via controllers is considered dispensable
         // because the subfeatures' actions can't be accessed by controllers anyway.
-        if (m_pSidebarWidget->isLeafNodeSelected() && currentViewHasTracks()) {
+        if (m_pSidebarWidget->isLeafNodeSelected()) {
             setLibraryFocus(FocusWidget::TracksTable);
         } else {
             // Otherwise toggle the sidebar item expanded state
@@ -1079,44 +1068,6 @@ void LibraryControl::slotGoToItem(double v) {
     default:
         setLibraryFocus(FocusWidget::TracksTable);
     }
-}
-
-bool LibraryControl::currentViewHasTracks() const {
-    // A leaf node does not always open a track list. A Rekordbox or ProLink
-    // device shows a summary of what is on the medium -- its name and counts --
-    // and handing focus to a table that is not there strands the encoder on a
-    // pane with nothing to move through, with no obvious way back to the tree.
-    if (!m_pLibraryWidget) {
-        return false;
-    }
-    WTrackTableView* pTrackTableView = m_pLibraryWidget->getCurrentTrackTableView();
-    if (!pTrackTableView) {
-        return false;
-    }
-    const QAbstractItemModel* pModel = pTrackTableView->model();
-    return pModel && pModel->rowCount() > 0;
-}
-
-void LibraryControl::slotSortReset(double v) {
-    if (v <= 0.0 || !m_pLibraryWidget) {
-        return;
-    }
-    WTrackTableView* pTrackTableView = m_pLibraryWidget->getCurrentTrackTableView();
-    if (!pTrackTableView) {
-        return;
-    }
-    // getTrackModel() is private to the view; the model itself is public and is
-    // the same object.
-    auto* pTrackModel = dynamic_cast<TrackModel*>(pTrackTableView->model());
-    if (!pTrackModel) {
-        return;
-    }
-    pTrackModel->clearSorting();
-    // The two sort controls are global while the sort itself is per model, so
-    // leaving them holding the column we just dropped would have the next press
-    // of a sort button read its own stale state back.
-    m_pSortColumn->set(static_cast<int>(TrackModel::SortColumnId::Invalid));
-    m_pSortOrder->set(0.0);
 }
 
 void LibraryControl::slotSortColumn(double v) {
