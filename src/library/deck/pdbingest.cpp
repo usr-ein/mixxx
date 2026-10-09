@@ -302,11 +302,11 @@ QByteArray artworkDigest(const QString& artworkPath) {
 }
 
 IngestResult writeMedium(QSqlDatabase& database,
-        const mixxx::prolink::PdbContents& contents,
+        const mixxx::rekordbox::PdbContents& contents,
         const MediumId& medium,
         const QString& localRoot) {
-    using mixxx::prolink::PdbPlaylist;
-    using mixxx::prolink::PdbTrack;
+    using mixxx::rekordbox::PdbPlaylist;
+    using mixxx::rekordbox::PdbTrack;
 
     IngestResult result;
 
@@ -554,7 +554,7 @@ IngestResult writeMedium(QSqlDatabase& database,
     }
     else {
         int historyRows = 0;
-        for (const mixxx::prolink::PdbHistoryPlaylist& session : contents.history) {
+        for (const mixxx::rekordbox::PdbHistoryPlaylist& session : contents.history) {
             int position = 1;
             for (const quint32 rbId : session.trackIds) {
                 const auto rowId = rowIds.constFind(rbId);

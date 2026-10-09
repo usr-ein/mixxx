@@ -62,7 +62,7 @@ constexpr double kBandContrast = 2.2;
 /// blue, so bass is low, mid is mid, and *treble is high*. Reading the bands in
 /// declaration order into the colour channels swaps green and blue over the
 /// whole waveform, which is a mistake this has already been made once.
-using ColourPoint = mixxx::prolink::AnlzColourColumn;
+using ColourPoint = mixxx::rekordbox::AnlzColourColumn;
 
 /// One output sample's worth of each band, already scaled to the 0-255 Mixxx
 /// stores.
@@ -233,7 +233,7 @@ namespace mixxx {
 namespace rekordbox {
 
 bool importWaveforms(TrackPointer track,
-        const prolink::AnlzContents& ext,
+        const rekordbox::AnlzContents& ext,
         AnalysisDao* pAnalysisDao,
         mixxx::audio::SampleRate sampleRateOverride) {
     if (!track) {

@@ -382,7 +382,7 @@ FolderLibrary buildFolderLibrary(const FolderListing& listing,
     const auto addTracks = [&](const Directory& directory, auto& self) -> void {
         for (const int index : directory.files) {
             const FolderFile& file = listing.files.at(index);
-            mixxx::prolink::PdbTrack track;
+            mixxx::rekordbox::PdbTrack track;
             track.id = static_cast<quint32>(tracks.size() + 1);
             QString path = file.relativePath;
             if (!path.startsWith(QLatin1Char('/'))) {
@@ -449,7 +449,7 @@ FolderLibrary buildFolderLibrary(const FolderListing& listing,
                                  bool isFolder,
                                  quint32 sortOrder,
                                  const QList<quint32>& trackIds) {
-        mixxx::prolink::PdbPlaylist node;
+        mixxx::rekordbox::PdbPlaylist node;
         node.id = nextNodeId++;
         node.parentId = parentId;
         node.sortOrder = sortOrder;

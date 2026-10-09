@@ -18,7 +18,7 @@ QHash<quint32, QString> toHash(const ::rust::Vec<::prolink::PdbNamed>& table) {
 } // namespace
 
 namespace mixxx {
-namespace prolink {
+namespace rekordbox {
 
 int PdbContents::folderCount() const {
     int count = 0;
@@ -120,5 +120,5 @@ PdbContents parsePdb(const QByteArray& data) {
     return out;
 }
 
-} // namespace prolink
+} // namespace rekordbox
 } // namespace mixxx

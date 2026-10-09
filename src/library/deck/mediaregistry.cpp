@@ -543,7 +543,7 @@ MediaRegistry::ReadResult MediaRegistry::readMedium(
         }
     }
 
-    mixxx::prolink::PdbContents contents = mixxx::prolink::parsePdb(raw);
+    mixxx::rekordbox::PdbContents contents = mixxx::rekordbox::parsePdb(raw);
     if (!contents.ok) {
         if (!local) {
             result.error = contents.error;
@@ -589,7 +589,7 @@ MediaRegistry::ReadResult MediaRegistry::readFolderMedium(QSqlDatabase* pDatabas
     result.folderCount = library.directoryCount;
     result.ok = true;
     result.tagTargets.reserve(library.contents.tracks.size());
-    for (const mixxx::prolink::PdbTrack& track : library.contents.tracks) {
+    for (const mixxx::rekordbox::PdbTrack& track : library.contents.tracks) {
         FolderTagTarget target;
         target.rbId = track.id;
         target.path = pending.mountPoint + track.filePath;

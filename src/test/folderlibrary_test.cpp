@@ -11,8 +11,8 @@ using mixxx::deck::buildFolderLibrary;
 using mixxx::deck::FolderFile;
 using mixxx::deck::FolderLibrary;
 using mixxx::deck::FolderListing;
-using mixxx::prolink::PdbPlaylist;
-using mixxx::prolink::PdbTrack;
+using mixxx::rekordbox::PdbPlaylist;
+using mixxx::rekordbox::PdbTrack;
 
 FolderListing listingOf(const QStringList& paths) {
     FolderListing listing;

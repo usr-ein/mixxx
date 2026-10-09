@@ -44,7 +44,7 @@ struct FolderListing {
 
 /// The stick as a library.
 struct FolderLibrary {
-    mixxx::prolink::PdbContents contents;
+    mixxx::rekordbox::PdbContents contents;
     /// Directories that became a node, folders and playlists alike. What the
     /// source row calls "folders".
     int directoryCount = 0;

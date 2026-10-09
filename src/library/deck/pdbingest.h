@@ -68,7 +68,7 @@ struct IngestResult {
 /// slash, so mirroring the player's tree locally means the two never have to be
 /// reconciled afterwards.
 IngestResult writeMedium(QSqlDatabase& database,
-        const mixxx::prolink::PdbContents& contents,
+        const mixxx::rekordbox::PdbContents& contents,
         const MediumId& medium,
         const QString& localRoot);
 

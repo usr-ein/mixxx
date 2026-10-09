@@ -7,7 +7,7 @@
 #include <QString>
 
 namespace mixxx {
-namespace prolink {
+namespace rekordbox {
 
 /// One track, as read out of a player's `export.pdb`.
 struct PdbTrack {
@@ -127,5 +127,5 @@ struct PdbContents {
 /// tested against a real pdb with no hardware and no Library.
 PdbContents parsePdb(const QByteArray& data);
 
-} // namespace prolink
+} // namespace rekordbox
 } // namespace mixxx

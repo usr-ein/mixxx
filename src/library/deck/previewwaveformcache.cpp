@@ -121,12 +121,12 @@ void PreviewWaveformCache::request(
                 // the `.EXT`'s `PWV4` is the three frequency bands. See
                 // PreviewWaveform::fromAnlz for the measurements behind that
                 // split.
-                const prolink::AnlzPreview mono = prolink::readAnlzPreview(analyzePath);
-                QVector<prolink::AnlzPreviewColumn> colour;
+                const rekordbox::AnlzPreview mono = rekordbox::readAnlzPreview(analyzePath);
+                QVector<rekordbox::AnlzPreviewColumn> colour;
                 if (analyzePath.endsWith(QStringLiteral(".DAT"))) {
                     const QString ext = analyzePath.left(analyzePath.size() - 3) +
                             QStringLiteral("EXT");
-                    colour = prolink::readAnlzPreview(ext).colour;
+                    colour = rekordbox::readAnlzPreview(ext).colour;
                 }
                 const PreviewWaveform preview =
                         PreviewWaveform::fromAnlz(mono.mono, colour);

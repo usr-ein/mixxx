@@ -8,7 +8,7 @@
 namespace {
 
 using mixxx::deck::PreviewWaveform;
-using mixxx::prolink::AnlzPreviewColumn;
+using mixxx::rekordbox::AnlzPreviewColumn;
 
 /// One packed `PWAV` byte: `0b101_00110` is shade 5, height 6. Spelled out as a
 /// literal because this is the one fact the monochrome path rests on, and it is

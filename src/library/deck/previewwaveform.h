@@ -66,7 +66,7 @@ class PreviewWaveform final {
     /// a CDJ draws that tag. No `PWAV` uses `PWV4`'s envelope after all, which
     /// is compressed but is not nothing.
     static PreviewWaveform fromAnlz(const QByteArray& pwav,
-            const QVector<prolink::AnlzPreviewColumn>& colour);
+            const QVector<rekordbox::AnlzPreviewColumn>& colour);
 
     /// From a `GET_WAVEFORM_PREVIEW` reply, as a player puts it on the wire.
     ///

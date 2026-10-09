@@ -36,7 +36,7 @@ namespace rekordbox {
 /// read the same `.EXT` for its cues and parsing it twice was the only thing
 /// the path bought.
 bool importWaveforms(TrackPointer track,
-        const prolink::AnlzContents& ext,
+        const rekordbox::AnlzContents& ext,
         AnalysisDao* pAnalysisDao,
         mixxx::audio::SampleRate sampleRate = mixxx::audio::SampleRate());
 

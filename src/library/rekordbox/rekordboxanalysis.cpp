@@ -125,7 +125,7 @@ mixxx::audio::FramePos framePosOf(quint32 timeMs,
 void applyBeatGrid(TrackPointer track,
         mixxx::audio::SampleRate sampleRate,
         int timingOffset,
-        const mixxx::prolink::AnlzContents& contents) {
+        const mixxx::rekordbox::AnlzContents& contents) {
     if (contents.beats.isEmpty()) {
         return;
     }
@@ -140,7 +140,7 @@ void applyBeatGrid(TrackPointer track,
     // for why it matters more than the positions.
     QSet<quint16> storedTempos;
 
-    for (const mixxx::prolink::AnlzBeat& beat : contents.beats) {
+    for (const mixxx::rekordbox::AnlzBeat& beat : contents.beats) {
         const auto position = framePosOf(beat.timeMs, timingOffset, sampleRateKhz);
         beats << position;
         if (beat.tempo > 0) {
@@ -217,12 +217,12 @@ void applyBeatGrid(TrackPointer track,
 void applyCues(TrackPointer track,
         mixxx::audio::SampleRate sampleRate,
         int timingOffset,
-        const mixxx::prolink::AnlzContents& contents) {
+        const mixxx::rekordbox::AnlzContents& contents) {
     const double sampleRateKhz = sampleRate / 1000.0;
     QList<memory_cue_loop_t> memoryCuesAndLoops;
     int lastHotCueIndex = 0;
 
-    for (const mixxx::prolink::AnlzCue& cue : contents.cues) {
+    for (const mixxx::rekordbox::AnlzCue& cue : contents.cues) {
         const auto position = framePosOf(cue.timeMs, timingOffset, sampleRateKhz);
 
         if (cue.hotList) {
@@ -382,8 +382,8 @@ void applyAnalysis(TrackPointer track,
     // Each file read once, here, rather than once per thing wanted out of it.
     // The .EXT used to be parsed twice -- once for its cues and again for its
     // waveform -- because both were reached by a path.
-    const prolink::AnlzContents dat = prolink::readAnlz(anlzPath);
-    const prolink::AnlzContents ext = prolink::readAnlz(anlzPathExt);
+    const rekordbox::AnlzContents dat = rekordbox::readAnlz(anlzPath);
+    const rekordbox::AnlzContents ext = rekordbox::readAnlz(anlzPathExt);
     if (!dat.ok && !ext.ok) {
         // Nothing to apply. Not an error: plenty of tracks have no analysis at
         // all, and one that has none still plays.

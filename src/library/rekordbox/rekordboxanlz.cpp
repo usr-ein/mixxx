@@ -9,7 +9,7 @@ QString toQString(const ::rust::String& text) {
 } // namespace
 
 namespace mixxx {
-namespace prolink {
+namespace rekordbox {
 
 AnlzPreview readAnlzPreview(const QString& path) {
     AnlzPreview out;
@@ -92,5 +92,5 @@ AnlzContents readAnlz(const QString& path) {
     return out;
 }
 
-} // namespace prolink
+} // namespace rekordbox
 } // namespace mixxx

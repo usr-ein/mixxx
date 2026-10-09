@@ -18,7 +18,7 @@
 /// track's waveform, so this is that reader reached from one more place rather
 /// than a new one.
 namespace mixxx {
-namespace prolink {
+namespace rekordbox {
 
 /// One beat of a `PQTZ` grid.
 ///
@@ -142,5 +142,5 @@ AnlzPreview readAnlzPreview(const QString& path);
 /// free function: it opens no session and touches no runtime.
 AnlzContents readAnlz(const QString& path);
 
-} // namespace prolink
+} // namespace rekordbox
 } // namespace mixxx

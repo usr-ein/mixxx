@@ -41,7 +41,7 @@ namespace mixxx {
 namespace deck {
 
 PreviewWaveform PreviewWaveform::fromAnlz(
-        const QByteArray& pwav, const QVector<prolink::AnlzPreviewColumn>& colour) {
+        const QByteArray& pwav, const QVector<rekordbox::AnlzPreviewColumn>& colour) {
     const bool haveMono = pwav.size() == kColumns;
     const bool haveColour = colour.size() >= kColourColumns;
 
@@ -64,7 +64,7 @@ PreviewWaveform PreviewWaveform::fromAnlz(
             int mid = 0;
             int treble = 0;
             for (int step = 0; step < kColourPerColumn; ++step) {
-                const prolink::AnlzPreviewColumn& entry =
+                const rekordbox::AnlzPreviewColumn& entry =
                         colour.at(column * kColourPerColumn + step);
                 bass += entry.bass;
                 mid += entry.mid;
