@@ -171,18 +171,6 @@ mixxx::prolink::MediaSlot toMixxxSlot(::prolink::Slot slot) {
     }
 }
 
-mixxx::prolink::DeviceKind toMixxxKind(::prolink::DeviceKind kind) {
-    switch (kind) {
-    case ::prolink::DeviceKind::Mixer:
-        return mixxx::prolink::DeviceKind::Mixer;
-    case ::prolink::DeviceKind::Rekordbox:
-        return mixxx::prolink::DeviceKind::RekordboxOrCdj3000;
-    case ::prolink::DeviceKind::Cdj:
-    default:
-        return mixxx::prolink::DeviceKind::Cdj;
-    }
-}
-
 QString toQString(const ::rust::String& text) {
     return QString::fromUtf8(text.data(), static_cast<qsizetype>(text.size()));
 }
@@ -227,9 +215,7 @@ mixxx::prolink::ProLinkDevice toMixxxDevice(const ::prolink::Device& device) {
     out.mac = toQString(device.mac).toLatin1();
     out.address = QHostAddress(toQString(device.address));
     out.name = toQString(device.name);
-    out.nameRaw = out.name.toUtf8();
     out.deviceNumber = device.number;
-    out.kind = toMixxxKind(device.kind);
     out.online = device.online;
     return out;
 }
@@ -1435,7 +1421,6 @@ void ProLinkNetworkService::syncServeStatus() {
     server::ServeStatus status;
     status.active = fresh.active;
     status.deviceNumber = static_cast<int>(fresh.device_number);
-    status.deviceName = tr("Mixxx (this machine)");
     status.address = QHostAddress(toQString(fresh.address));
     status.interfaceName = toQString(fresh.interface);
     status.portmapPort = fresh.portmap_port;
@@ -1459,16 +1444,6 @@ void ProLinkNetworkService::syncServeStatus() {
         consumer.slot = toMixxxSlot(reader.slot);
         consumer.trackId = reader.track_id;
         consumer.playing = reader.playing;
-        // Named from the device table, which the library fills from
-        // keep-alives; a consumer we have not seen one from still counts,
-        // because its status packet is what put it here.
-        for (const ProLinkDevice& device : m_devices) {
-            if (device.deviceNumber == consumer.deviceNumber) {
-                consumer.deviceName = device.name;
-                consumer.address = device.address;
-                break;
-            }
-        }
         status.consumers.append(consumer);
     }
 

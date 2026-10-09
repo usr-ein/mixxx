@@ -44,13 +44,9 @@ struct ServedSlot {
 /// slots. That is the question worth answering on this page.
 struct ServeConsumer {
     int deviceNumber = 0;
-    QString deviceName;
-    QHostAddress address;
     /// Which of our slots the track came from.
     MediaSlot slot = MediaSlot::Empty;
     quint32 trackId = 0;
-    QString title;
-    QString artist;
     /// Whether the deck is actually playing it, as opposed to holding it cued.
     bool playing = false;
 };
@@ -61,9 +57,6 @@ struct ServeStatus {
     /// without one, since a deck validates it in every dbserver request.
     bool active = false;
     int deviceNumber = 0;
-    /// What we announce ourselves as — a real model name, because a deck that
-    /// does not recognise the string may not offer us as a source at all.
-    QString deviceName;
     QHostAddress address;
     QString interfaceName;
 
@@ -77,18 +70,6 @@ struct ServeStatus {
 
     QList<ServedSlot> media;
     QList<ServeConsumer> consumers;
-
-    /// Evidence that a deck is really talking to us, in the order the protocol
-    /// makes it happen. A zero further down the chain than a non-zero above it
-    /// is where to look when something is wrong.
-    int mediaQueriesAnswered = 0;
-    int mountCalls = 0;
-    int readCalls = 0;
-    int dbserverClients = 0;
-
-    bool servesAnything() const {
-        return !media.isEmpty();
-    }
 };
 
 } // namespace server
