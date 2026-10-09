@@ -69,6 +69,3 @@ res/qrc_mixxx.cc
 
 # Binary built for the deck (the TriMixxx repo's pi-qemu/deploy/004_mixxx.sh)
 /dist/
-
-# A real rekordbox library; see src/test/prolink_pdb_test.cpp.
-src/test/prolink/export.pdb
