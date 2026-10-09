@@ -1020,6 +1020,7 @@ add_library(mixxx-lib STATIC EXCLUDE_FROM_ALL
   src/library/deck/previewwaveformcache.cpp
   src/library/deck/streamingfile.cpp
   src/library/deck/ramstore.cpp
+  src/library/deck/remotetrackstreamer.cpp
   src/library/deck/trackcache.cpp
   src/library/deck/volumelabel.cpp
   src/library/rhythmbox/rhythmboxfeature.cpp

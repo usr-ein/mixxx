@@ -23,6 +23,7 @@
 #include "library/deck/decktrackmodel.h"
 #include "library/deck/pdbingest.h"
 #include "library/deck/ramstore.h"
+#include "library/deck/remotetrackstreamer.h"
 #include "library/deck/sessionpurge.h"
 #include "library/queryutil.h"
 #include "library/library.h"
@@ -396,6 +397,8 @@ WDeckBrowser::WDeckBrowser(QWidget* pParent, Library* pLibrary, UserSettingsPoin
     m_pNetwork = std::make_unique<mixxx::prolink::ProLinkNetworkService>();
     m_pRegistry = std::make_unique<MediaRegistry>(
             m_pLibrary->dbConnectionPool(), m_pNetwork.get(), this);
+    m_pStreamer = std::make_unique<RemoteTrackStreamer>(
+            m_pRegistry.get(), m_pNetwork.get(), m_pCache.get(), this);
     m_pRegistry->start();
     // Autoplay loads through the browser's own load path, so a track it picks
     // is copied off its medium, announced and marked in the list exactly like
@@ -1708,7 +1711,7 @@ bool WDeckBrowser::loadRow(const LoadableRow& row, bool play, const QModelIndex&
             // while it copies. What comes back is a file of the right size
             // whose unwritten parts block a reader instead of handing it the
             // zeros a sparse file would.
-            local = m_pRegistry->startStreaming(medium, source, analyzePath);
+            local = m_pStreamer->startStreaming(medium, source, analyzePath);
         }
         if (!local.isEmpty()) {
             playPath = local;
@@ -1948,7 +1951,7 @@ void WDeckBrowser::releasePinned() {
     // coming off a stick.
     m_pCache->release(m_pinnedPath);
     if (m_pRegistry) {
-        m_pRegistry->stopStreaming(m_pinnedPath);
+        m_pStreamer->stopStreaming(m_pinnedPath);
     }
     m_pinnedPath.clear();
 }

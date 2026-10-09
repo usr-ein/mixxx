@@ -33,6 +33,7 @@ namespace deck {
 
 class DeckAutoplay;
 class DeckListView;
+class RemoteTrackStreamer;
 class DeckMenuModel;
 class DeckTrackModel;
 class MenuRowDelegate;
@@ -274,6 +275,8 @@ class WDeckBrowser : public QWidget, public WBaseWidget {
     /// registry listens to it.
     std::unique_ptr<mixxx::prolink::ProLinkNetworkService> m_pNetwork;
     std::unique_ptr<MediaRegistry> m_pRegistry;
+    /// After the registry and the session, so it goes first: it uses both.
+    std::unique_ptr<RemoteTrackStreamer> m_pStreamer;
     /// After the registry, so it goes first: it listens to it.
     std::unique_ptr<DeckAutoplay> m_pAutoplay;
 
