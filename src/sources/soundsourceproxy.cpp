@@ -22,7 +22,7 @@
 #endif
 #ifdef __FFMPEG__
 #include "sources/soundsourceffmpeg.h"
-#include "sources/soundsourceprolink.h"
+#include "sources/soundsourcestreaming.h"
 #endif
 #ifdef __MODPLUG__
 #include "sources/soundsourcemodplug.h"

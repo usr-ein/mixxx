@@ -3672,7 +3672,7 @@ if(FFMPEG)
   # Streams a track that is still arriving over Pro DJ Link. It subclasses the
   # FFmpeg source, so it only exists where FFmpeg does -- which is also the only
   # place a custom AVIOContext is available to feed it.
-  target_sources(mixxx-lib PRIVATE src/sources/soundsourceprolink.cpp)
+  target_sources(mixxx-lib PRIVATE src/sources/soundsourcestreaming.cpp)
   target_compile_definitions(mixxx-lib PUBLIC
     __FFMPEG__
     # Needed to build new FFmpeg

@@ -1,4 +1,4 @@
-#include "sources/soundsourceprolink.h"
+#include "sources/soundsourcestreaming.h"
 
 #include <QFileInfo>
 
