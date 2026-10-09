@@ -11,6 +11,8 @@ namespace {
 
 using mixxx::deck::MediumId;
 using mixxx::deck::autoplay::Candidate;
+using mixxx::deck::autoplay::holdMs;
+using mixxx::deck::autoplay::kLoadSpacingMs;
 using mixxx::deck::autoplay::nearestUnplayed;
 using mixxx::deck::autoplay::next;
 using mixxx::deck::autoplay::Pick;
@@ -361,6 +363,30 @@ TEST(AutoplayRoundTest, AnEmptyGenreHasNothingNext) {
     const Pick pick = next({}, &memory, kScope, keyOf(124), 124, &random);
     EXPECT_EQ(-1, pick.index);
     EXPECT_FALSE(pick.newRound);
+}
+
+// ---------------------------------------------------------------------------
+// The hold: a pick that comes inside Mixxx's double tap waits it out, and
+// loads, instead of cloning a deck that is not there.
+// ---------------------------------------------------------------------------
+
+TEST(AutoplayHoldTest, OutlastsMixxxsDoubleTap) {
+    // PlayerManager::slotLoadTrackToPlayer() clones on a second load to the
+    // deck less than 0.5 s after the last.
+    EXPECT_GT(kLoadSpacingMs, 500);
+}
+
+TEST(AutoplayHoldTest, APickTooSoonWaitsOutTheRest) {
+    // A one-shot of 0.1 s, on the deck: its end came 170 ms after its load.
+    EXPECT_EQ(kLoadSpacingMs - 170, holdMs(170));
+    EXPECT_EQ(kLoadSpacingMs, holdMs(0));
+    EXPECT_EQ(1, holdMs(kLoadSpacingMs - 1));
+}
+
+TEST(AutoplayHoldTest, APickAfterItLoadsAtOnce) {
+    EXPECT_EQ(0, holdMs(kLoadSpacingMs));
+    // Any ordinary track: its end comes minutes after its load.
+    EXPECT_EQ(0, holdMs(180000));
 }
 
 } // namespace

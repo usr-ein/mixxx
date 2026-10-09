@@ -126,6 +126,10 @@ Pick next(const QList<Candidate>& candidates,
     return pick;
 }
 
+int holdMs(qint64 sinceLoadMs) {
+    return sinceLoadMs < kLoadSpacingMs ? static_cast<int>(kLoadSpacingMs - sinceLoadMs) : 0;
+}
+
 QString scopeKey(const MediumId& medium, const QString& genre) {
     const QString volumeId = medium.volumeId();
     const QString drive = volumeId.isEmpty() ? medium.key() : QStringLiteral("uuid:") + volumeId;

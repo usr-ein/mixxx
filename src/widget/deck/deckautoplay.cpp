@@ -63,7 +63,6 @@ DeckAutoplay::DeckAutoplay(MediaRegistry* pRegistry,
     m_pPicked->setReadOnly();
 
     m_retry.setSingleShot(true);
-    m_retry.setInterval(kRetryMs);
     connect(&m_retry, &QTimer::timeout, this, &DeckAutoplay::advance);
 
     if (m_pRegistry) {
@@ -146,7 +145,7 @@ void DeckAutoplay::start(const MediumId& medium,
     }
     emit stateChanged();
 
-    if (!m_loadRow(rowId)) {
+    if (!load(rowId)) {
         // Nothing reached the deck, so nothing will say why: this has to.
         stop(tr("Autoplay off — %1 would not load").arg(pStart->title));
     }
@@ -223,6 +222,20 @@ void DeckAutoplay::advance() {
     if (!isOn()) {
         return;
     }
+    // Too soon after the last load -- a track shorter than half a second, or a
+    // seek to the end just after a load -- Mixxx would take this load for a
+    // double tap, and nothing would load. The pick waits out the rest, and the
+    // timer comes back here to look again.
+    if (m_sinceLoad.isValid()) {
+        const qint64 sinceLoad = m_sinceLoad.elapsed();
+        const int hold = autoplay::holdMs(sinceLoad);
+        if (hold > 0) {
+            kLogger.info() << "next pick in" << hold << "ms: the last load was" << sinceLoad
+                           << "ms ago";
+            m_retry.start(hold);
+            return;
+        }
+    }
     const int index = m_pRegistry ? m_pRegistry->indexOf(m_medium) : -1;
     if (index < 0 || m_pRegistry->media().at(index).state != MediumInfo::State::Ready) {
         stop(tr("Autoplay off — %1 is gone").arg(m_mediumName));
@@ -269,9 +282,20 @@ void DeckAutoplay::advance() {
     m_pendingIsStart = false;
     m_state = State::Loading;
     m_pPicked->forceSet(1.0);
-    if (!m_loadRow(next.rowId)) {
+    if (!load(next.rowId)) {
         onLoadFailed();
     }
+}
+
+bool DeckAutoplay::load(int rowId) {
+    if (!m_loadRow(rowId)) {
+        return false;
+    }
+    // Once the call has returned, never before it: the load reaches
+    // PlayerManager inside it, which starts its half second then. Timed from
+    // here, a hold that has run out has run out for Mixxx too.
+    m_sinceLoad.start();
+    return true;
 }
 
 void DeckAutoplay::onLoadFailed() {
@@ -290,7 +314,7 @@ void DeckAutoplay::onLoadFailed() {
     // one that played last.
     kLogger.warning() << "could not load" << m_pendingTitle << "(" << m_pendingKey
                       << ") -- trying the next";
-    m_retry.start();
+    m_retry.start(kRetryMs);
 }
 
 } // namespace deck

@@ -107,6 +107,20 @@ Pick next(const QList<Candidate>& candidates,
         double referenceBpm,
         QRandomGenerator* pRandom);
 
+/// How far apart autoplay's loads are kept, at the least.
+///
+/// Mixxx takes a second load to a deck less than half a second after the last
+/// for the DJ's double tap, and clones another deck instead of loading the
+/// track (PlayerManager, `[Controls],CloneDeckOnLoadDoubleTap`). The deck has
+/// no other deck to clone: nothing loads, nothing says so, and the deck stays
+/// silent. A track shorter than that, or two quick seeks to the end, would
+/// bring a pick that soon.
+constexpr int kLoadSpacingMs = 600;
+
+/// How long a pick made *sinceLoadMs* after autoplay's last load waits before
+/// it loads: the rest of kLoadSpacingMs, or 0 once that has passed.
+int holdMs(qint64 sinceLoadMs);
+
 /// What one drive's genre is remembered under.
 ///
 /// The drive is its filesystem UUID where it has one, so a stick pulled and put
