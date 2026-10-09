@@ -14,7 +14,7 @@
 #include "library/deck/mediumid.h"
 #include "library/deck/pdbingest.h"
 #include "network/prolink/prolinkdefs.h"
-#include "network/prolink/prolinkdevice.h"
+#include "network/prolink/prolinktypes.h"
 #include "network/prolink/prolinkmediaquery.h"
 #include "network/prolink/server/prolinkservestatus.h"
 #include "util/db/dbconnectionpool.h"

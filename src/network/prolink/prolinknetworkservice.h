@@ -9,7 +9,7 @@
 #include <memory>
 #include <vector>
 
-#include "network/prolink/prolinkdevice.h"
+#include "network/prolink/prolinktypes.h"
 #include "network/prolink/prolinkmediaquery.h"
 #include "network/prolink/server/prolinkservestatus.h"
 #include "network/prolink/syncsource.h"
