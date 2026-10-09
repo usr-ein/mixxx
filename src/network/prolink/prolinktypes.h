@@ -2,12 +2,31 @@
 
 #include <QByteArray>
 #include <QHostAddress>
+#include <QMetaType>
 #include <QString>
 
-#include "network/prolink/prolinkdefs.h"
-
+/// The values that cross from ProLinkNetworkService to the rest of Mixxx: a
+/// slot, a device, what a device has in a slot.
+///
+/// The protocol itself is `lib/prolink`'s, in Rust. The prolinks-compat repo's
+/// `docs/PROTOCOL.md` is its specification and `docs/FINDINGS.md` records how
+/// each fact was established; finding numbers (F*n*) refer to that second
+/// document.
+///
+/// No includes from `src/library/`: everything under `src/network/prolink/`
+/// must stay usable, and unit-testable, without a Library.
 namespace mixxx {
 namespace prolink {
+
+/// The slot byte of a dbserver request descriptor, and the discriminator when
+/// one connection carries two media (F37).
+enum class MediaSlot : quint8 {
+    Empty = 0,
+    Cd = 1,
+    Sd = 2,
+    Usb = 3,
+    Rekordbox = 4,
+};
 
 /// One player, mixer or other device seen on the Pro DJ Link network.
 ///
@@ -40,9 +59,33 @@ class ProLinkDevice {
     bool online = true;
 };
 
+/// What a player says is in one of its slots.
+struct MediaInfo {
+    /// The volume label the DJ formatted the medium with — `Sam CDJ1000mk3`,
+    /// and what the deck itself shows. UTF-16 **big**-endian on the wire, like
+    /// the dbserver strings and unlike the NFS layer's UTF-16LE.
+    ///
+    /// **Often empty, and legitimately so**: an unlabelled stick reports no
+    /// name at all while still carrying a full library. Absence of a name is
+    /// not absence of media — that is what `isOccupied()` is for.
+    QString name;
+    quint32 trackCount = 0;
+    quint32 playlistCount = 0;
+
+    /// A slot with something in it. A deck answers for an empty slot too, with
+    /// everything zeroed, so this is the distinction that matters.
+    ///
+    /// Occupancy is published in status packets and nowhere else, and those are
+    /// unicast only to peers that have announced themselves (F20/F21).
+    bool isOccupied() const {
+        return trackCount > 0 || !name.isEmpty();
+    }
+};
+
 } // namespace prolink
 } // namespace mixxx
 
-// Crosses the network/GUI thread boundary in queued signals, which requires the
-// type to be a registered metatype.
+// Both cross the network/GUI thread boundary in queued signals, which requires
+// a registered metatype.
 Q_DECLARE_METATYPE(mixxx::prolink::ProLinkDevice)
+Q_DECLARE_METATYPE(mixxx::prolink::MediaInfo)

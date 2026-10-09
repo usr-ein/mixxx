@@ -5,7 +5,7 @@
 #include <QMetaType>
 #include <QString>
 
-#include "network/prolink/prolinkdefs.h"
+#include "network/prolink/prolinktypes.h"
 
 namespace mixxx {
 namespace prolink {
