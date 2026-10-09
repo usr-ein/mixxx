@@ -8,6 +8,7 @@
 
 #include "control/controlobject.h"
 #include "control/controlproxy.h"
+#include "library/deck/deckloader.h"
 #include "moc_deckautoplay.cpp"
 #include "util/logger.h"
 #include "widget/deck/wdeckbrowser.h"
@@ -43,12 +44,12 @@ void DeckAutoplay::whenReady(QObject* pContext, std::function<void(DeckAutoplay*
 
 DeckAutoplay::DeckAutoplay(MediaRegistry* pRegistry,
         std::function<QSqlDatabase()> database,
-        LoadRow loadRow,
+        DeckLoader* pLoader,
         QObject* pParent)
         : QObject(pParent),
           m_pRegistry(pRegistry),
           m_database(std::move(database)),
-          m_loadRow(std::move(loadRow)) {
+          m_pLoader(pLoader) {
     const QString group = WDeckBrowser::deckGroup();
     // The end of a track is the play position reaching 1. Not `play` going to
     // 0, which a pause does too; and not `end_of_track`, which is a warning
@@ -145,7 +146,7 @@ void DeckAutoplay::start(const MediumId& medium,
     }
     emit stateChanged();
 
-    if (!m_loadRow(rowId)) {
+    if (!m_pLoader->loadLibraryRow(rowId)) {
         // Nothing reached the deck, so nothing will say why: this has to.
         stop(tr("Autoplay off — %1 would not load").arg(pStart->title));
     }
@@ -268,7 +269,7 @@ void DeckAutoplay::advance() {
     m_pendingIsStart = false;
     m_state = State::Loading;
     m_pPicked->forceSet(1.0);
-    if (!m_loadRow(next.rowId)) {
+    if (!m_pLoader->loadLibraryRow(next.rowId)) {
         onLoadFailed();
     }
 }

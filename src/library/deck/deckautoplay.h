@@ -18,6 +18,8 @@ class ControlProxy;
 namespace mixxx {
 namespace deck {
 
+class DeckLoader;
+
 /// Autoplay: one genre of one drive, track after track, on the deck by itself.
 ///
 /// The DJ starts it from the browser on a track of their choosing (Autoplay, a
@@ -40,15 +42,11 @@ class DeckAutoplay : public QObject {
     Q_OBJECT
 
   public:
-    /// What the browser does for it: put a `deck_library` row on the deck, and
-    /// start it. False when nothing reached the deck -- the row has gone, or
-    /// Mixxx would not make a Track of its file -- and so nothing ever will
-    /// say how the load went.
-    using LoadRow = std::function<bool(int rowId)>;
-
+    /// *pLoader* puts its picks on the deck, and starts them
+    /// (DeckLoader::loadLibraryRow()). Used and not owned, like *pRegistry*.
     DeckAutoplay(MediaRegistry* pRegistry,
             std::function<QSqlDatabase()> database,
-            LoadRow loadRow,
+            DeckLoader* pLoader,
             QObject* pParent = nullptr);
     ~DeckAutoplay() override;
 
@@ -112,7 +110,7 @@ class DeckAutoplay : public QObject {
 
     MediaRegistry* m_pRegistry;
     std::function<QSqlDatabase()> m_database;
-    LoadRow m_loadRow;
+    DeckLoader* m_pLoader;
     autoplay::PlayedMemory m_memory;
 
     State m_state = State::Off;

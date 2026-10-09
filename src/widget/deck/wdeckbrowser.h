@@ -10,14 +10,13 @@
 #include <memory>
 
 #include "control/controlproxy.h"
-#include "library/coverart.h"
+#include "library/deck/deckloader.h"
 #include "library/deck/mediaregistry.h"
 #include "library/deck/previewwaveformcache.h"
 #include "library/deck/trackcache.h"
 #include "library/deck/mediumid.h"
 #include "preferences/usersettings.h"
 #include "skin/legacy/skincontext.h"
-#include "track/track_decl.h"
 #include "track/trackid.h"
 #include "widget/wbasewidget.h"
 
@@ -106,9 +105,6 @@ class WDeckBrowser : public QWidget, public WBaseWidget {
     /// not load. Takes the loaded marker off the row it was on.
     void onDeckEmpty();
 
-  signals:
-    void loadTrackToPlayer(TrackPointer pTrack, const QString& group, bool play);
-
   private slots:
     void onMediaChanged();
     /// A medium's rows changed in place -- a folder stick's tags arriving.
@@ -129,8 +125,6 @@ class WDeckBrowser : public QWidget, public WBaseWidget {
     /// The tempo fader's range changed: the BPM buckets are a different size
     /// now, so rebuild that level in place if it is the one on screen.
     void onRateRangeChanged();
-    /// The deck got far enough into the loaded track to call it played.
-    void onPlayPositionChanged(double position);
     /// A breadcrumb segment was clicked: pop back to that level.
     void onBreadcrumbClicked(const QString& levelIndex);
     /// The sort indicator was tapped: the other way round.
@@ -171,23 +165,6 @@ class WDeckBrowser : public QWidget, public WBaseWidget {
         QString genre;
     };
 
-    /// Everything a load needs off a track's row, read in one go: see
-    /// loadRow() for why it has to be.
-    struct LoadableRow {
-        QString source;
-        QString analyzePath;
-        int sampleRate = 0;
-        quint32 rekordboxId = 0;
-        QString artist;
-        QString title;
-        QString album;
-        QString key;
-        QString coverPath;
-        QString artworkPath;
-        int trackRowId = -1;
-        MediumId medium;
-    };
-
     void pushLevel(Level level);
     void popLevel();
     void rebuildCurrentLevel();
@@ -212,56 +189,12 @@ class WDeckBrowser : public QWidget, public WBaseWidget {
     /// The DJ's load: the selected row, onto the deck, not playing. Ends
     /// autoplay.
     void loadSelectedTrack();
-    /// A `deck_library` row by its id, wherever the browser is, and playing.
-    /// False when the row has gone.
-    bool loadLibraryRow(int rowId);
-    LoadableRow readModelRow(int row) const;
-    bool readLibraryRow(int rowId, LoadableRow* pRow);
-    /// Put *row* on the deck. *index* is its row in the track model when the
-    /// load came from the list, which is where a track not copied off its
-    /// medium is fetched from. False when nothing was handed to the deck --
-    /// Mixxx would not make a Track of the file -- so that neither a
-    /// `track_loaded` nor a failed load will ever come of it.
-    bool loadRow(const LoadableRow& row, bool play, const QModelIndex& index);
+    /// Everything a load needs off the list's row *row*, read in one go.
+    DeckLoader::LoadableRow readModelRow(int row) const;
     /// The selected track of an autoplay track list starts autoplay.
     void startAutoplay();
     /// Autoplay went on or off: the rows that say so are redrawn.
     void onAutoplayChanged();
-    /// Point a Track at the cover its medium carries, so the deck's header
-    /// draws it.
-    ///
-    /// Nothing else does: a rekordbox medium keeps its art under `PIONEER/`,
-    /// nowhere near the audio file, and the deck plays from a byte copy in the
-    /// cache anyway -- so every way Mixxx has of finding a cover on its own
-    /// (embedded tags, an image beside the file) comes back with nothing and
-    /// the header falls back to the empty square. The path is in the pdb, and
-    /// the browser row already has it.
-    ///
-    /// Taken by value because the caller may be handing over the pending-cover
-    /// members, which this clears.
-    /// Unpin the track that was on the deck and let go of it: its stream, and
-    /// its copy if that is still coming off a stick.
-    void releasePinned();
-    void applyCoverArt(const TrackPointer& pTrack,
-            QString coverPath,
-            QString artworkPath);
-    /// Put the medium's cover back if something guesses over it.
-    ///
-    /// `TrackDAO::getOrAddTrack()` fires `guessTrackCoverInfoConcurrently()` on
-    /// a worker for every track it adds to the library for the first time. That
-    /// worker looks for an image beside the audio file — which for this deck is
-    /// the byte-copy cache, and holds nothing but other tracks — finishes a few
-    /// milliseconds after the load has returned, and writes `CoverInfo::NONE`
-    /// over the path taken out of the pdb.
-    ///
-    /// It is a race and it cannot be won by ordering: the guess is already
-    /// running when `getOrAddTrack()` returns. So the cover is *defended*
-    /// instead, once, and the guess loses the rematch.
-    ///
-    /// This is the whole of "the artwork appears on the second load and never
-    /// the first": the second load finds the track already in the library, so
-    /// no guess is fired and nothing overwrites anything.
-    void guardCoverArt(const TrackPointer& pTrack, const CoverInfoRelative& cover);
     /// Put the selection back after the model has been re-selected, on the same
     /// track if it is still in the list.
     void restoreSelection(int trackId);
@@ -282,7 +215,9 @@ class WDeckBrowser : public QWidget, public WBaseWidget {
     std::unique_ptr<RemoteTrackStreamer> m_pStreamer;
     /// KEY SYNC, told the master's key by the registry.
     std::unique_ptr<mixxx::prolink::ProLinkKeySync> m_pKeySync;
-    /// After the registry, so it goes first: it listens to it.
+    /// Puts tracks on the deck, for the browser and for autoplay.
+    std::unique_ptr<DeckLoader> m_pLoader;
+    /// After the registry and the loader, so it goes first: it uses both.
     std::unique_ptr<DeckAutoplay> m_pAutoplay;
 
     QLabel* m_pBreadcrumb;
@@ -339,14 +274,6 @@ class WDeckBrowser : public QWidget, public WBaseWidget {
     std::unique_ptr<ControlProxy> m_pPlayingKey;
     std::unique_ptr<ControlProxy> m_pTrackLoaded;
     std::unique_ptr<ControlProxy> m_pRateRange;
-    std::unique_ptr<ControlProxy> m_pPlayPosition;
-    /// The deck_library row currently on the deck, and whether it has already
-    /// been logged. Remembered at load rather than matched back from the Track:
-    /// two media can hold clones of the same file, so the path does not
-    /// identify the row and the medium would have to be guessed.
-    int m_loadedTrackRowId = -1;
-    bool m_loadedTrackLogged = false;
-    void logPlay();
     /// The medium the current list came from, for cache keys. Levels below a
     /// medium all carry it, so this is just the stack's.
     MediumId currentMedium() const;
@@ -355,27 +282,6 @@ class WDeckBrowser : public QWidget, public WBaseWidget {
     /// Covers arrive in a burst as a list scrolls; this coalesces the redraws
     /// into one rather than repainting per image.
     QTimer m_coverRedraw;
-    /// The cached file the deck is playing, so it can be unpinned when another
-    /// takes its place.
-    QString m_pinnedPath;
-    /// A cover the track on the deck is still waiting for, and the track that
-    /// wants it. Only ever set for a remote medium: its images come over the
-    /// network one at a time, as they are looked at, so a track can reach the
-    /// deck before its own cover does.
-    ///
-    /// **Weak on purpose.** The deck owns what it is playing; holding a
-    /// TrackPointer here would keep the last one alive in GlobalTrackCache
-    /// until the next load, waveform and all, for a cover that may never come.
-    QString m_pendingCoverPath;
-    QString m_pendingArtworkPath;
-    TrackWeakPointer m_pendingCoverTrack;
-    /// Armed by guardCoverArt() for the track on the deck, and only that one.
-    QMetaObject::Connection m_coverGuard;
-    /// Writes the BPM Mixxx's analysis finds back to the row of the folder
-    /// track on the deck, so the list shows it and the BPM menu can bucket it.
-    /// Re-armed on every load; see loadSelectedTrack().
-    QMetaObject::Connection m_bpmWriteBack;
-    void writeBackBpm(int trackRowId, quint32 rekordboxId, const QString& mediumKey, double bpm);
 
     /// The medium whose rows changed in place since the last refresh, and the
     /// timer that coalesces those changes into one re-read of the screen.
