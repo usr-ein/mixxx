@@ -79,12 +79,6 @@ constexpr int kInPlaceRefreshMs = 1500;
 /// And not while the encoder is turning: a re-read under a moving selection
 /// can swallow a detent, and nobody misses a title filling in a second later.
 constexpr qint64 kRefreshQuietMs = 1200;
-
-/// Categories of a medium, in the order the PRD lists them.
-struct CategorySpec {
-    const char* title;
-    const char* column; ///< Empty for the ones that are not a plain GROUP BY.
-};
 } // namespace
 
 namespace mixxx {
@@ -2094,9 +2088,7 @@ void WDeckBrowser::onActivated(int row) {
             level.parameter = QStringLiteral("artist");
         } else {
             level.kind = Level::Kind::Categories;
-            level.parameter = payload == QStringLiteral("dateadded")
-                    ? QStringLiteral("dateadded")
-                    : payload;
+            level.parameter = payload;
         }
         pushLevel(level);
         break;
