@@ -240,37 +240,59 @@ int ProLinkNetworkService::numberFor(const QByteArray& mac) const {
             (*m_pImpl->pSession)->device_number_of(::rust::Str(mac.constData(), mac.size())));
 }
 
+void ProLinkNetworkService::startTransfer(
+        const Pending& pending, const std::function<quint32(int number)>& start) {
+    if (!m_pImpl->pSession) {
+        emitFailed(pending, tr("Pro DJ Link is not running"));
+        return;
+    }
+    const int number = numberFor(pending.mac);
+    if (number == 0) {
+        emitFailed(pending, tr("that player is no longer on the network"));
+        return;
+    }
+    try {
+        m_pending.insert(start(number), pending);
+    } catch (const std::exception& error) {
+        emitFailed(pending, QString::fromUtf8(error.what()));
+    }
+}
+
+void ProLinkNetworkService::emitFailed(const Pending& pending, const QString& error) {
+    switch (pending.kind) {
+    case Pending::Kind::File:
+        emit fileFetched(pending.localPath, error);
+        break;
+    case Pending::Kind::Database:
+        emit databaseFetched(pending.mac, pending.slot, QByteArray(), error);
+        break;
+    case Pending::Kind::Artwork:
+        emit artworkFetched(pending.localPath, error);
+        break;
+    case Pending::Kind::Preview:
+        emit previewFetched(pending.mac, pending.slot, pending.trackId, QByteArray(), error);
+        break;
+    }
+}
+
 void ProLinkNetworkService::fetchFile(const QByteArray& mac,
         MediaSlot slot,
         const QString& remotePath,
         const QString& localPath) {
-    if (!m_pImpl->pSession) {
-        emit fileFetched(localPath, tr("Pro DJ Link is not running"));
-        return;
-    }
-    const int number = numberFor(mac);
-    if (number == 0) {
-        emit fileFetched(localPath, tr("that player is no longer on the network"));
-        return;
-    }
-
-    const QByteArray remote = remotePath.toUtf8();
-    const QByteArray local = localPath.toUtf8();
-    try {
-        const quint32 id = (*m_pImpl->pSession)
-                                   ->fetch_file(static_cast<::std::uint8_t>(number),
-                                           toRustSlot(slot),
-                                           ::rust::Str(remote.constData(), remote.size()),
-                                           ::rust::Str(local.constData(), local.size()));
-        Pending pending;
-        pending.isDatabase = false;
-        pending.mac = mac;
-        pending.slot = slot;
-        pending.localPath = localPath;
-        m_pending.insert(id, pending);
-    } catch (const std::exception& error) {
-        emit fileFetched(localPath, QString::fromUtf8(error.what()));
-    }
+    Pending pending;
+    pending.kind = Pending::Kind::File;
+    pending.mac = mac;
+    pending.slot = slot;
+    pending.localPath = localPath;
+    startTransfer(pending, [&](int number) {
+        const QByteArray remote = remotePath.toUtf8();
+        const QByteArray local = localPath.toUtf8();
+        return (*m_pImpl->pSession)
+                ->fetch_file(static_cast<::std::uint8_t>(number),
+                        toRustSlot(slot),
+                        ::rust::Str(remote.constData(), remote.size()),
+                        ::rust::Str(local.constData(), local.size()));
+    });
 }
 
 void ProLinkNetworkService::fetchFileStreaming(const QByteArray& mac,
@@ -278,19 +300,14 @@ void ProLinkNetworkService::fetchFileStreaming(const QByteArray& mac,
         const QString& remotePath,
         const QString& localPath,
         quint32 headBytes) {
-    if (!m_pImpl->pSession) {
-        emit fileFetched(localPath, tr("Pro DJ Link is not running"));
-        return;
-    }
-    const int number = numberFor(mac);
-    if (number == 0) {
-        emit fileFetched(localPath, tr("that player is no longer on the network"));
-        return;
-    }
-
-    const QByteArray remote = remotePath.toUtf8();
-    const QByteArray local = localPath.toUtf8();
-    try {
+    Pending pending;
+    pending.kind = Pending::Kind::File;
+    pending.mac = mac;
+    pending.slot = slot;
+    pending.localPath = localPath;
+    startTransfer(pending, [&](int number) {
+        const QByteArray remote = remotePath.toUtf8();
+        const QByteArray local = localPath.toUtf8();
         const quint32 id = (*m_pImpl->pSession)
                                    ->fetch_file_streaming(
                                            static_cast<::std::uint8_t>(number),
@@ -298,52 +315,30 @@ void ProLinkNetworkService::fetchFileStreaming(const QByteArray& mac,
                                            ::rust::Str(remote.constData(), remote.size()),
                                            ::rust::Str(local.constData(), local.size()),
                                            headBytes);
-        Pending pending;
-        pending.isDatabase = false;
-        pending.mac = mac;
-        pending.slot = slot;
-        pending.localPath = localPath;
-        m_pending.insert(id, pending);
         kLogger.info() << "streaming" << remotePath << "from player" << number
                        << "with a" << headBytes << "byte head";
-    } catch (const std::exception& error) {
-        emit fileFetched(localPath, QString::fromUtf8(error.what()));
-    }
+        return id;
+    });
 }
 
 void ProLinkNetworkService::fetchDatabase(const QByteArray& mac, MediaSlot slot) {
-    if (!m_pImpl->pSession) {
-        emit databaseFetched(mac, slot, QByteArray(), tr("Pro DJ Link is not running"));
-        return;
-    }
-    const int number = numberFor(mac);
-    if (number == 0) {
-        emit databaseFetched(
-                mac, slot, QByteArray(), tr("that player is no longer on the network"));
-        return;
-    }
-
+    Pending pending;
+    pending.kind = Pending::Kind::Database;
+    pending.mac = mac;
+    pending.slot = slot;
     // One file per (player, slot), so a second pull overwrites rather than
     // accumulating copies of a database that is often several megabytes.
-    const QString localPath = QStringLiteral("%1/prolink-%2-%3.pdb")
-                                      .arg(QDir::tempPath(),
-                                              QString::fromLatin1(mac.toHex()),
-                                              QString::number(static_cast<int>(slot)));
-    const QByteArray local = localPath.toUtf8();
-    try {
-        const quint32 id = (*m_pImpl->pSession)
-                                   ->fetch_database(static_cast<::std::uint8_t>(number),
-                                           toRustSlot(slot),
-                                           ::rust::Str(local.constData(), local.size()));
-        Pending pending;
-        pending.isDatabase = true;
-        pending.mac = mac;
-        pending.slot = slot;
-        pending.localPath = localPath;
-        m_pending.insert(id, pending);
-    } catch (const std::exception& error) {
-        emit databaseFetched(mac, slot, QByteArray(), QString::fromUtf8(error.what()));
-    }
+    pending.localPath = QStringLiteral("%1/prolink-%2-%3.pdb")
+                                .arg(QDir::tempPath(),
+                                        QString::fromLatin1(mac.toHex()),
+                                        QString::number(static_cast<int>(slot)));
+    startTransfer(pending, [&](int number) {
+        const QByteArray local = pending.localPath.toUtf8();
+        return (*m_pImpl->pSession)
+                ->fetch_database(static_cast<::std::uint8_t>(number),
+                        toRustSlot(slot),
+                        ::rust::Str(local.constData(), local.size()));
+    });
 }
 
 void ProLinkNetworkService::pullDatabase(MediaSlot slot) {
@@ -369,77 +364,46 @@ void ProLinkNetworkService::pullDatabase(MediaSlot slot) {
 
 void ProLinkNetworkService::fetchWaveformPreview(
         const QByteArray& mac, MediaSlot slot, quint32 trackId) {
-    if (!m_pImpl->pSession) {
-        emit previewFetched(mac, slot, trackId, QByteArray(),
-                tr("Pro DJ Link is not running"));
-        return;
-    }
-    const int number = numberFor(mac);
-    if (number == 0) {
-        emit previewFetched(mac, slot, trackId, QByteArray(),
-                tr("that player is no longer on the network"));
-        return;
-    }
-
+    Pending pending;
+    pending.kind = Pending::Kind::Preview;
+    pending.mac = mac;
+    pending.slot = slot;
+    pending.trackId = trackId;
     // Over dbserver, on the connection artwork already uses. 900 bytes, and no
     // file at either end -- the bytes are taken off the session when the
     // transfer finishes.
-    try {
-        const quint32 id = (*m_pImpl->pSession)
-                                   ->fetch_waveform_preview(
-                                           static_cast<::std::uint8_t>(number),
-                                           toRustSlot(slot),
-                                           trackId);
-        Pending pending;
-        pending.isPreview = true;
-        pending.mac = mac;
-        pending.slot = slot;
-        pending.trackId = trackId;
-        m_pending.insert(id, pending);
-    } catch (const std::exception& error) {
-        emit previewFetched(
-                mac, slot, trackId, QByteArray(), QString::fromUtf8(error.what()));
-    }
+    startTransfer(pending, [&](int number) {
+        return (*m_pImpl->pSession)
+                ->fetch_waveform_preview(static_cast<::std::uint8_t>(number),
+                        toRustSlot(slot),
+                        trackId);
+    });
 }
 
 void ProLinkNetworkService::fetchArtwork(const QByteArray& mac,
         MediaSlot slot,
         quint32 artworkId,
         const QString& localPath) {
-    if (!m_pImpl->pSession) {
-        emit artworkFetched(localPath, tr("Pro DJ Link is not running"));
-        return;
-    }
-    const int number = numberFor(mac);
-    if (number == 0) {
-        emit artworkFetched(localPath, tr("that player is no longer on the network"));
-        return;
-    }
-
+    Pending pending;
+    pending.kind = Pending::Kind::Artwork;
+    pending.mac = mac;
+    pending.slot = slot;
+    pending.localPath = localPath;
     // Artwork comes over the dbserver connection rather than NFS. Asking NFS
     // for it instead churns the deck's filehandle table until it answers
     // NFSERR_STALE to everything, including the track a DJ is loading.
     //
-    // Like a file fetch this returns an id and finishes later: the library
-    // feature asks for every cover on a medium in one loop -- some six hundred
-    // of them -- and a blocking round trip each would freeze the GUI for the
-    // length of all six hundred.
-    const QByteArray local = localPath.toUtf8();
-    try {
-        const quint32 id = (*m_pImpl->pSession)
-                                   ->fetch_artwork(static_cast<::std::uint8_t>(number),
-                                           toRustSlot(slot),
-                                           artworkId,
-                                           ::rust::Str(local.constData(), local.size()));
-        Pending pending;
-        pending.isArtwork = true;
-        pending.mac = mac;
-        pending.slot = slot;
-        pending.localPath = localPath;
-        m_pending.insert(id, pending);
-    } catch (const std::exception& error) {
-        emit artworkFetched(localPath, QString::fromUtf8(error.what()));
-    }
+    // Like a file fetch this returns an id and finishes later: the browser
+    // asks for the cover of every row it draws, and a blocking round trip
+    // each would freeze the GUI for the length of all of them.
+    startTransfer(pending, [&](int number) {
+        const QByteArray local = localPath.toUtf8();
+        return (*m_pImpl->pSession)
+                ->fetch_artwork(static_cast<::std::uint8_t>(number),
+                        toRustSlot(slot),
+                        artworkId,
+                        ::rust::Str(local.constData(), local.size()));
+    });
 }
 
 void ProLinkNetworkService::poll() {
@@ -478,7 +442,8 @@ void ProLinkNetworkService::poll() {
             break;
         case ::prolink::EventKind::TransferProgress: {
             const auto found = m_pending.constFind(event.transfer);
-            if (found != m_pending.constEnd() && !found->isArtwork && !found->isPreview) {
+            if (found != m_pending.constEnd() && found->kind != Pending::Kind::Artwork &&
+                    found->kind != Pending::Kind::Preview) {
                 emit fileFetchProgress(found->localPath,
                         static_cast<quint64>(event.done),
                         static_cast<quint64>(event.total),
@@ -502,10 +467,12 @@ void ProLinkNetworkService::poll() {
             // A missing cover is not worth reporting as the connection's last
             // error: a medium has hundreds of them, a few are always absent,
             // and this string is what the UI shows about the network itself.
-            if (!error.isEmpty() && !pending.isArtwork && !pending.isPreview) {
+            if (!error.isEmpty() && pending.kind != Pending::Kind::Artwork &&
+                    pending.kind != Pending::Kind::Preview) {
                 m_lastError = error;
             }
-            if (pending.isDatabase) {
+            switch (pending.kind) {
+            case Pending::Kind::Database: {
                 // The caller parses the bytes and never wants the file, so
                 // the temp copy is read back and dropped here rather than
                 // becoming something it has to clean up.
@@ -523,7 +490,9 @@ void ProLinkNetworkService::poll() {
                     QFile::remove(pending.localPath);
                 }
                 emit databaseFetched(pending.mac, pending.slot, data, reason);
-            } else if (pending.isPreview) {
+                break;
+            }
+            case Pending::Kind::Preview: {
                 // Taken rather than read back: the bytes never touched a
                 // filesystem, which is the point of fetching a 900-byte blob
                 // over dbserver instead of a 157 kB file over NFS.
@@ -536,10 +505,14 @@ void ProLinkNetworkService::poll() {
                 }
                 emit previewFetched(
                         pending.mac, pending.slot, pending.trackId, blob, error);
-            } else if (pending.isArtwork) {
+                break;
+            }
+            case Pending::Kind::Artwork:
                 emit artworkFetched(pending.localPath, error);
-            } else {
+                break;
+            case Pending::Kind::File:
                 emit fileFetched(pending.localPath, error);
+                break;
             }
             break;
         }

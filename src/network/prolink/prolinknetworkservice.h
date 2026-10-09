@@ -5,6 +5,7 @@
 #include <QList>
 #include <QObject>
 #include <QString>
+#include <functional>
 #include <memory>
 
 #include "network/prolink/prolinkservestatus.h"
@@ -105,12 +106,12 @@ class ProLinkNetworkService : public QObject {
     /// see ProLinkSync::setLoadedTrack(). Safe to call before start().
     void setLoadedTrack(int sourcePlayer, MediaSlot slot, quint32 rekordboxId);
 
-    /// Fetch a track's artwork into `localPath`.
     /// Ask a player for a track's preview waveform, over dbserver.
     ///
     /// Returns without blocking; the answer arrives as previewFetched().
     void fetchWaveformPreview(const QByteArray& mac, MediaSlot slot, quint32 trackId);
 
+    /// Fetch a track's artwork into `localPath`.
     void fetchArtwork(const QByteArray& mac,
             MediaSlot slot,
             quint32 artworkId,
@@ -191,17 +192,33 @@ class ProLinkNetworkService : public QObject {
     /// of fetch it was is this class's business, because only the slots above
     /// know which signal was promised.
     struct Pending {
-        bool isDatabase = false;
-        bool isArtwork = false;
-        /// A preview waveform, which has no file at either end: the bytes are
-        /// taken off the session when the transfer finishes.
-        bool isPreview = false;
+        enum class Kind {
+            /// fetchFile() and fetchFileStreaming(): fileFetched().
+            File,
+            /// fetchDatabase(): databaseFetched(), with the file's bytes.
+            Database,
+            /// fetchArtwork(): artworkFetched().
+            Artwork,
+            /// fetchWaveformPreview(): previewFetched(). No file at either
+            /// end: the bytes are taken off the session when it finishes.
+            Preview,
+        };
+        Kind kind = Kind::File;
         QByteArray mac;
         MediaSlot slot = MediaSlot::Usb;
         QString localPath;
         /// For a preview, which track was asked about.
         quint32 trackId = 0;
     };
+
+    /// Start the transfer *pending* describes. *start* is handed the number
+    /// the player at `pending.mac` holds, asks the session, and returns the
+    /// transfer's id. With no session, the player gone or the bridge
+    /// throwing, the transfer fails at once: see emitFailed().
+    void startTransfer(const Pending& pending, const std::function<quint32(int number)>& start);
+
+    /// Report *pending* as failed with *error*, by the signal it was promised.
+    void emitFailed(const Pending& pending, const QString& error);
 
     /// The device number a MAC currently holds, or 0.
     int numberFor(const QByteArray& mac) const;
