@@ -1010,6 +1010,7 @@ add_library(mixxx-lib STATIC EXCLUDE_FROM_ALL
   src/library/deck/autoplay.cpp
   src/library/deck/deckautoplay.cpp
   src/library/deck/deckloader.cpp
+  src/library/deck/deckservices.cpp
   src/library/deck/deckqueries.cpp
   src/library/deck/decktrackmodel.cpp
   src/library/deck/folderlibrary.cpp

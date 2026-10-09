@@ -64,32 +64,15 @@ mixxx::deck::MediumId remoteMediumId(const QByteArray& mac, mixxx::prolink::Medi
 namespace mixxx {
 namespace deck {
 
-namespace {
-MediaRegistry* s_pInstance = nullptr;
-/// Subscribers that asked before there was anything to subscribe to.
-QList<QPair<QPointer<QObject>, std::function<void(MediaRegistry*)>>> s_pending;
-} // namespace
-
-MediaRegistry* MediaRegistry::instance() {
-    return s_pInstance;
-}
-
-void MediaRegistry::whenReady(QObject* pContext, std::function<void(MediaRegistry*)> callback) {
-    if (s_pInstance != nullptr) {
-        callback(s_pInstance);
-        return;
-    }
-    s_pending.append({QPointer<QObject>(pContext), std::move(callback)});
-}
-
 MediaRegistry::MediaRegistry(mixxx::DbConnectionPoolPtr dbConnectionPool,
         mixxx::prolink::ProLinkNetworkService* pNetwork,
+        TrackCache* pCache,
         QObject* pParent)
         : QObject(pParent),
           m_dbConnectionPool(std::move(dbConnectionPool)),
-          m_pNetwork(pNetwork) {
+          m_pNetwork(pNetwork),
+          m_pCache(pCache) {
     qRegisterMetaType<mixxx::deck::MediumInfo>("mixxx::deck::MediumInfo");
-    s_pInstance = this;
 
     m_rescanDebounce.setSingleShot(true);
     m_rescanDebounce.setInterval(kRescanDebounceMs);
@@ -205,25 +188,7 @@ MediaRegistry::MediaRegistry(mixxx::DbConnectionPoolPtr dbConnectionPool,
     connect(this, &MediaRegistry::mediaChanged, this, &MediaRegistry::resolveMasterKey);
 }
 
-void MediaRegistry::start() {
-    m_pNetwork->start();
-
-    // Whoever asked for us before we existed. Drained *last*, deliberately:
-    // the constructor's rescan emits mediumAppeared for the sticks that were
-    // already plugged in at boot, and a toast for each of those on every
-    // startup is noise rather than news.
-    const auto waiting = std::exchange(s_pending, {});
-    for (const auto& entry : waiting) {
-        if (!entry.first.isNull()) {
-            entry.second(this);
-        }
-    }
-}
-
 MediaRegistry::~MediaRegistry() {
-    if (s_pInstance == this) {
-        s_pInstance = nullptr;
-    }
     // Stop listening to the ProLink service first, because tearing it down is
     // not silent.
     //
@@ -404,8 +369,7 @@ void MediaRegistry::startNextRead() {
         // Only tags left, and tags give way to a track being copied off a
         // stick: it is the same USB bus, and the copy is what the DJ who just
         // pressed load is waiting on.
-        const TrackCache* pCache = TrackCache::instance();
-        if (pCache && pCache->isCopying()) {
+        if (m_pCache && m_pCache->isCopying()) {
             if (!m_tagRetryScheduled) {
                 m_tagRetryScheduled = true;
                 QTimer::singleShot(kTagYieldMs, this, [this]() {
@@ -687,9 +651,8 @@ void MediaRegistry::resolveMasterKey() {
         }
     }
     const bool otherIsMaster = m_masterPlayer != 0;
-    // The first answer is always published: a registry rebuilt with the skin
-    // starts from (false, 0), and the controls it publishes to outlived the
-    // last one, still saying what that one said.
+    // The first answer is always published, so KEY SYNC starts from what the
+    // registry knows rather than from whatever its controls already said.
     if (m_masterKeyPublished && otherIsMaster == m_publishedOtherIsMaster &&
             keyId == m_publishedMasterKeyId) {
         // Nothing moved. Worth checking, because this runs on every change to

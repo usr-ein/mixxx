@@ -82,7 +82,7 @@ class WProLinkPhaseMeter : public WWidget {
 
     const QString m_group;
 
-    /// `[ProLink]`. Created by ProLinkControls, from CoreServices, before any
+    /// `[ProLink]`. Created by ProLinkControls, from DeckServices, before any
     /// skin is parsed -- so unlike when ProLinkNetworkService made them, they
     /// exist by the time this widget does and need no retrying.
     std::unique_ptr<ControlProxy> m_pMasterDevice;

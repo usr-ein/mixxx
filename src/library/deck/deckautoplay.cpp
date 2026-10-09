@@ -1,8 +1,5 @@
 #include "library/deck/deckautoplay.h"
 
-#include <QList>
-#include <QPair>
-#include <QPointer>
 #include <QRandomGenerator>
 #include <utility>
 
@@ -11,7 +8,6 @@
 #include "library/deck/deckloader.h"
 #include "moc_deckautoplay.cpp"
 #include "util/logger.h"
-#include "widget/deck/wdeckbrowser.h"
 
 namespace {
 const mixxx::Logger kLogger("Autoplay");
@@ -21,28 +17,13 @@ const mixxx::Logger kLogger("Autoplay");
 /// will load is no reason to keep trying.
 constexpr int kMaxFailures = 3;
 constexpr int kRetryMs = 1000;
-
-mixxx::deck::DeckAutoplay* s_pInstance = nullptr;
-/// Subscribers that asked before there was anything to subscribe to.
-QList<QPair<QPointer<QObject>, std::function<void(mixxx::deck::DeckAutoplay*)>>> s_pending;
 } // namespace
 
 namespace mixxx {
 namespace deck {
 
-DeckAutoplay* DeckAutoplay::instance() {
-    return s_pInstance;
-}
-
-void DeckAutoplay::whenReady(QObject* pContext, std::function<void(DeckAutoplay*)> callback) {
-    if (s_pInstance != nullptr) {
-        callback(s_pInstance);
-        return;
-    }
-    s_pending.append({QPointer<QObject>(pContext), std::move(callback)});
-}
-
-DeckAutoplay::DeckAutoplay(MediaRegistry* pRegistry,
+DeckAutoplay::DeckAutoplay(const QString& deckGroup,
+        MediaRegistry* pRegistry,
         std::function<QSqlDatabase()> database,
         DeckLoader* pLoader,
         QObject* pParent)
@@ -50,14 +31,13 @@ DeckAutoplay::DeckAutoplay(MediaRegistry* pRegistry,
           m_pRegistry(pRegistry),
           m_database(std::move(database)),
           m_pLoader(pLoader) {
-    const QString group = WDeckBrowser::deckGroup();
     // The end of a track is the play position reaching 1. Not `play` going to
     // 0, which a pause does too; and not `end_of_track`, which is a warning
     // that the last thirty seconds have begun and never fires at all on a
     // track shorter than that.
-    m_pPlayPosition = std::make_unique<ControlProxy>(group, QStringLiteral("playposition"), this);
+    m_pPlayPosition = std::make_unique<ControlProxy>(deckGroup, QStringLiteral("playposition"), this);
     m_pPlayPosition->connectValueChanged(this, &DeckAutoplay::onPlayPosition);
-    m_pTrackLoaded = std::make_unique<ControlProxy>(group, QStringLiteral("track_loaded"), this);
+    m_pTrackLoaded = std::make_unique<ControlProxy>(deckGroup, QStringLiteral("track_loaded"), this);
     m_pTrackLoaded->connectValueChanged(this, &DeckAutoplay::onTrackLoaded);
     m_pPicked = std::make_unique<ControlObject>(
             ConfigKey(QStringLiteral("[Browser]"), QStringLiteral("autoplay_picked")));
@@ -72,21 +52,9 @@ DeckAutoplay::DeckAutoplay(MediaRegistry* pRegistry,
                 this,
                 &DeckAutoplay::onMediumVanished);
     }
-
-    s_pInstance = this;
-    const auto pending = std::exchange(s_pending, {});
-    for (const auto& [pContext, callback] : pending) {
-        if (pContext) {
-            callback(this);
-        }
-    }
 }
 
-DeckAutoplay::~DeckAutoplay() {
-    if (s_pInstance == this) {
-        s_pInstance = nullptr;
-    }
-}
+DeckAutoplay::~DeckAutoplay() = default;
 
 QString DeckAutoplay::genreTitle() const {
     return m_genre.isEmpty() ? QStringLiteral("—") : m_genre;

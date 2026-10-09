@@ -52,8 +52,8 @@ ProLinkKeySync::ProLinkKeySync(const QString& deckGroup,
             this,
             &ProLinkKeySync::onEnabledChanged);
 
-    // **Resume, don't forget** (rule 3). The controls outlive this object --
-    // a skin reload rebuilds it -- so an engaged latch is picked up from them.
+    // **Resume, don't forget** (rule 3). The controls are made before this
+    // object and outlive it, so a latch they already hold is picked up.
     const auto held = KeyUtils::keyFromNumericValue(m_pControls->keySyncTarget()->get());
     if (m_pControls->keySyncEnabled()->get() > 0.0 &&
             held != mixxx::track::io::key::INVALID) {

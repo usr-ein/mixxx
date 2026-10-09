@@ -64,7 +64,8 @@ WDeckSortMenu::WDeckSortMenu(QWidget* pParent)
 
     m_pView = new DeckListView(this);
     m_pModel = new DeckMenuModel(this);
-    m_pDelegate = new MenuRowDelegate(this);
+    // The fields have no covers to ask anybody for.
+    m_pDelegate = new MenuRowDelegate(nullptr, this);
     m_pDelegate->setRowHeight(kRowHeight);
     m_pView->setRowHeight(kRowHeight);
     m_pView->setModel(m_pModel);

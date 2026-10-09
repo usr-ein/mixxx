@@ -6,6 +6,7 @@
 #include <QVBoxLayout>
 
 #include "library/deck/deckautoplay.h"
+#include "library/deck/deckservices.h"
 #include "library/deck/trackcache.h"
 #include "track/track.h"
 #include "util/logger.h"
@@ -51,8 +52,11 @@ class ToastWidget : public QLabel {
 namespace mixxx {
 namespace deck {
 
-WDeckToast::WDeckToast(QWidget* pParent)
-        : QWidget(pParent), WBaseWidget(this) {
+WDeckToast::WDeckToast(QWidget* pParent, DeckServices* pServices)
+        : QWidget(pParent),
+          WBaseWidget(this),
+          m_pRegistry(pServices ? pServices->registry() : nullptr),
+          m_pCache(pServices ? pServices->cache() : nullptr) {
     setObjectName(QStringLiteral("DeckToast"));
     // The whole point: this covers the panel so a stacked layout will centre it
     // at full size, and it must not eat a single tap meant for what is behind.
@@ -61,22 +65,19 @@ WDeckToast::WDeckToast(QWidget* pParent)
     m_tick.setInterval(200);
     connect(&m_tick, &QTimer::timeout, this, &WDeckToast::expire);
 
-    // Not `instance()`. The skin builds this widget before the browser that
-    // creates the registry -- it has to, to render over everything -- so asking
-    // for the instance here got a null, connected to nothing, and cost every
-    // toast the deck was ever going to show.
-    MediaRegistry::whenReady(this, [this](MediaRegistry* pRegistry) {
-        connect(pRegistry, &MediaRegistry::mediumAppeared, this, &WDeckToast::onAppeared);
-        connect(pRegistry, &MediaRegistry::mediumVanished, this, &WDeckToast::onVanished);
-        connect(pRegistry, &MediaRegistry::mediumFailed, this, &WDeckToast::onFailed);
-        connect(pRegistry, &MediaRegistry::mediumNotice, this, &WDeckToast::onNotice);
-    });
+    if (!pServices) {
+        return;
+    }
+    // Through the services rather than off the registry: they hear the media
+    // first, so a medium's news is said before what came of it.
+    connect(pServices, &DeckServices::mediumAppeared, this, &WDeckToast::onAppeared);
+    connect(pServices, &DeckServices::mediumVanished, this, &WDeckToast::onVanished);
+    connect(pServices, &DeckServices::mediumFailed, this, &WDeckToast::onFailed);
+    connect(pServices, &DeckServices::mediumNotice, this, &WDeckToast::onNotice);
     // Autoplay's news: why it went off, when the DJ did not turn it off. One
     // at a time, the newest replacing an earlier one still up.
-    DeckAutoplay::whenReady(this, [this](DeckAutoplay* pAutoplay) {
-        connect(pAutoplay, &DeckAutoplay::notice, this, [this](const QString& text) {
-            show(text, true, QStringLiteral("#autoplay"));
-        });
+    connect(pServices->autoplay(), &DeckAutoplay::notice, this, [this](const QString& text) {
+        show(text, true, QStringLiteral("#autoplay"));
     });
 }
 
@@ -101,9 +102,8 @@ void WDeckToast::onVanished(mixxx::deck::MediumInfo medium) {
     // so from a copy in our RAM. Said first, because it is the one a DJ has to
     // act on: our own deck recovering is our business, but a CDJ on the other
     // side of the booth about to stop is theirs.
-    MediaRegistry* pRegistry = MediaRegistry::instance();
-    if (pRegistry) {
-        const mixxx::prolink::ServeStatus serve = pRegistry->serveStatus();
+    if (m_pRegistry) {
+        const mixxx::prolink::ServeStatus serve = m_pRegistry->serveStatus();
         QList<int> fed;
         for (const mixxx::prolink::ServedSlot& slot : serve.media) {
             if (!slot.phantom || slot.localPath != medium.id.mountPoint()) {
@@ -133,8 +133,7 @@ void WDeckToast::onVanished(mixxx::deck::MediumInfo medium) {
     // not be. The message is only earned when there is genuinely a pinned copy,
     // though: claiming it and then falling silent would be worse than saying
     // nothing.
-    TrackCache* pCache = TrackCache::instance();
-    if (pCache && pCache->hasPinnedFrom(medium.id)) {
+    if (m_pCache && m_pCache->hasPinnedFrom(medium.id)) {
         show(tr("%1 removed — current track is cached and stays playable.")
                         .arg(medium.name),
                 true,

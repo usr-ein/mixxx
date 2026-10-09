@@ -66,7 +66,7 @@ void paintSelectionOutline(QPainter* pPainter, const QRect& rect, const QColor& 
 constexpr int kPadding = 16;
 constexpr int kCoverMargin = 8;
 
-/// Load a cover, and ask for it if it is not there.
+/// Load a cover, and ask *pRegistry* for it if it is not there.
 ///
 /// The request is what makes a remote medium's art appear at all: those images
 /// live on the player, and only the rows a DJ is actually looking at are worth
@@ -76,12 +76,10 @@ constexpr int kCoverMargin = 8;
 /// Idempotent and cheap: MediaRegistry asks the network at most once per path,
 /// ever. So calling this from a paint is safe, and a paint is the only place
 /// that knows which covers are being looked at.
-QPixmap loadCover(const QString& path) {
+QPixmap loadCover(const QString& path, mixxx::deck::MediaRegistry* pRegistry) {
     QPixmap cover(path);
-    if (cover.isNull() && !path.isEmpty()) {
-        if (mixxx::deck::MediaRegistry* pRegistry = mixxx::deck::MediaRegistry::instance()) {
-            pRegistry->requestArtwork(path);
-        }
+    if (cover.isNull() && !path.isEmpty() && pRegistry) {
+        pRegistry->requestArtwork(path);
     }
     return cover;
 }
@@ -211,8 +209,11 @@ void paintMark(QPainter* pPainter,
 namespace mixxx {
 namespace deck {
 
-MenuRowDelegate::MenuRowDelegate(QObject* pParent)
-        : QStyledItemDelegate(pParent), m_selected(deckAccent()), m_coverCache(64) {
+MenuRowDelegate::MenuRowDelegate(MediaRegistry* pRegistry, QObject* pParent)
+        : QStyledItemDelegate(pParent),
+          m_pRegistry(pRegistry),
+          m_selected(deckAccent()),
+          m_coverCache(64) {
 }
 
 QSize MenuRowDelegate::sizeHint(const QStyleOptionViewItem& option,
@@ -241,7 +242,7 @@ QPixmap MenuRowDelegate::coverFor(const QStringList& paths, int size) const {
         // track row. Only here: in the 2x2 below, four placeholders would be
         // four times the noise for the same nothing, and the point of the grid
         // is the covers that ARE there.
-        QPixmap cover = loadCover(paths.first());
+        QPixmap cover = loadCover(paths.first(), m_pRegistry);
         if (cover.isNull()) {
             cover = defaultCover();
         }
@@ -253,7 +254,7 @@ QPixmap MenuRowDelegate::coverFor(const QStringList& paths, int size) const {
     } else {
         const int half = size / 2;
         for (int i = 0; i < paths.size() && i < 4; ++i) {
-            QPixmap cover = loadCover(paths.at(i));
+            QPixmap cover = loadCover(paths.at(i), m_pRegistry);
             if (cover.isNull()) {
                 continue;
             }
@@ -371,8 +372,11 @@ void MenuRowDelegate::paint(QPainter* pPainter,
     pPainter->restore();
 }
 
-TrackRowDelegate::TrackRowDelegate(QObject* pParent)
-        : QStyledItemDelegate(pParent), m_selected(deckAccent()), m_coverCache(128) {
+TrackRowDelegate::TrackRowDelegate(MediaRegistry* pRegistry, QObject* pParent)
+        : QStyledItemDelegate(pParent),
+          m_pRegistry(pRegistry),
+          m_selected(deckAccent()),
+          m_coverCache(128) {
 }
 
 QSize TrackRowDelegate::sizeHint(const QStyleOptionViewItem& option,
@@ -389,7 +393,7 @@ QPixmap TrackRowDelegate::coverFor(const QString& path, int size) const {
     if (QPixmap* pCached = m_coverCache.object(cacheKey)) {
         return *pCached;
     }
-    QPixmap cover = loadCover(path);
+    QPixmap cover = loadCover(path, m_pRegistry);
     if (cover.isNull()) {
         cover = defaultCover();
     }

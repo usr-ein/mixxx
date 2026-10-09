@@ -4,11 +4,8 @@
 #include <QFutureWatcher>
 #include <QList>
 #include <QObject>
-#include <QPointer>
 #include <QSet>
 #include <QTimer>
-
-#include <functional>
 
 #include "library/deck/folderscan.h"
 #include "library/deck/mediumid.h"
@@ -22,6 +19,8 @@ namespace prolink {
 class ProLinkNetworkService;
 } // namespace prolink
 namespace deck {
+
+class TrackCache;
 
 /// One source row: a volume the deck can play from.
 struct MediumInfo {
@@ -87,45 +86,14 @@ class MediaRegistry : public QObject {
 
   public:
     /// Reads the sticks already in, and watches for more. The players on the
-    /// network are watched through *pNetwork*, which is used and not owned,
-    /// from start().
+    /// network are watched through *pNetwork*, from when its owner starts it;
+    /// a folder stick's tags wait for the copies in *pCache*. Both are used
+    /// and not owned.
     MediaRegistry(mixxx::DbConnectionPoolPtr dbConnectionPool,
             mixxx::prolink::ProLinkNetworkService* pNetwork,
+            TrackCache* pCache,
             QObject* pParent = nullptr);
     ~MediaRegistry() override;
-
-    /// Join the network, and hand the registry to whoever asked for it before
-    /// it existed (whenReady()).
-    ///
-    /// Apart from the constructor so that what listens to the registry can be
-    /// connected first: the session's first answers come out of this.
-    void start();
-
-    /// The one that exists, or null before the browser is built.
-    ///
-    /// A deliberate shortcut, and a small one. The toast widget has to watch
-    /// these signals, and it lives at the top of the skin's stack rather than
-    /// inside the browser -- a stick landing mid-set has to be visible over the
-    /// waveform, not only over a menu. Wiring the two through the skin parser
-    /// would make widget creation order load-bearing in a file skin authors
-    /// edit, which is a worse thing to owe than one accessor.
-    static MediaRegistry* instance();
-
-    /// Run *callback* with the registry, now or as soon as it exists.
-    ///
-    /// **Construction order in the skin is not something to rely on**, and
-    /// relying on it cost the toasts entirely: the skin puts `<DeckToast>`
-    /// first — it has to, to render over everything — while the registry is
-    /// built by `<DeckBrowser>` four hundred lines further down. So the toast
-    /// asked for an instance that did not exist yet, connected to nothing, and
-    /// silently never fired again.
-    ///
-    /// The one line of warning it logged was true and useless: by the time
-    /// anyone read it the deck had been shipped for a week.
-    ///
-    /// *pContext* owns the subscription; a callback whose context has been
-    /// destroyed is dropped rather than called.
-    static void whenReady(QObject* pContext, std::function<void(MediaRegistry*)> callback);
 
     const QList<MediumInfo>& media() const {
         return m_media;
@@ -367,6 +335,8 @@ class MediaRegistry : public QObject {
 
     /// The Pro DJ Link session, used and not owned.
     mixxx::prolink::ProLinkNetworkService* const m_pNetwork;
+    /// The track cache, used and not owned.
+    TrackCache* const m_pCache;
     /// What announceLoadedTrack() was last asked to say, so it can be asked
     /// again when what we serve changes.
     MediumId m_announcedMedium;

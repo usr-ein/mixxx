@@ -13,7 +13,6 @@
 #include "library/deck/deckloader.h"
 #include "library/deck/mediaregistry.h"
 #include "library/deck/previewwaveformcache.h"
-#include "library/deck/trackcache.h"
 #include "library/deck/mediumid.h"
 #include "preferences/usersettings.h"
 #include "skin/legacy/skincontext.h"
@@ -28,14 +27,11 @@ class BaseTrackCache;
 class QStackedWidget;
 
 namespace mixxx {
-namespace prolink {
-class ProLinkKeySync;
-} // namespace prolink
 namespace deck {
 
 class DeckAutoplay;
 class DeckListView;
-class RemoteTrackStreamer;
+class DeckServices;
 class DeckMenuModel;
 class DeckTrackModel;
 class MenuRowDelegate;
@@ -92,13 +88,15 @@ class WDeckBrowser : public QWidget, public WBaseWidget {
     Q_OBJECT
 
   public:
-    WDeckBrowser(QWidget* pParent, Library* pLibrary, UserSettingsPointer pConfig);
+    /// *pServices* are the deck's services it browses, loads and shows
+    /// through; started, and used and not owned.
+    WDeckBrowser(QWidget* pParent,
+            Library* pLibrary,
+            UserSettingsPointer pConfig,
+            DeckServices* pServices);
     ~WDeckBrowser() override;
 
     void setup(const QDomNode& node, const SkinContext& context);
-
-    /// The deck this browser loads into.
-    static QString deckGroup();
 
   public slots:
     /// The deck has nothing on it any more -- ejected, or a track that would
@@ -207,18 +205,9 @@ class WDeckBrowser : public QWidget, public WBaseWidget {
     UserSettingsPointer m_pConfig;
     /// This deck's accent (deckaccent.h), for the breadcrumb's rich text.
     const QColor m_accent;
-    /// The Pro DJ Link session. Before the registry, so it goes after it: the
-    /// registry listens to it.
-    std::unique_ptr<mixxx::prolink::ProLinkNetworkService> m_pNetwork;
-    std::unique_ptr<MediaRegistry> m_pRegistry;
-    /// After the registry and the session, so it goes first: it uses both.
-    std::unique_ptr<RemoteTrackStreamer> m_pStreamer;
-    /// KEY SYNC, told the master's key by the registry.
-    std::unique_ptr<mixxx::prolink::ProLinkKeySync> m_pKeySync;
-    /// Puts tracks on the deck, for the browser and for autoplay.
-    std::unique_ptr<DeckLoader> m_pLoader;
-    /// After the registry and the loader, so it goes first: it uses both.
-    std::unique_ptr<DeckAutoplay> m_pAutoplay;
+    MediaRegistry* const m_pRegistry;
+    DeckLoader* const m_pLoader;
+    DeckAutoplay* const m_pAutoplay;
 
     QLabel* m_pBreadcrumb;
     DeckSortChip* m_pSortChip;
@@ -278,7 +267,6 @@ class WDeckBrowser : public QWidget, public WBaseWidget {
     /// medium all carry it, so this is just the stack's.
     MediumId currentMedium() const;
 
-    std::unique_ptr<TrackCache> m_pCache;
     /// Covers arrive in a burst as a list scrolls; this coalesces the redraws
     /// into one rather than repainting per image.
     QTimer m_coverRedraw;

@@ -61,8 +61,6 @@ class TrackCache : public QObject {
     explicit TrackCache(QObject* pParent = nullptr);
     ~TrackCache() override;
 
-    static TrackCache* instance();
-
     /// Where a copy of *sourcePath* lives, whether or not it is there yet.
     QString localPathFor(const MediumId& medium, const QString& sourcePath) const;
     bool isCached(const MediumId& medium, const QString& sourcePath) const;

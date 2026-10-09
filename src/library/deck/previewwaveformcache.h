@@ -13,6 +13,8 @@
 namespace mixxx {
 namespace deck {
 
+class MediaRegistry;
+
 /// Preview waveforms for the info panel, fetched off the GUI thread and kept in
 /// RAM.
 ///
@@ -42,7 +44,8 @@ class PreviewWaveformCache : public QObject {
     Q_OBJECT
 
   public:
-    explicit PreviewWaveformCache(QObject* pParent = nullptr);
+    /// A remote track's preview is asked of *pRegistry*, used and not owned.
+    explicit PreviewWaveformCache(MediaRegistry* pRegistry, QObject* pParent = nullptr);
     ~PreviewWaveformCache() override;
 
     /// What is already in RAM. Never reads a file, never asks the network.
@@ -95,6 +98,7 @@ class PreviewWaveformCache : public QObject {
     /// worth tracking access times for.
     void evictIfNeeded();
 
+    MediaRegistry* const m_pRegistry;
     QHash<QString, PreviewWaveform> m_previews;
     /// Insertion order, for the eviction above.
     QQueue<QString> m_order;

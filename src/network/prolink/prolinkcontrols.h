@@ -28,15 +28,12 @@ namespace prolink {
 /// the objects the service was listening to and writing were not connected to
 /// anything at all.
 ///
-/// So they are created here, from CoreServices, before any skin exists.
-/// Everything else reaches them through this one object.
+/// So they are created here, by DeckServices, which CoreServices makes before
+/// any skin exists, and handed to what uses them.
 class ProLinkControls {
   public:
     ProLinkControls();
     ~ProLinkControls();
-
-    /// The one that exists, or null before CoreServices has built it.
-    static ProLinkControls* instance();
 
     /// Fetch this player's database again, on request from a mapping.
     ControlPushButton* pullDatabase() const {

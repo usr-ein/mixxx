@@ -140,8 +140,8 @@ TEST_F(ProLinkKeySyncTest, RefusedWithNothingToSyncTo) {
     EXPECT_NEAR(0.0, pitchAdjust(), 1e-9);
 }
 
-// A skin reload rebuilds the shell while the controls live on: an engaged
-// latch has to be picked up, so the press that lets go still lets go.
+// A shell made while the controls hold an engaged latch picks it up, so the
+// press that lets go still lets go.
 TEST_F(ProLinkKeySyncTest, ARebuiltShellResumesAndCanStillRelease) {
     setFileKey(D_MINOR);
     m_pKeySync->setLink(true, F_SHARP_MINOR);

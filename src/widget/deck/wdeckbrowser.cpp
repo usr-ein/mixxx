@@ -15,21 +15,15 @@
 #include "library/dao/trackschema.h"
 #include "library/deck/deckautoplay.h"
 #include "library/deck/deckqueries.h"
+#include "library/deck/deckservices.h"
 #include "library/deck/decktrackmodel.h"
 #include "library/deck/pdbingest.h"
-#include "library/deck/ramstore.h"
-#include "library/deck/remotetrackstreamer.h"
-#include "library/deck/sessionpurge.h"
 #include "library/queryutil.h"
 #include "library/library.h"
 #include "library/trackcollection.h"
 #include "library/trackcollectionmanager.h"
-#include "track/keyutils.h"
 #include "track/track.h"
 #include "moc_wdeckbrowser.cpp"
-#include "network/prolink/prolinkcontrols.h"
-#include "network/prolink/prolinkkeysync.h"
-#include "network/prolink/prolinknetworkservice.h"
 #include "util/logger.h"
 #include "widget/deck/deckaccent.h"
 #include "widget/deck/deckbezel.h"
@@ -64,8 +58,6 @@ constexpr int kPlaylistRowHeight = 88;
 constexpr int kTrackRowHeight = 72;
 /// 1024 - 560 for the list beside it (browser-prd.md 8.2).
 constexpr int kInfoPanelWidth = 464;
-
-const QString kDeckGroup = QStringLiteral("[Channel1]");
 
 /// Between the end of the path and the sort indicator. Wide enough that the
 /// indicator is plainly a thing of its own and not the next crumb.
@@ -119,12 +111,18 @@ void DeckSortChip::mouseReleaseEvent(QMouseEvent* pEvent) {
     pEvent->accept();
 }
 
-WDeckBrowser::WDeckBrowser(QWidget* pParent, Library* pLibrary, UserSettingsPointer pConfig)
+WDeckBrowser::WDeckBrowser(QWidget* pParent,
+        Library* pLibrary,
+        UserSettingsPointer pConfig,
+        DeckServices* pServices)
         : QWidget(pParent),
           WBaseWidget(this),
           m_pLibrary(pLibrary),
           m_pConfig(std::move(pConfig)),
-          m_accent(deckAccent()) {
+          m_accent(deckAccent()),
+          m_pRegistry(pServices->registry()),
+          m_pLoader(pServices->loader()),
+          m_pAutoplay(pServices->autoplay()) {
     setAttribute(Qt::WA_StyledBackground, true);
     // A flush panel has none of the three lips below, and the lists take the
     // space instead.
@@ -189,7 +187,7 @@ WDeckBrowser::WDeckBrowser(QWidget* pParent, Library* pLibrary, UserSettingsPoin
 
     m_pMenuView = new DeckListView(m_pStack);
     m_pMenuModel = new DeckMenuModel(this);
-    m_pMenuDelegate = new MenuRowDelegate(this);
+    m_pMenuDelegate = new MenuRowDelegate(m_pRegistry, this);
     m_pMenuView->setModel(m_pMenuModel);
     m_pMenuView->setItemDelegate(m_pMenuDelegate);
     // One tap goes in, with no select-first step (browser-prd.md 4.2). Every
@@ -205,7 +203,7 @@ WDeckBrowser::WDeckBrowser(QWidget* pParent, Library* pLibrary, UserSettingsPoin
     pTracksLayout->setContentsMargins(0, 0, 0, 0);
     pTracksLayout->setSpacing(0);
     m_pTrackView = new DeckListView(m_pTracksPage);
-    m_pTrackDelegate = new TrackRowDelegate(this);
+    m_pTrackDelegate = new TrackRowDelegate(m_pRegistry, this);
     m_pTrackView->setItemDelegate(m_pTrackDelegate);
     pTracksLayout->addWidget(m_pTrackView, 1);
     m_pInfoPanel = new WDeckInfoPanel(m_pTracksPage);
@@ -291,24 +289,6 @@ WDeckBrowser::WDeckBrowser(QWidget* pParent, Library* pLibrary, UserSettingsPoin
             this, m_pLibrary->trackCollectionManager(), m_trackSource);
     m_pTrackView->setModel(m_pTrackModel);
 
-    // The tables have to exist before anything reads them, and they are
-    // temporary -- dropped and recreated each boot, never migrated.
-    {
-        QSqlDatabase db = database();
-        if (db.isOpen()) {
-            dropTables(db);
-            createTables(db);
-        }
-    }
-
-    // What Mixxx's own library remembers about the session's tracks goes at
-    // the first start of a boot: beats, cues and the waveform files of every
-    // copy played off a stick (docs/plain-usb-plan.md D1). Before anything is
-    // loaded, so nothing on the deck is purged from under it.
-    purgeSessionTracksIfNewBoot(m_pLibrary->trackCollectionManager(),
-            m_pConfig->getSettingsPath(),
-            {RamStore::root(), TrackCache::diskTierRoot(), QStringLiteral("/media")});
-
     // The search page. The results reuse the track view rather than a second
     // list, so a hit behaves exactly like any other track row -- long press to
     // load, tap to see more.
@@ -331,7 +311,8 @@ WDeckBrowser::WDeckBrowser(QWidget* pParent, Library* pLibrary, UserSettingsPoin
     pSearchLayout->addWidget(m_pKeyboard);
     m_pStack->addWidget(m_pSearchPage);
 
-    m_pDiagnostics = new WDeckDiagnostics(m_pConfig->getSettingsPath(), m_pStack);
+    m_pDiagnostics = new WDeckDiagnostics(
+            m_pConfig->getSettingsPath(), m_pRegistry, pServices->cache(), m_pStack);
     m_pStack->addWidget(m_pDiagnostics);
 
     connect(m_pKeyboard, &WDeckKeyboard::keyPressed, this, [this](const QString& c) {
@@ -358,12 +339,9 @@ WDeckBrowser::WDeckBrowser(QWidget* pParent, Library* pLibrary, UserSettingsPoin
     connect(m_pSortMenu, &WDeckSortMenu::sortChosen, this, &WDeckBrowser::onSortChosen);
     connect(m_pSortMenu, &WDeckSortMenu::defaultChosen, this, &WDeckBrowser::onSortDefault);
 
-    // The deck never plays off removable media; everything goes through here.
-    m_pCache = std::make_unique<TrackCache>(this);
-
     // Preview waveforms for the info panel. Its reads happen on its own thread;
     // what arrives here is a value, on this one.
-    m_pPreviews = std::make_unique<PreviewWaveformCache>(this);
+    m_pPreviews = std::make_unique<PreviewWaveformCache>(m_pRegistry, this);
     connect(m_pPreviews.get(),
             &PreviewWaveformCache::arrived,
             this,
@@ -379,52 +357,9 @@ WDeckBrowser::WDeckBrowser(QWidget* pParent, Library* pLibrary, UserSettingsPoin
                         m_pPreviews->lookup(m_previewMedium, rekordboxId));
             });
 
-    // Nothing is copied for a row the selection rests on, only for a track
-    // that is loaded. A copy started for every row a DJ paused on while
-    // looking for a track queued whole files on the stick, one after another,
-    // and on a slow one those took the bandwidth that the track on the deck,
-    // and any player reading the stick over the network, needed.
-
-    m_pNetwork = std::make_unique<mixxx::prolink::ProLinkNetworkService>(
-            kDeckGroup, mixxx::prolink::ProLinkControls::instance());
-    m_pRegistry = std::make_unique<MediaRegistry>(
-            m_pLibrary->dbConnectionPool(), m_pNetwork.get(), this);
-    m_pStreamer = std::make_unique<RemoteTrackStreamer>(
-            m_pRegistry.get(), m_pNetwork.get(), m_pCache.get(), this);
-    // KEY SYNC borrows the master's key, which only the registry can tell:
-    // it is in the copy of the master's medium database the registry read.
-    // Listening before the session starts, which is when the first answer
-    // comes.
-    m_pKeySync = std::make_unique<mixxx::prolink::ProLinkKeySync>(
-            kDeckGroup, mixxx::prolink::ProLinkControls::instance());
-    connect(m_pRegistry.get(),
-            &MediaRegistry::masterKeyChanged,
-            m_pKeySync.get(),
-            [pKeySync = m_pKeySync.get()](bool otherIsMaster, int masterKeyId) {
-                pKeySync->setLink(otherIsMaster, KeyUtils::keyFromNumericValue(masterKeyId));
-            });
-    m_pRegistry->start();
-    m_pLoader = std::make_unique<DeckLoader>(kDeckGroup,
-            m_pLibrary,
-            m_pRegistry.get(),
-            m_pStreamer.get(),
-            m_pCache.get(),
-            this);
-    connect(m_pLoader.get(),
-            &DeckLoader::loadTrackToPlayer,
-            m_pLibrary,
-            &Library::slotLoadTrackToPlayer);
     // A folder track's BPM, written back: the same as its tags arriving.
-    connect(m_pLoader.get(), &DeckLoader::rowsUpdated, this, &WDeckBrowser::onMediumUpdated);
-    // Autoplay loads through the same loader as the DJ, so a track it picks
-    // is copied off its medium, announced and marked in the list exactly like
-    // one the DJ loads.
-    m_pAutoplay = std::make_unique<DeckAutoplay>(
-            m_pRegistry.get(),
-            [this]() { return database(); },
-            m_pLoader.get(),
-            this);
-    connect(m_pAutoplay.get(),
+    connect(m_pLoader, &DeckLoader::rowsUpdated, this, &WDeckBrowser::onMediumUpdated);
+    connect(m_pAutoplay,
             &DeckAutoplay::stateChanged,
             this,
             &WDeckBrowser::onAutoplayChanged);
@@ -444,48 +379,32 @@ WDeckBrowser::WDeckBrowser(QWidget* pParent, Library* pLibrary, UserSettingsPoin
         m_pTrackView->viewport()->update();
         m_pInfoPanel->reloadCover();
     });
-    connect(m_pRegistry.get(),
+    connect(m_pRegistry,
             &MediaRegistry::artworkArrived,
             this,
             [this]() {
                 m_coverRedraw.start();
             });
-    // A medium that has gone cannot be re-read, so what is cached from it is
-    // now the only copy and must not be dropped to reclaim space.
-    connect(m_pRegistry.get(),
+    // A medium that has gone: the opposite of what the track cache does with
+    // it (DeckServices), and deliberately so. A cached track is the only copy
+    // left once the stick is out, while a cached waveform is a picture of a
+    // track that can no longer be played.
+    connect(m_pRegistry,
             &MediaRegistry::mediumVanished,
             this,
             [this](mixxx::deck::MediumInfo medium) {
-                if (m_pCache) {
-                    m_pCache->markUnreachable(medium.id);
-                }
-                // The opposite call for the previews, and deliberately so: a
-                // cached track is the only copy left once the stick is out,
-                // while a cached waveform is a picture of a track that can no
-                // longer be played.
                 if (m_pPreviews) {
                     m_pPreviews->forget(medium.id);
                 }
             });
-    // And when it comes back -- the same stick, by its mount and UUID -- what
-    // is cached from it can be read again, so it is dropped to make room
-    // rather than written to the card.
-    connect(m_pRegistry.get(),
-            &MediaRegistry::mediumAppeared,
-            this,
-            [this](mixxx::deck::MediumInfo medium) {
-                if (m_pCache && medium.id.isLocal()) {
-                    m_pCache->markReachable(medium.id);
-                }
-            });
-    connect(m_pRegistry.get(),
+    connect(m_pRegistry,
             &MediaRegistry::mediaChanged,
             this,
             &WDeckBrowser::onMediaChanged);
     m_inPlaceRefresh.setSingleShot(true);
     m_inPlaceRefresh.setInterval(kInPlaceRefreshMs);
     connect(&m_inPlaceRefresh, &QTimer::timeout, this, &WDeckBrowser::refreshInPlace);
-    connect(m_pRegistry.get(),
+    connect(m_pRegistry,
             &MediaRegistry::mediumUpdated,
             this,
             &WDeckBrowser::onMediumUpdated);
@@ -578,15 +497,15 @@ WDeckBrowser::WDeckBrowser(QWidget* pParent, Library* pLibrary, UserSettingsPoin
 
     // The deck, watched. Everything below reacts to what is playing rather
     // than to the list being redrawn.
-    m_pPlayingKey = std::make_unique<ControlProxy>(kDeckGroup, QStringLiteral("key"), this);
+    m_pPlayingKey = std::make_unique<ControlProxy>(DeckServices::deckGroup(), QStringLiteral("key"), this);
     m_pPlayingKey->connectValueChanged(this, &WDeckBrowser::onPlayingKeyChanged);
     // track_loaded as well as key: unloading leaves `key` where it was, so
     // without this the colouring would linger against a track that is gone.
     m_pTrackLoaded = std::make_unique<ControlProxy>(
-            kDeckGroup, QStringLiteral("track_loaded"), this);
+            DeckServices::deckGroup(), QStringLiteral("track_loaded"), this);
     m_pTrackLoaded->connectValueChanged(this, &WDeckBrowser::onPlayingKeyChanged);
     m_pRateRange = std::make_unique<ControlProxy>(
-            kDeckGroup, QStringLiteral("rateRange"), this);
+            DeckServices::deckGroup(), QStringLiteral("rateRange"), this);
     m_pRateRange->connectValueChanged(this, &WDeckBrowser::onRateRangeChanged);
 
     m_pLevelControl = std::make_unique<ControlObject>(ConfigKey("[Browser]", "level"));
@@ -1110,8 +1029,8 @@ void WDeckBrowser::showCategory(const Level& level) {
     } else if (level.parameter == QStringLiteral("bpm")) {
         // The list opens on what the deck is playing, so the first thing under
         // the selection is what can be mixed into it right now.
-        const double playing = ControlObject::get(ConfigKey(kDeckGroup, "bpm"));
-        const double rateRange = ControlObject::get(ConfigKey(kDeckGroup, "rateRange"));
+        const double playing = ControlObject::get(ConfigKey(DeckServices::deckGroup(), "bpm"));
+        const double rateRange = ControlObject::get(ConfigKey(DeckServices::deckGroup(), "rateRange"));
         entries = bpm::buckets(db, level.medium, rateRange, playing, &anchor);
     } else {
         withCover = level.parameter == QStringLiteral("album") ||
@@ -1230,7 +1149,7 @@ void WDeckBrowser::refreshTrackColumns() {
     m_pTrackDelegate->setRowHeight(kTrackRowHeight);
     // What is loaded right now, so a compatible key can be green.
     m_pTrackDelegate->setPlayingKeyId(
-            static_cast<int>(ControlObject::get(ConfigKey(kDeckGroup, "key"))));
+            static_cast<int>(ControlObject::get(ConfigKey(DeckServices::deckGroup(), "key"))));
 }
 
 void WDeckBrowser::runSearch() {
@@ -1478,10 +1397,6 @@ void WDeckBrowser::updateInfoPanel() {
     }
 }
 
-QString WDeckBrowser::deckGroup() {
-    return kDeckGroup;
-}
-
 void WDeckBrowser::onDeckEmpty() {
     m_pLoader->onDeckEmpty();
     onPlayingKeyChanged();
@@ -1529,7 +1444,7 @@ void WDeckBrowser::onPlayingKeyChanged() {
     // in it should be compared against -- and rebuilding would lose the
     // selection and the scroll position mid-browse.
     m_pTrackDelegate->setPlayingKeyId(
-            static_cast<int>(ControlObject::get(ConfigKey(kDeckGroup, "key"))));
+            static_cast<int>(ControlObject::get(ConfigKey(DeckServices::deckGroup(), "key"))));
     m_pTrackView->viewport()->update();
 }
 

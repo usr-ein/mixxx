@@ -10,6 +10,8 @@ class BaseSqlTableModel;
 namespace mixxx {
 namespace deck {
 
+class MediaRegistry;
+
 /// Paints every menu row: sources, categories, values, playlists, folders.
 ///
 /// One delegate rather than five, because they differ only in which of the four
@@ -18,7 +20,9 @@ class MenuRowDelegate : public QStyledItemDelegate {
     Q_OBJECT
 
   public:
-    explicit MenuRowDelegate(QObject* pParent = nullptr);
+    /// A cover not on disk yet is asked of *pRegistry*, used and not owned;
+    /// null for a menu that draws none.
+    explicit MenuRowDelegate(MediaRegistry* pRegistry, QObject* pParent = nullptr);
 
     void setRowHeight(int height) {
         m_rowHeight = height;
@@ -44,6 +48,7 @@ class MenuRowDelegate : public QStyledItemDelegate {
     /// every encoder detent and decoding a JPEG per row per detent is visible.
     QPixmap coverFor(const QStringList& paths, int size) const;
 
+    MediaRegistry* const m_pRegistry;
     int m_rowHeight = 80;
     /// The selected row: this deck's accent (deckaccent.h).
     const QColor m_selected;
@@ -58,7 +63,8 @@ class TrackRowDelegate : public QStyledItemDelegate {
     Q_OBJECT
 
   public:
-    explicit TrackRowDelegate(QObject* pParent = nullptr);
+    /// A cover not on disk yet is asked of *pRegistry*, used and not owned.
+    explicit TrackRowDelegate(MediaRegistry* pRegistry, QObject* pParent = nullptr);
 
     void setRowHeight(int height) {
         m_rowHeight = height;
@@ -121,6 +127,7 @@ class TrackRowDelegate : public QStyledItemDelegate {
   private:
     QPixmap coverFor(const QString& path, int size) const;
 
+    MediaRegistry* const m_pRegistry;
     int m_rowHeight = 72;
     int m_playingKeyId = 0;
     int m_loadedTrackId = -1;

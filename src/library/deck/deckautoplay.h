@@ -42,19 +42,15 @@ class DeckAutoplay : public QObject {
     Q_OBJECT
 
   public:
-    /// *pLoader* puts its picks on the deck, and starts them
-    /// (DeckLoader::loadLibraryRow()). Used and not owned, like *pRegistry*.
-    DeckAutoplay(MediaRegistry* pRegistry,
+    /// *deckGroup* is the deck it plays on. *pLoader* puts its picks there,
+    /// and starts them (DeckLoader::loadLibraryRow()). Used and not owned,
+    /// like *pRegistry*.
+    DeckAutoplay(const QString& deckGroup,
+            MediaRegistry* pRegistry,
             std::function<QSqlDatabase()> database,
             DeckLoader* pLoader,
             QObject* pParent = nullptr);
     ~DeckAutoplay() override;
-
-    /// The one that exists, or null before the browser is built. The badge
-    /// over the waveform and the toasts are built before the browser, so they
-    /// ask with whenReady(), exactly as they do for the MediaRegistry.
-    static DeckAutoplay* instance();
-    static void whenReady(QObject* pContext, std::function<void(DeckAutoplay*)> callback);
 
     bool isOn() const {
         return m_state != State::Off;

@@ -6,19 +6,44 @@
 #include "controllers/controllerlearningeventfilter.h"
 #include "controllers/controllermanager.h"
 #include "controllers/keyboard/keyboardeventfilter.h"
+#include "library/deck/deckservices.h"
 #include "mixer/basetrackplayer.h"
 #include "mixer/playermanager.h"
 #include "skin/legacy/skincontext.h"
+#include "util/assert.h"
 #include "widget/deck/wdeckautoplaybadge.h"
 #include "widget/deck/wdeckbrowser.h"
 #include "widget/deck/wdecktoast.h"
 #include "widget/wprolinkphasemeter.h"
 #include "widget/wtempopanel.h"
 
+namespace {
+const QStringList kDeckNodes = {
+        QStringLiteral("DeckBrowser"),
+        QStringLiteral("DeckToast"),
+        QStringLiteral("DeckAutoplay"),
+        QStringLiteral("ProLinkPhaseMeter"),
+        QStringLiteral("TempoPanel"),
+};
+} // namespace
+
 QWidget* LegacySkinParser::parseDeckNode(const QDomElement& node) {
     const QString nodeName = node.tagName();
+    if (!kDeckNodes.contains(nodeName)) {
+        return nullptr;
+    }
+    // The deck's services start with the skin's first deck node, in the skin
+    // parse that builds every widget they are handed to: each connects before
+    // anything is read, polled or fetched. Later calls find them started.
+    mixxx::deck::DeckServices* pServices = mixxx::deck::DeckServices::instance();
+    VERIFY_OR_DEBUG_ASSERT(pServices) {
+        return nullptr;
+    }
+    pServices->start(m_pLibrary, m_pConfig);
+
     if (nodeName == "DeckBrowser") {
-        auto* pBrowser = new mixxx::deck::WDeckBrowser(m_pParent, m_pLibrary, m_pConfig);
+        auto* pBrowser = new mixxx::deck::WDeckBrowser(
+                m_pParent, m_pLibrary, m_pConfig, pServices);
         commonWidgetSetup(node, pBrowser);
         pBrowser->setup(node, *m_pContext);
         pBrowser->installEventFilter(m_pKeyboard);
@@ -31,7 +56,7 @@ QWidget* LegacySkinParser::parseDeckNode(const QDomElement& node) {
         // track_loaded watcher could not tell apart.
         if (m_pPlayerManager) {
             if (BaseTrackPlayer* pDeck = m_pPlayerManager->getPlayer(
-                        mixxx::deck::WDeckBrowser::deckGroup())) {
+                        mixxx::deck::DeckServices::deckGroup())) {
                 connect(pDeck,
                         &BaseTrackPlayer::playerEmpty,
                         pBrowser,
@@ -41,7 +66,7 @@ QWidget* LegacySkinParser::parseDeckNode(const QDomElement& node) {
         return pBrowser;
     }
     if (nodeName == "DeckToast") {
-        auto* pToast = new mixxx::deck::WDeckToast(m_pParent);
+        auto* pToast = new mixxx::deck::WDeckToast(m_pParent, pServices);
         commonWidgetSetup(node, pToast);
         pToast->setup(node, *m_pContext);
         // A track that will not load is said here rather than in Mixxx's modal
@@ -63,7 +88,7 @@ QWidget* LegacySkinParser::parseDeckNode(const QDomElement& node) {
         return pToast;
     }
     if (nodeName == "DeckAutoplay") {
-        auto* pBadge = new mixxx::deck::WDeckAutoplayBadge(m_pParent);
+        auto* pBadge = new mixxx::deck::WDeckAutoplayBadge(m_pParent, pServices->autoplay());
         commonWidgetSetup(node, pBadge);
         pBadge->setup(node, *m_pContext);
         // Like the toast, it takes no input, so no keyboard filter either.

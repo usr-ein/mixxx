@@ -17,6 +17,7 @@
 #include "effects/effectsmanager.h"
 #include "engine/enginemixer.h"
 #include "library/coverartcache.h"
+#include "library/deck/deckservices.h"
 #include "library/library.h"
 #include "library/library_prefs.h"
 #include "library/trackcollection.h"
@@ -486,7 +487,7 @@ void CoreServices::initialize(QApplication* pApp) {
     }
 
     // Before anything that might parse a skin. See ProLinkControls.
-    m_pProLinkControls = std::make_unique<mixxx::prolink::ProLinkControls>();
+    m_pDeckServices = std::make_unique<mixxx::deck::DeckServices>();
 
     m_pControlIndicatorTimer = std::make_shared<mixxx::ControlIndicatorTimer>(this);
 
@@ -791,6 +792,10 @@ void CoreServices::finalize() {
     Timer t("CoreServices::~CoreServices");
     t.start();
 
+    // The deck's services first: the skin that showed them is gone, and they
+    // use the library, the players and the database, which go below.
+    m_pDeckServices->stop();
+
     // Stop all pending library operations
     qDebug() << t.elapsed(false).debugMillisWithUnit() << "stopping pending Library tasks";
     m_pTrackCollectionManager->stopLibraryScan();
@@ -876,7 +881,7 @@ void CoreServices::finalize() {
     m_pSkinControls.reset();
 
     m_pControlIndicatorTimer.reset();
-    m_pProLinkControls.reset();
+    m_pDeckServices.reset();
 
     t.elapsed(true);
 }

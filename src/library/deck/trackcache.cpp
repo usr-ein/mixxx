@@ -55,16 +55,10 @@ constexpr qint64 kMaxRestNs = 1000LL * 1000 * 1000;
 
 QAtomicInt s_chunkDelayMs;
 QAtomicInteger<qint64> s_leadBytes;
-
-mixxx::deck::TrackCache* s_pInstance = nullptr;
 } // namespace
 
 namespace mixxx {
 namespace deck {
-
-TrackCache* TrackCache::instance() {
-    return s_pInstance;
-}
 
 QString TrackCache::diskTierRoot() {
     return QDir(QStandardPaths::writableLocation(QStandardPaths::CacheLocation))
@@ -81,8 +75,6 @@ void TrackCache::setLeadForTest(qint64 bytes) {
 
 TrackCache::TrackCache(QObject* pParent)
         : QObject(pParent) {
-    s_pInstance = this;
-
     // One at a time: the bottleneck is the USB bus, and parallel copies just
     // make the stick seek. See the member's declaration for the other, more
     // important reason this pool is ours.
@@ -155,10 +147,6 @@ TrackCache::~TrackCache() {
     for (const Copy& copy : std::as_const(m_copies)) {
         copy.stream->fail(QStringLiteral("Mixxx is shutting down"));
         StreamingFileRegistry::remove(copy.localPath);
-    }
-
-    if (s_pInstance == this) {
-        s_pInstance = nullptr;
     }
 }
 

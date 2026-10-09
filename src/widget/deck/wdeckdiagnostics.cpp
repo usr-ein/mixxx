@@ -129,8 +129,13 @@ QHash<QString, QString> keyValues(const QString& text) {
 namespace mixxx {
 namespace deck {
 
-WDeckDiagnostics::WDeckDiagnostics(const QString& settingsPath, QWidget* pParent)
+WDeckDiagnostics::WDeckDiagnostics(const QString& settingsPath,
+        MediaRegistry* pRegistry,
+        TrackCache* pCache,
+        QWidget* pParent)
         : QTextBrowser(pParent),
+          m_pRegistry(pRegistry),
+          m_pCache(pCache),
           m_accent(deckAccent().name()),
           // Built with the page, so the levels saved last time are back on the
           // output and the panel as soon as the skin loads, not when someone
@@ -504,9 +509,8 @@ QString WDeckDiagnostics::html() const {
 
     // ---- media -------------------------------------------------------------
     out += QStringLiteral("<h2>Media</h2><table>");
-    MediaRegistry* pRegistry = MediaRegistry::instance();
-    if (pRegistry) {
-        for (const MediumInfo& medium : pRegistry->media()) {
+    if (m_pRegistry) {
+        for (const MediumInfo& medium : m_pRegistry->media()) {
             QString state;
             switch (medium.state) {
             case MediumInfo::State::Reading: state = tr("reading"); break;
@@ -524,7 +528,7 @@ QString WDeckDiagnostics::html() const {
                             .arg(medium.playlistCount)
                             .arg(state));
         }
-        if (pRegistry->media().isEmpty()) {
+        if (m_pRegistry->media().isEmpty()) {
             out += row(tr("Media"), tr("none"));
         }
     }
@@ -535,8 +539,8 @@ QString WDeckDiagnostics::html() const {
     // A phantom row is the one worth spotting: it means a stick has been pulled
     // while a player was still playing off it, and that player is now being fed
     // from a copy in RAM. It should clear itself when the player moves on.
-    if (pRegistry) {
-        const mixxx::prolink::ServeStatus serve = pRegistry->serveStatus();
+    if (m_pRegistry) {
+        const mixxx::prolink::ServeStatus serve = m_pRegistry->serveStatus();
         if (serve.active && (!serve.media.isEmpty() || !serve.consumers.isEmpty())) {
             out += QStringLiteral("<h2>Serving</h2><table>");
             out += row(tr("As player"), QString::number(serve.deviceNumber));
@@ -601,17 +605,16 @@ QString WDeckDiagnostics::html() const {
                               .arg(RamStore::root().toHtmlEscaped(), bytes(storeFree))
                     : QStringLiteral("%1 — %2 free")
                               .arg(RamStore::root().toHtmlEscaped(), bytes(storeFree)));
-    TrackCache* pCache = TrackCache::instance();
-    if (pCache) {
-        out += row(tr("In RAM"), bytes(pCache->bytesInRam()));
-        out += row(tr("On disk"), bytes(pCache->bytesOnDisk()));
+    if (m_pCache) {
+        out += row(tr("In RAM"), bytes(m_pCache->bytesInRam()));
+        out += row(tr("On disk"), bytes(m_pCache->bytesOnDisk()));
         // The number that says whether the whole tiering scheme is holding. It
         // should read zero on a normal night.
         out += row(tr("Written to card"),
-                pCache->bytesWrittenToDisk() == 0
+                m_pCache->bytesWrittenToDisk() == 0
                         ? QStringLiteral("none")
                         : QStringLiteral("<span class='warn'>%1</span>")
-                                  .arg(bytes(pCache->bytesWrittenToDisk())));
+                                  .arg(bytes(m_pCache->bytesWrittenToDisk())));
     }
     out += QStringLiteral("</table>");
 

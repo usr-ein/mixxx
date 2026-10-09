@@ -12,6 +12,9 @@
 namespace mixxx {
 namespace deck {
 
+class DeckServices;
+class TrackCache;
+
 /// A media event, said out loud in the corner (browser-prd.md 13).
 ///
 /// Lives at the top of the skin's stack rather than inside the browser, because
@@ -27,7 +30,9 @@ class WDeckToast : public QWidget, public WBaseWidget {
     Q_OBJECT
 
   public:
-    explicit WDeckToast(QWidget* pParent);
+    /// What it says comes from *pServices*: the media's news, autoplay's,
+    /// and what is served and cached.
+    WDeckToast(QWidget* pParent, DeckServices* pServices);
 
     void setup(const QDomNode& node, const SkinContext& context);
 
@@ -56,6 +61,8 @@ class WDeckToast : public QWidget, public WBaseWidget {
         QString text;
         QString key;
     };
+    MediaRegistry* const m_pRegistry;
+    TrackCache* const m_pCache;
     QList<Toast> m_toasts;
     QTimer m_tick;
 };

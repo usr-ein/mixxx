@@ -1,10 +1,7 @@
 #include "network/prolink/prolinkcontrols.h"
 
-#include "util/assert.h"
 
 namespace {
-mixxx::prolink::ProLinkControls* s_pInstance = nullptr;
-
 const QString kGroup = QStringLiteral("[ProLink]");
 
 ConfigKey key(const char* item) {
@@ -14,10 +11,6 @@ ConfigKey key(const char* item) {
 
 namespace mixxx {
 namespace prolink {
-
-/*static*/ ProLinkControls* ProLinkControls::instance() {
-    return s_pInstance;
-}
 
 ProLinkControls::ProLinkControls() {
     m_pPullDb = std::make_unique<ControlPushButton>(key("pull_db"));
@@ -67,18 +60,9 @@ ProLinkControls::ProLinkControls() {
     // lives (the fork never writes the file back, so it is set there).
     m_pPhaseTrimMs = std::make_unique<ControlObject>(
             key("phase_trim_ms"), true, false, true, 0.0);
-
-    VERIFY_OR_DEBUG_ASSERT(s_pInstance == nullptr) {
-        return;
-    }
-    s_pInstance = this;
 }
 
-ProLinkControls::~ProLinkControls() {
-    if (s_pInstance == this) {
-        s_pInstance = nullptr;
-    }
-}
+ProLinkControls::~ProLinkControls() = default;
 
 } // namespace prolink
 } // namespace mixxx

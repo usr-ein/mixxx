@@ -18,21 +18,20 @@ constexpr int kMaxEntries = 4096;
 namespace mixxx {
 namespace deck {
 
-PreviewWaveformCache::PreviewWaveformCache(QObject* pParent)
-        : QObject(pParent) {
+PreviewWaveformCache::PreviewWaveformCache(MediaRegistry* pRegistry, QObject* pParent)
+        : QObject(pParent),
+          m_pRegistry(pRegistry) {
     // One thread, and ours. See the header: the stick is the contended
     // resource, and four readers of one stick is slower than one.
     m_pool.setMaxThreadCount(1);
 
-    // Remote previews come back through the registry. whenReady() rather than
-    // instance(), because construction order in a file skin authors edit is not
-    // something to rely on -- relying on it cost the toasts entirely once.
-    MediaRegistry::whenReady(this, [this](MediaRegistry* pRegistry) {
-        connect(pRegistry,
+    // Remote previews come back through the registry.
+    if (m_pRegistry) {
+        connect(m_pRegistry,
                 &MediaRegistry::previewArrived,
                 this,
                 &PreviewWaveformCache::onRemoteArrived);
-    });
+    }
 }
 
 PreviewWaveformCache::~PreviewWaveformCache() {
@@ -73,8 +72,8 @@ void PreviewWaveformCache::request(
         // GET_WAVEFORM_PREVIEW with PWAV and nothing else, and the colour
         // preview is behind a request nothing in lib/prolink implements yet.
         m_inFlight.insert(key);
-        if (MediaRegistry* pRegistry = MediaRegistry::instance()) {
-            pRegistry->requestPreview(medium, rekordboxId);
+        if (m_pRegistry) {
+            m_pRegistry->requestPreview(medium, rekordboxId);
         } else {
             store(key, medium.key(), rekordboxId, PreviewWaveform());
         }

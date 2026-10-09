@@ -9,6 +9,8 @@
 namespace mixxx {
 namespace deck {
 
+class DeckAutoplay;
+
 /// "AUTOPLAY" and its genre, over the waveform, while autoplay is on.
 ///
 /// In the bottom-left corner, as the tempo box is in the bottom-right and in
@@ -24,7 +26,8 @@ class WDeckAutoplayBadge : public QWidget, public WBaseWidget {
     Q_OBJECT
 
   public:
-    explicit WDeckAutoplayBadge(QWidget* pParent);
+    /// Says what *pAutoplay* is doing; used and not owned.
+    WDeckAutoplayBadge(QWidget* pParent, DeckAutoplay* pAutoplay);
 
     void setup(const QDomNode& node, const SkinContext& context);
 
@@ -35,6 +38,7 @@ class WDeckAutoplayBadge : public QWidget, public WBaseWidget {
     void showEvent(QShowEvent* pEvent) override;
 
   private:
+    DeckAutoplay* const m_pAutoplay;
     /// This deck's accent (deckaccent.h): autoplay being on is something live.
     const QColor m_accent;
 };

@@ -16,6 +16,8 @@ namespace mixxx {
 namespace deck {
 
 class DeckLevels;
+class MediaRegistry;
+class TrackCache;
 
 /// Everything needed to work out why the deck is misbehaving, on one page.
 ///
@@ -42,7 +44,11 @@ class WDeckDiagnostics : public QTextBrowser, public DeckPage {
   public:
     /// *settingsPath* is the directory holding mixxx.cfg, where the levels set
     /// here are kept.
-    explicit WDeckDiagnostics(const QString& settingsPath, QWidget* pParent = nullptr);
+    /// *pRegistry* and *pCache* are reported on, and used and not owned.
+    WDeckDiagnostics(const QString& settingsPath,
+            MediaRegistry* pRegistry,
+            TrackCache* pCache,
+            QWidget* pParent = nullptr);
     ~WDeckDiagnostics() override;
 
     /// Start and stop sampling with visibility. A page nobody is looking at has
@@ -102,6 +108,8 @@ class WDeckDiagnostics : public QTextBrowser, public DeckPage {
     /// A history rendered with block characters, oldest to newest.
     static QString sparkline(const QList<double>& history, double max);
 
+    MediaRegistry* const m_pRegistry;
+    TrackCache* const m_pCache;
     /// This deck's accent (deckaccent.h), as the CSS colour the page's
     /// headings and sparklines are drawn in.
     const QString m_accent;

@@ -247,17 +247,13 @@ void ProLinkSync::sessionStopped() {
     // the meter drawing the last master it had seen, frozen, under that deck's
     // number; MASTER lit for a claim the closed session no longer held; and
     // SYNC following a tempo nobody was playing.
-    //
-    // Checked against instance() rather than m_pControls, because this also
-    // runs from the service's destructor, and the controls may have gone
-    // first.
     m_masterSince.invalidate();
     m_alignWhenTempoMatches = false;
     // A deck left playing a touch fast for a network that is gone.
     setPhaseTrim(0.0);
     m_autoClaimed = false;
     m_eligibleForAutoClaim.invalidate();
-    if (m_pControls && ProLinkControls::instance() == m_pControls) {
+    if (m_pControls) {
         clearMaster();
     }
 }

@@ -24,20 +24,18 @@ constexpr int kMaxGenreWidth = 320;
 namespace mixxx {
 namespace deck {
 
-WDeckAutoplayBadge::WDeckAutoplayBadge(QWidget* pParent)
+WDeckAutoplayBadge::WDeckAutoplayBadge(QWidget* pParent, DeckAutoplay* pAutoplay)
         : QWidget(pParent),
           WBaseWidget(this),
+          m_pAutoplay(pAutoplay),
           m_accent(deckAccent()) {
     setObjectName(QStringLiteral("DeckAutoplayBadge"));
     setAttribute(Qt::WA_TransparentForMouseEvents, true);
-    // Built before the browser that owns autoplay -- the deck view comes first
-    // in the skin -- so it subscribes for when there is one.
-    DeckAutoplay::whenReady(this, [this](DeckAutoplay* pAutoplay) {
-        connect(pAutoplay, &DeckAutoplay::stateChanged, this, [this]() {
+    if (m_pAutoplay) {
+        connect(m_pAutoplay, &DeckAutoplay::stateChanged, this, [this]() {
             update();
         });
-        update();
-    });
+    }
 }
 
 void WDeckAutoplayBadge::setup(const QDomNode& node, const SkinContext& context) {
@@ -52,8 +50,7 @@ void WDeckAutoplayBadge::showEvent(QShowEvent* pEvent) {
 
 void WDeckAutoplayBadge::paintEvent(QPaintEvent* pEvent) {
     Q_UNUSED(pEvent);
-    const DeckAutoplay* pAutoplay = DeckAutoplay::instance();
-    if (!pAutoplay || !pAutoplay->isOn()) {
+    if (!m_pAutoplay || !m_pAutoplay->isOn()) {
         return;
     }
     QPainter painter(this);
@@ -71,7 +68,7 @@ void WDeckAutoplayBadge::paintEvent(QPaintEvent* pEvent) {
     genreFont.setPixelSize(22);
     const QFontMetrics genreMetrics(genreFont);
     const QString genre = genreMetrics.elidedText(
-            pAutoplay->genreTitle(), Qt::ElideRight, kMaxGenreWidth);
+            m_pAutoplay->genreTitle(), Qt::ElideRight, kMaxGenreWidth);
 
     const int contentWidth = std::max(labelMetrics.horizontalAdvance(label),
             genreMetrics.horizontalAdvance(genre));
