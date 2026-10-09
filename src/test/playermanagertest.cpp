@@ -38,6 +38,17 @@ void waitForTrackToBeLoaded(Deck* pDeck) {
     }
 }
 
+/// Whether the deck's engine has *pTrack* loaded within five seconds. Bounded,
+/// unlike waitForTrackToBeLoaded(): a load that never lands fails the test
+/// instead of hanging it.
+bool engineLoads(Deck* pDeck, const TrackPointer& pTrack) {
+    EngineBuffer* pBuffer = pDeck->getEngineDeck()->getEngineBuffer();
+    for (int i = 0; i < 100 && pBuffer->getLoadedTrack() != pTrack; ++i) {
+        QTest::qSleep(50);
+    }
+    return pBuffer->getLoadedTrack() == pTrack;
+}
+
 } // namespace
 
 // We can't inherit from LibraryTest because that creates a key_notation control object that is also
@@ -222,9 +233,11 @@ TEST_F(PlayerManagerTest, DoubleTapWithNoDeckToCloneLoads) {
     // Every other deck is empty.
     m_pPlayerManager->slotLoadTrackToPlayer(pTrack1, deck1->getGroup(), false);
     m_pPlayerManager->slotLoadTrackToPlayer(pTrack2, deck1->getGroup(), false);
+    m_pEngine->process(1024);
 
     ASSERT_NE(nullptr, deck1->getLoadedTrack());
     EXPECT_EQ(pTrack2->getId(), deck1->getLoadedTrack()->getId());
+    EXPECT_TRUE(engineLoads(deck1, pTrack2));
 }
 
 // The same double tap with a deck to clone still clones it.
@@ -240,14 +253,16 @@ TEST_F(PlayerManagerTest, DoubleTapClonesADeckWithATrack) {
     ASSERT_TRUE(pTrack2->trySetBpm(120.0));
     deck2->slotLoadTrack(pTrack2, false);
     m_pEngine->process(1024);
-    waitForTrackToBeLoaded(deck2);
+    ASSERT_TRUE(engineLoads(deck2, pTrack2));
     m_pEngine->process(1024);
 
     m_pPlayerManager->slotLoadTrackToPlayer(pTrack1, deck1->getGroup(), false);
     m_pPlayerManager->slotLoadTrackToPlayer(pTrack1, deck1->getGroup(), false);
+    m_pEngine->process(1024);
 
     ASSERT_NE(nullptr, deck1->getLoadedTrack());
     EXPECT_EQ(pTrack2->getId(), deck1->getLoadedTrack()->getId());
+    EXPECT_TRUE(engineLoads(deck1, pTrack2));
 }
 
 TEST_F(PlayerManagerTest, UnReplaceTest) {
