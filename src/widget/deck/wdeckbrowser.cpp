@@ -1703,6 +1703,9 @@ void WDeckBrowser::onActivated(int row) {
         break;
     }
     case Level::Kind::Tracks:
+    case Level::Kind::Search:
+    case Level::Kind::Diagnostics:
+        // A track list is handled above, and Diagnostics has no menu rows.
         break;
     }
 }

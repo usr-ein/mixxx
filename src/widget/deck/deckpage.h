@@ -25,7 +25,7 @@ class DeckPage {
     virtual ~DeckPage() = default;
 
     /// Encoder detents. Positive is clockwise.
-    virtual bool handleMove(int steps) {
+    virtual bool handleMove(int /*steps*/) {
         return false;
     }
 

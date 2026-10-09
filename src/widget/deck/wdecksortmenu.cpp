@@ -27,8 +27,8 @@ const QList<WDeckSortMenu::Field>& WDeckSortMenu::fields() {
     // additions, the highest rating, and the tracks most recently played are
     // what those columns are consulted for.
     static const QList<Field> kFields = {
-            {QStringLiteral("Default"), QString(), false},
-            {QStringLiteral("BPM"), LIBRARYTABLE_BPM, false},
+            {QStringLiteral("Default"), QString(), false, QString()},
+            {QStringLiteral("BPM"), LIBRARYTABLE_BPM, false, QString()},
             // Sorts on the stored Camelot index, not key_id -- key_id is
             // Mixxx's ChromaticKey enum, and sorting on it gives 11A, 6A,
             // 1A. Displays the key text regardless.
@@ -36,15 +36,15 @@ const QList<WDeckSortMenu::Field>& WDeckSortMenu::fields() {
                     QStringLiteral("camelot_order"),
                     false,
                     LIBRARYTABLE_KEY},
-            {QStringLiteral("Title"), LIBRARYTABLE_TITLE, false},
-            {QStringLiteral("Artist"), LIBRARYTABLE_ARTIST, false},
-            {QStringLiteral("Genre"), LIBRARYTABLE_GENRE, false},
-            {QStringLiteral("Album"), LIBRARYTABLE_ALBUM, false},
-            {QStringLiteral("Date added"), LIBRARYTABLE_DATETIMEADDED, true},
-            {QStringLiteral("Label"), QStringLiteral("label"), false},
-            {QStringLiteral("Year"), LIBRARYTABLE_YEAR, false},
-            {QStringLiteral("Duration"), LIBRARYTABLE_DURATION, false},
-            {QStringLiteral("Rating"), LIBRARYTABLE_RATING, true},
+            {QStringLiteral("Title"), LIBRARYTABLE_TITLE, false, QString()},
+            {QStringLiteral("Artist"), LIBRARYTABLE_ARTIST, false, QString()},
+            {QStringLiteral("Genre"), LIBRARYTABLE_GENRE, false, QString()},
+            {QStringLiteral("Album"), LIBRARYTABLE_ALBUM, false, QString()},
+            {QStringLiteral("Date added"), LIBRARYTABLE_DATETIMEADDED, true, QString()},
+            {QStringLiteral("Label"), QStringLiteral("label"), false, QString()},
+            {QStringLiteral("Year"), LIBRARYTABLE_YEAR, false, QString()},
+            {QStringLiteral("Duration"), LIBRARYTABLE_DURATION, false, QString()},
+            {QStringLiteral("Rating"), LIBRARYTABLE_RATING, true, QString()},
     };
     return kFields;
 }

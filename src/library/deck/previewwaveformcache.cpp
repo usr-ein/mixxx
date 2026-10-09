@@ -1,7 +1,5 @@
 #include "library/deck/previewwaveformcache.h"
 
-#include <QtConcurrentRun>
-
 #include "library/deck/mediaregistry.h"
 #include "library/rekordbox/rekordboxanlz.h"
 #include "util/logger.h"
@@ -90,7 +88,7 @@ void PreviewWaveformCache::request(
     const int generation = m_generation.loadRelaxed();
     const QString mediumKey = medium.key();
 
-    QtConcurrent::run(&m_pool,
+    m_pool.start(
             [this, key, mediumKey, rekordboxId, analyzePath, generation]() {
                 // Checked before the read rather than after: the point is to
                 // not touch the stick for a row nobody is looking at any more.
