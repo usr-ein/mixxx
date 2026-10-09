@@ -59,6 +59,7 @@
 #include "widget/wnumberpos.h"
 #include "widget/wnumberrate.h"
 #include "widget/woverview.h"
+#include "widget/deck/wdeckautoplaybadge.h"
 #include "widget/deck/wdeckbrowser.h"
 #include "widget/deck/wdecktoast.h"
 #include "widget/wprolinkphasemeter.h"
@@ -546,6 +547,8 @@ QList<QWidget*> LegacySkinParser::parseNode(const QDomElement& node) {
         result = wrapWidget(parseDeckBrowser(node));
     } else if (nodeName == "DeckToast") {
         result = wrapWidget(parseDeckToast(node));
+    } else if (nodeName == "DeckAutoplay") {
+        result = wrapWidget(parseDeckAutoplayBadge(node));
     } else if (nodeName == "ProLinkPhaseMeter") {
         result = wrapWidget(parseProLinkPhaseMeter(node));
     } else if (nodeName == "Visual") {
@@ -1103,6 +1106,15 @@ QWidget* LegacySkinParser::parseDeckBrowser(const QDomElement& node) {
         }
     }
     return pBrowser;
+}
+
+QWidget* LegacySkinParser::parseDeckAutoplayBadge(const QDomElement& node) {
+    auto* pBadge = new mixxx::deck::WDeckAutoplayBadge(m_pParent);
+    commonWidgetSetup(node, pBadge);
+    pBadge->setup(node, *m_pContext);
+    // Like the toast, it takes no input, so no keyboard filter either.
+    pBadge->Init();
+    return pBadge;
 }
 
 QWidget* LegacySkinParser::parseDeckToast(const QDomElement& node) {

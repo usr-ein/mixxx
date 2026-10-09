@@ -8,6 +8,7 @@
 #include "library/deck/trackcache.h"
 #include "track/track.h"
 #include "util/logger.h"
+#include "widget/deck/deckautoplay.h"
 
 namespace {
 const mixxx::Logger kLogger("DeckToast");
@@ -69,6 +70,13 @@ WDeckToast::WDeckToast(QWidget* pParent)
         connect(pRegistry, &MediaRegistry::mediumVanished, this, &WDeckToast::onVanished);
         connect(pRegistry, &MediaRegistry::mediumFailed, this, &WDeckToast::onFailed);
         connect(pRegistry, &MediaRegistry::mediumNotice, this, &WDeckToast::onNotice);
+    });
+    // Autoplay's news: why it went off, when the DJ did not turn it off. One
+    // at a time, the newest replacing an earlier one still up.
+    DeckAutoplay::whenReady(this, [this](DeckAutoplay* pAutoplay) {
+        connect(pAutoplay, &DeckAutoplay::notice, this, [this](const QString& text) {
+            show(text, true, QStringLiteral("#autoplay"));
+        });
     });
 }
 

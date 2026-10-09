@@ -169,6 +169,29 @@ void paintMark(QPainter* pPainter,
                 ring.center().x(), ring.center().y() - size / 8);
         break;
     }
+    case Mark::Autoplay: {
+        // Play, going round: a play triangle inside an arrow that comes back
+        // to where it started.
+        const QRect ring = box.adjusted(size / 6, size / 6, -size / 6, -size / 6);
+        pPainter->drawArc(ring, 60 * 16, 300 * 16);
+        // The arrowhead, where the arc ends at three o'clock, heading up.
+        const QPoint tip(ring.right(), ring.center().y() - size / 8);
+        pPainter->drawLine(tip, tip + QPoint(-size / 8, size / 8));
+        pPainter->drawLine(tip, tip + QPoint(size / 8, size / 8));
+        const QPoint c = ring.center();
+        QPolygon play;
+        play << QPoint(c.x() - size / 10, c.y() - size / 7)
+             << QPoint(c.x() - size / 10, c.y() + size / 7)
+             << QPoint(c.x() + size / 7, c.y());
+        pPainter->drawPolygon(play);
+        break;
+    }
+    case Mark::Stop: {
+        // Solid, unlike every other mark: it is the one that ends something.
+        pPainter->setBrush(colour);
+        pPainter->drawRect(box.adjusted(size / 3, size / 3, -size / 3, -size / 3));
+        break;
+    }
     case Mark::None:
         break;
     }

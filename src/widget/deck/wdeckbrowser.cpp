@@ -33,6 +33,7 @@
 #include "moc_wdeckbrowser.cpp"
 #include "util/logger.h"
 #include "widget/deck/deckaccent.h"
+#include "widget/deck/deckautoplay.h"
 #include "widget/deck/deckbezel.h"
 #include "widget/deck/deckdelegates.h"
 #include "widget/deck/decklistview.h"
@@ -398,6 +399,18 @@ WDeckBrowser::WDeckBrowser(QWidget* pParent, Library* pLibrary, UserSettingsPoin
     // and any player reading the stick over the network, needed.
 
     m_pRegistry = std::make_unique<MediaRegistry>(m_pLibrary->dbConnectionPool(), this);
+    // Autoplay loads through the browser's own load path, so a track it picks
+    // is copied off its medium, announced and marked in the list exactly like
+    // one the DJ loads.
+    m_pAutoplay = std::make_unique<DeckAutoplay>(
+            m_pRegistry.get(),
+            [this]() { return database(); },
+            [this](int rowId) { return loadLibraryRow(rowId); },
+            this);
+    connect(m_pAutoplay.get(),
+            &DeckAutoplay::stateChanged,
+            this,
+            &WDeckBrowser::onAutoplayChanged);
     // A cover asked for while a row was being drawn has landed. Both delegates
     // cached the grey placeholder they drew in its place, so the caches have to
     // go before the redraw -- otherwise the square stays grey and the fetch
@@ -668,6 +681,9 @@ void WDeckBrowser::rebuildCurrentLevel() {
         m_pStack->setCurrentWidget(m_pDiagnostics);
         m_pDiagnostics->setFocus();
         break;
+    case Level::Kind::Autoplay:
+        showAutoplay(level);
+        break;
     }
     // Sampling follows visibility: a page nobody is looking at has no business
     // reading /proc once a second.
@@ -735,17 +751,27 @@ void WDeckBrowser::updateBreadcrumb() {
 }
 
 void WDeckBrowser::onMediaChanged() {
-    // Only level 0 shows media directly. Deeper levels are left alone unless
-    // the medium they belong to has gone, in which case there is nothing to
-    // show and the stack unwinds to the root.
-    if (m_stack.size() == 1) {
+    // Deeper levels are left alone unless the medium they belong to has gone,
+    // in which case there is nothing to show and the stack unwinds to the
+    // last level above it -- the root, or Autoplay's list of drives.
+    for (int i = 1; i < m_stack.size(); ++i) {
+        const MediumId& medium = m_stack.at(i).medium;
+        if (medium.isValid() && m_pRegistry->indexOf(medium) < 0) {
+            while (m_stack.size() > i) {
+                m_stack.removeLast();
+            }
+            rebuildCurrentLevel();
+            return;
+        }
+    }
+    if (m_stack.isEmpty()) {
         showSources();
         return;
     }
-    if (m_stack.size() > 1 && m_pRegistry->indexOf(m_stack.at(1).medium) < 0) {
-        while (m_stack.size() > 1) {
-            m_stack.removeLast();
-        }
+    // The two levels that list the media themselves, on the row they were on.
+    const Level::Kind kind = m_stack.last().kind;
+    if (kind == Level::Kind::Sources || kind == Level::Kind::Autoplay) {
+        m_stack.last().selectedRow = m_pMenuView->selectedRow();
         rebuildCurrentLevel();
     }
 }
@@ -867,47 +893,10 @@ void WDeckBrowser::showSources() {
     }
 
     QList<MenuRow> rows;
+    bool anyEnterable = false;
     for (const MediumInfo& medium : m_pRegistry->media()) {
-        MenuRow row;
-        const bool linked = !medium.id.isLocal();
-        if (medium.kind == MediumInfo::Kind::Sd) {
-            row.mark = linked ? MenuRow::Mark::SdLinked : MenuRow::Mark::Sd;
-        } else {
-            row.mark = linked ? MenuRow::Mark::UsbLinked : MenuRow::Mark::Usb;
-        }
-        row.playerNumber = medium.playerNumber;
-        row.slot = medium.slot;
-        row.title = medium.name;
-        switch (medium.state) {
-        case MediumInfo::State::Reading:
-            row.detail = tr("reading…");
-            row.dimmed = true;
-            break;
-        case MediumInfo::State::Failed:
-            row.detail = medium.error;
-            row.dimmed = true;
-            break;
-        case MediumInfo::State::Offline:
-            row.dimmed = true;
-            [[fallthrough]];
-        case MediumInfo::State::Ready:
-            // A stick of loose files has folders where an export has
-            // playlists, and says so: "0 playlists" on a stick with three
-            // hundred tracks in it reads like something went wrong.
-            row.detail = medium.format == MediumInfo::Format::Folder
-                    ? tr("%1 · %2").arg(medium.trackCount == 1
-                                                ? tr("1 track")
-                                                : tr("%1 tracks").arg(medium.trackCount),
-                              medium.folderCount == 1
-                                      ? tr("1 folder")
-                                      : tr("%1 folders").arg(medium.folderCount))
-                    : tr("%1 tracks · %2 playlists")
-                              .arg(medium.trackCount)
-                              .arg(medium.playlistCount);
-            break;
-        }
-        row.payload = QVariant::fromValue(medium.id.key());
-        rows.append(row);
+        rows.append(sourceRow(medium));
+        anyEnterable = anyEnterable || medium.isEnterable();
     }
 
     if (rows.isEmpty()) {
@@ -918,6 +907,21 @@ void WDeckBrowser::showSources() {
         empty.dimmed = true;
         rows.append(empty);
     }
+
+    // First of the three that are not media, nearest the media it plays from.
+    // What it is playing, while it is on, is said on its row, so the home list
+    // answers "is autoplay on?" without going in.
+    MenuRow autoplay;
+    autoplay.mark = MenuRow::Mark::Autoplay;
+    autoplay.title = tr("Autoplay");
+    autoplay.payload = QStringLiteral("#autoplay");
+    if (m_pAutoplay && m_pAutoplay->isOn()) {
+        autoplay.detail = tr("%1 · %2").arg(m_pAutoplay->genreTitle(), m_pAutoplay->mediumName());
+    } else if (!anyEnterable) {
+        // Nothing to play from, and nothing to stop.
+        autoplay.dimmed = true;
+    }
+    rows.append(autoplay);
 
     MenuRow diagnostics;
     diagnostics.mark = MenuRow::Mark::Diagnostics;
@@ -936,6 +940,89 @@ void WDeckBrowser::showSources() {
     m_pMenuView->setRowHeight(kSourceRowHeight);
     m_pStack->setCurrentWidget(m_pMenuView);
     m_pMenuView->selectRow(qBound(0, m_stack.first().selectedRow, rows.size() - 1));
+}
+
+MenuRow WDeckBrowser::sourceRow(const MediumInfo& medium) const {
+    MenuRow row;
+    const bool linked = !medium.id.isLocal();
+    if (medium.kind == MediumInfo::Kind::Sd) {
+        row.mark = linked ? MenuRow::Mark::SdLinked : MenuRow::Mark::Sd;
+    } else {
+        row.mark = linked ? MenuRow::Mark::UsbLinked : MenuRow::Mark::Usb;
+    }
+    row.playerNumber = medium.playerNumber;
+    row.slot = medium.slot;
+    row.title = medium.name;
+    switch (medium.state) {
+    case MediumInfo::State::Reading:
+        row.detail = tr("reading…");
+        row.dimmed = true;
+        break;
+    case MediumInfo::State::Failed:
+        row.detail = medium.error;
+        row.dimmed = true;
+        break;
+    case MediumInfo::State::Offline:
+        row.dimmed = true;
+        [[fallthrough]];
+    case MediumInfo::State::Ready:
+        // A stick of loose files has folders where an export has
+        // playlists, and says so: "0 playlists" on a stick with three
+        // hundred tracks in it reads like something went wrong.
+        row.detail = medium.format == MediumInfo::Format::Folder
+                ? tr("%1 · %2").arg(medium.trackCount == 1
+                                            ? tr("1 track")
+                                            : tr("%1 tracks").arg(medium.trackCount),
+                          medium.folderCount == 1
+                                  ? tr("1 folder")
+                                  : tr("%1 folders").arg(medium.folderCount))
+                : tr("%1 tracks · %2 playlists")
+                          .arg(medium.trackCount)
+                          .arg(medium.playlistCount);
+        break;
+    }
+    row.payload = QVariant::fromValue(medium.id.key());
+    return row;
+}
+
+void WDeckBrowser::showAutoplay(const Level& level) {
+    QSqlDatabase db = database();
+    QList<MenuRow> rows;
+    // Stopping it is here, at the top, where it was started. It is the one
+    // row of this level that does not lead anywhere, and the one a DJ in a
+    // hurry is looking for.
+    if (m_pAutoplay && m_pAutoplay->isOn()) {
+        MenuRow stop;
+        stop.mark = MenuRow::Mark::Stop;
+        stop.title = tr("Stop autoplay");
+        stop.detail = tr("%1 · %2").arg(m_pAutoplay->genreTitle(), m_pAutoplay->mediumName());
+        stop.payload = QStringLiteral("#stop");
+        rows.append(stop);
+    }
+    // The drives, as the home list shows them, counted in what autoplay
+    // offers on them: genres.
+    for (const MediumInfo& medium : m_pRegistry->media()) {
+        MenuRow row = sourceRow(medium);
+        if (medium.isEnterable()) {
+            const int genres = categoryCount(db, medium.id, QStringLiteral("genre"));
+            row.detail = genres == 1 ? tr("1 genre") : tr("%1 genres").arg(genres);
+        } else if (medium.state == MediumInfo::State::Ready) {
+            // Read, and empty: nothing to play.
+            row.dimmed = true;
+        }
+        rows.append(row);
+    }
+    if (m_pRegistry->media().isEmpty()) {
+        MenuRow empty;
+        empty.title = tr("Insert a USB stick, or link a player");
+        empty.dimmed = true;
+        rows.append(empty);
+    }
+    m_pMenuModel->setRows(rows);
+    m_pMenuDelegate->setRowHeight(kSourceRowHeight);
+    m_pMenuView->setRowHeight(kSourceRowHeight);
+    m_pStack->setCurrentWidget(m_pMenuView);
+    m_pMenuView->selectRow(qBound(0, level.selectedRow, rows.size() - 1));
 }
 
 void WDeckBrowser::showMediumMenu(const Level& level) {
@@ -1427,6 +1514,41 @@ void WDeckBrowser::onDeckEmpty() {
     m_loadedTrackRowId = -1;
     m_loadedTrackLogged = false;
     onPlayingKeyChanged();
+    if (m_pAutoplay) {
+        m_pAutoplay->onDeckEmpty();
+    }
+}
+
+void WDeckBrowser::startAutoplay() {
+    const int row = m_pTrackView->selectedRow();
+    const int idColumn = m_pTrackModel->fieldIndex(QStringLiteral("track_id"));
+    if (row < 0 || idColumn < 0 || m_stack.isEmpty() || !m_pAutoplay) {
+        return;
+    }
+    const Level& level = m_stack.last();
+    const int rowId = m_pTrackModel->index(row, idColumn).data(Qt::DisplayRole).toInt();
+    const int mediumIndex = m_pRegistry->indexOf(level.medium);
+    if (mediumIndex < 0) {
+        return;
+    }
+    m_pAutoplay->start(level.medium,
+            m_pRegistry->media().at(mediumIndex).name,
+            level.genre,
+            rowId);
+}
+
+void WDeckBrowser::onAutoplayChanged() {
+    // What says so: the home list's row, and the Stop row at the top of
+    // Autoplay's own level. Both are rebuilt on the row they were on; any other
+    // level is left exactly as the DJ has it.
+    if (m_stack.isEmpty()) {
+        return;
+    }
+    const Level::Kind kind = m_stack.last().kind;
+    if (kind == Level::Kind::Sources || kind == Level::Kind::Autoplay) {
+        m_stack.last().selectedRow = m_pMenuView->selectedRow();
+        rebuildCurrentLevel();
+    }
 }
 
 void WDeckBrowser::onPlayingKeyChanged() {
@@ -1735,7 +1857,14 @@ void WDeckBrowser::loadSelectedTrack() {
     }
     const QModelIndex index = m_pTrackModel->index(row, 0);
     m_pTrackModel->willLoadTrack(index);
-    loadRow(readModelRow(row), false, index);
+    const LoadableRow loadable = readModelRow(row);
+    // A track the DJ chose is the end of autoplay: they have taken the deck
+    // back. Said before the load, so the mapping already knows this one is
+    // theirs when it lands.
+    if (m_pAutoplay) {
+        m_pAutoplay->onManualLoad();
+    }
+    loadRow(loadable, false, index);
 }
 
 bool WDeckBrowser::loadLibraryRow(int rowId) {
@@ -1900,7 +2029,11 @@ void WDeckBrowser::onActivated(int row) {
         return;
     }
     if (inTrackList()) {
-        loadSelectedTrack();
+        if (m_stack.last().autoplay) {
+            startAutoplay();
+        } else {
+            loadSelectedTrack();
+        }
         return;
     }
 
@@ -1923,6 +2056,13 @@ void WDeckBrowser::onActivated(int row) {
         if (payload == QStringLiteral("#diagnostics")) {
             Level level;
             level.kind = Level::Kind::Diagnostics;
+            level.title = menuRow.title;
+            pushLevel(level);
+            return;
+        }
+        if (payload == QStringLiteral("#autoplay")) {
+            Level level;
+            level.kind = Level::Kind::Autoplay;
             level.title = menuRow.title;
             pushLevel(level);
             return;
@@ -1995,11 +2135,28 @@ void WDeckBrowser::onActivated(int row) {
         pushLevel(level);
         break;
     }
+    case Level::Kind::Autoplay: {
+        if (payload == QStringLiteral("#stop")) {
+            // Redrawn without this row by onAutoplayChanged().
+            m_pAutoplay->stop();
+            return;
+        }
+        // A drive: its genres, as its medium menu's Genre lists them.
+        Level level;
+        level.kind = Level::Kind::Categories;
+        level.medium = MediumId::fromKey(payload);
+        level.title = menuRow.title;
+        level.parameter = QStringLiteral("genre");
+        level.autoplay = true;
+        pushLevel(level);
+        break;
+    }
     case Level::Kind::Categories: {
         Level level;
         level.kind = Level::Kind::Tracks;
         level.medium = current.medium;
         level.title = menuRow.title;
+        level.autoplay = current.autoplay;
         if (payload.startsWith(QStringLiteral("key:"))) {
             level.parameter = query::byKeyId(db, current.medium, payload.mid(4).toInt());
         } else if (payload.startsWith(QStringLiteral("bpm:"))) {
@@ -2012,6 +2169,9 @@ void WDeckBrowser::onActivated(int row) {
                     ? QStringLiteral("datetime_added")
                     : current.parameter;
             level.parameter = query::byTextColumn(db, current.medium, column, value);
+            if (current.autoplay) {
+                level.genre = value;
+            }
         }
         pushLevel(level);
         break;

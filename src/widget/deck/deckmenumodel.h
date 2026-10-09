@@ -26,6 +26,8 @@ struct MenuRow {
         Search,
         Diagnostics,
         Power,
+        Autoplay,
+        Stop,
     };
 
     Mark mark = Mark::None;

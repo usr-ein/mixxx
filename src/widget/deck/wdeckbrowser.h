@@ -31,10 +31,12 @@ class QStackedWidget;
 namespace mixxx {
 namespace deck {
 
+class DeckAutoplay;
 class DeckListView;
 class DeckMenuModel;
 class DeckTrackModel;
 class MenuRowDelegate;
+struct MenuRow;
 class WDeckSortMenu;
 class WDeckKeyboard;
 class WDeckInfoPanel;
@@ -145,6 +147,8 @@ class WDeckBrowser : public QWidget, public WBaseWidget {
             Tracks,
             Search,
             Diagnostics,
+            /// Autoplay's own first level: stop it, or pick a drive.
+            Autoplay,
         };
         Kind kind = Kind::Sources;
         MediumId medium;
@@ -154,6 +158,13 @@ class WDeckBrowser : public QWidget, public WBaseWidget {
         QString parameter;
         int parentRbId = 0;
         int selectedRow = 0;
+        /// Below Autoplay: a drive's genres, and a genre's tracks, which start
+        /// autoplay rather than load. The same levels as the medium menu's
+        /// Genre otherwise, so they look and sort the same.
+        bool autoplay = false;
+        /// The genre, for an autoplay track list: what autoplay is started on.
+        /// Empty is the "—" row, the tracks with no genre.
+        QString genre;
     };
 
     /// Everything a load needs off a track's row, read in one go: see
@@ -177,6 +188,9 @@ class WDeckBrowser : public QWidget, public WBaseWidget {
     void popLevel();
     void rebuildCurrentLevel();
     void showSources();
+    /// One medium as a source row: its mark, name and state, and its counts.
+    MenuRow sourceRow(const MediumInfo& medium) const;
+    void showAutoplay(const Level& level);
     void showMediumMenu(const Level& level);
     void showPlaylists(const Level& level);
     void showCategory(const Level& level);
@@ -191,7 +205,8 @@ class WDeckBrowser : public QWidget, public WBaseWidget {
     /// The page currently on the stack, if it wants the deck's controls.
     mixxx::deck::DeckPage* currentPage() const;
     void updateBreadcrumb();
-    /// The DJ's load: the selected row, onto the deck, not playing.
+    /// The DJ's load: the selected row, onto the deck, not playing. Ends
+    /// autoplay.
     void loadSelectedTrack();
     /// A `deck_library` row by its id, wherever the browser is, and playing.
     /// False when the row has gone.
@@ -202,6 +217,10 @@ class WDeckBrowser : public QWidget, public WBaseWidget {
     /// load came from the list, which is where a track not copied off its
     /// medium is fetched from.
     void loadRow(const LoadableRow& row, bool play, const QModelIndex& index);
+    /// The selected track of an autoplay track list starts autoplay.
+    void startAutoplay();
+    /// Autoplay went on or off: the rows that say so are redrawn.
+    void onAutoplayChanged();
     /// Point a Track at the cover its medium carries, so the deck's header
     /// draws it.
     ///
@@ -250,6 +269,8 @@ class WDeckBrowser : public QWidget, public WBaseWidget {
     /// This deck's accent (deckaccent.h), for the breadcrumb's rich text.
     const QColor m_accent;
     std::unique_ptr<MediaRegistry> m_pRegistry;
+    /// After the registry, so it goes first: it listens to it.
+    std::unique_ptr<DeckAutoplay> m_pAutoplay;
 
     QLabel* m_pBreadcrumb;
     DeckSortChip* m_pSortChip;
