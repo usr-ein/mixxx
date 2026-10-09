@@ -136,10 +136,10 @@ bool registerPlatformAndFallbackSoundSourceProviders(
     registerSoundSourceProvider(
             pProviderRegistry,
             std::make_shared<mixxx::SoundSourceProviderFFmpeg>());
-    // Ahead of it, and inert for everything that is not currently arriving over
-    // the network: it declines an ordinary file and the next provider takes it.
+    // Ahead of it, and inert for everything that is not currently arriving: it
+    // declines an ordinary file and the next provider takes it.
     registerSoundSourceProvider(pProviderRegistry,
-            std::make_shared<mixxx::SoundSourceProviderProLink>());
+            std::make_shared<mixxx::SoundSourceProviderStreaming>());
 #endif // __FFMPEG__
     return true;
 }
@@ -528,9 +528,9 @@ bool SoundSourceProxy::initSoundSourceWithProvider(
         // declining, is already reported once by the caller.
         //
         // It became worth distinguishing when a provider started declining on
-        // purpose: the Pro DJ Link source claims the ordinary audio types and
-        // then takes only the files that are still arriving, so that a track on
-        // a stick falls straight through to the normal decoders. Warning about
+        // purpose: the streaming source claims the ordinary audio types and
+        // then takes only the files that are still arriving, so that a whole
+        // file falls straight through to the normal decoders. Warning about
         // that meant a warning on every single track load, four times over,
         // from four threads.
         if (kLogger.debugEnabled()) {

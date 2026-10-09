@@ -7,7 +7,8 @@
 
 namespace mixxx {
 
-/// Decode a track that is still arriving over Pro DJ Link.
+/// Decode a track that is still arriving: copied off a stick, or streamed off
+/// another player over Pro DJ Link.
 ///
 /// The only difference from the ordinary FFmpeg source is where the bytes come
 /// from: an AVIOContext whose read and seek are served by a StreamingFile,
@@ -17,10 +18,10 @@ namespace mixxx {
 ///
 /// That is the whole reason to reuse SoundSourceFFmpeg rather than write a
 /// decoder: MP3, AAC, FLAC, WAV and AIFF all work the moment the bytes do.
-class SoundSourceProLink : public SoundSourceFFmpeg {
+class SoundSourceStreaming : public SoundSourceFFmpeg {
   public:
-    explicit SoundSourceProLink(const QUrl& url);
-    ~SoundSourceProLink() override;
+    explicit SoundSourceStreaming(const QUrl& url);
+    ~SoundSourceStreaming() override;
 
     void close() override;
 
@@ -76,12 +77,12 @@ class SoundSourceProLink : public SoundSourceFFmpeg {
 ///
 /// Declining is the important half: `newSoundSource` returns null for an
 /// ordinary file, and SoundSourceProxy then falls through to the normal
-/// providers. So a stick on the local filesystem never touches any of this.
-class SoundSourceProviderProLink : public SoundSourceProvider {
+/// providers. So a file that has arrived in full never touches any of this.
+class SoundSourceProviderStreaming : public SoundSourceProvider {
   public:
     static const QString kDisplayName;
 
-    ~SoundSourceProviderProLink() override = default;
+    ~SoundSourceProviderStreaming() override = default;
 
     QString getDisplayName() const override {
         return kDisplayName;

@@ -7,7 +7,7 @@
 #include "util/logger.h"
 
 namespace {
-const mixxx::Logger kLogger("SoundSourceProLink");
+const mixxx::Logger kLogger("SoundSourceStreaming");
 
 /// What FFmpeg reads through in one call. Big enough that a track is not a
 /// storm of tiny reads, small enough that one blocked read does not wait on a
@@ -17,19 +17,19 @@ constexpr int kAvioBufferSize = 64 * 1024;
 
 namespace mixxx {
 
-/*static*/ const QString SoundSourceProviderProLink::kDisplayName =
-        QStringLiteral("Pro DJ Link streaming");
+/*static*/ const QString SoundSourceProviderStreaming::kDisplayName =
+        QStringLiteral("Streaming");
 
-SoundSourceProLink::SoundSourceProLink(const QUrl& url)
+SoundSourceStreaming::SoundSourceStreaming(const QUrl& url)
         : SoundSourceFFmpeg(url) {
     m_pStream = mixxx::deck::StreamingFileRegistry::lookup(getLocalFileName());
 }
 
-SoundSourceProLink::~SoundSourceProLink() {
+SoundSourceStreaming::~SoundSourceStreaming() {
     close();
 }
 
-void SoundSourceProLink::close() {
+void SoundSourceStreaming::close() {
     SoundSourceFFmpeg::close();
     if (m_pAvioContext != nullptr) {
         // The buffer may have been reallocated by FFmpeg, so free the one the
@@ -54,8 +54,8 @@ void SoundSourceProLink::close() {
     // megabyte of zeros, and reported no audio stream.
 }
 
-std::pair<SoundSourceProLink::ImportResult, QDateTime>
-SoundSourceProLink::importTrackMetadataAndCoverImage(
+std::pair<SoundSourceStreaming::ImportResult, QDateTime>
+SoundSourceStreaming::importTrackMetadataAndCoverImage(
         TrackMetadata* pTrackMetadata,
         QImage* pCoverImage,
         bool resetMissingTagMetadata) const {
@@ -65,7 +65,7 @@ SoundSourceProLink::importTrackMetadataAndCoverImage(
     return std::make_pair(ImportResult::Unavailable, QDateTime());
 }
 
-SoundSource::OpenResult SoundSourceProLink::tryOpen(OpenMode mode, const OpenParams& params) {
+SoundSource::OpenResult SoundSourceStreaming::tryOpen(OpenMode mode, const OpenParams& params) {
     const QString suffix = QFileInfo(getLocalFileName()).suffix().toLower();
     m_openingUnseekable = suffix == QLatin1String("wav") || suffix == QLatin1String("aif") ||
             suffix == QLatin1String("aiff") || suffix == QLatin1String("aifc");
@@ -77,8 +77,8 @@ SoundSource::OpenResult SoundSourceProLink::tryOpen(OpenMode mode, const OpenPar
     return result;
 }
 
-int SoundSourceProLink::readPacket(void* pOpaque, uint8_t* pBuffer, int size) {
-    auto* pSelf = static_cast<SoundSourceProLink*>(pOpaque);
+int SoundSourceStreaming::readPacket(void* pOpaque, uint8_t* pBuffer, int size) {
+    auto* pSelf = static_cast<SoundSourceStreaming*>(pOpaque);
     if (!pSelf || !pSelf->m_pStream) {
         return AVERROR(EIO);
     }
@@ -98,8 +98,8 @@ int SoundSourceProLink::readPacket(void* pOpaque, uint8_t* pBuffer, int size) {
     return static_cast<int>(read);
 }
 
-int64_t SoundSourceProLink::seek(void* pOpaque, int64_t offset, int whence) {
-    auto* pSelf = static_cast<SoundSourceProLink*>(pOpaque);
+int64_t SoundSourceStreaming::seek(void* pOpaque, int64_t offset, int whence) {
+    auto* pSelf = static_cast<SoundSourceStreaming*>(pOpaque);
     if (!pSelf || !pSelf->m_pStream) {
         return AVERROR(EIO);
     }
@@ -142,7 +142,7 @@ int64_t SoundSourceProLink::seek(void* pOpaque, int64_t offset, int whence) {
     return target;
 }
 
-AVIOContext* SoundSourceProLink::createAvioContext() {
+AVIOContext* SoundSourceStreaming::createAvioContext() {
     if (!m_pStream) {
         // Not one of ours after all -- the transfer finished and the file was
         // unregistered between this object being made and being opened. The
@@ -167,9 +167,9 @@ AVIOContext* SoundSourceProLink::createAvioContext() {
             kAvioBufferSize,
             0, // read only
             this,
-            &SoundSourceProLink::readPacket,
+            &SoundSourceStreaming::readPacket,
             nullptr,
-            &SoundSourceProLink::seek);
+            &SoundSourceStreaming::seek);
     if (m_pAvioContext == nullptr) {
         av_free(pBuffer);
         kLogger.warning() << "could not allocate an AVIO context";
@@ -183,7 +183,7 @@ AVIOContext* SoundSourceProLink::createAvioContext() {
     return m_pAvioContext;
 }
 
-QStringList SoundSourceProviderProLink::getSupportedFileTypes() const {
+QStringList SoundSourceProviderStreaming::getSupportedFileTypes() const {
     // The containers a rekordbox medium actually carries. Claiming a type here
     // costs nothing for ordinary files, because newSoundSource() declines them.
     return QStringList{
@@ -198,7 +198,7 @@ QStringList SoundSourceProviderProLink::getSupportedFileTypes() const {
     };
 }
 
-SoundSourceProviderPriority SoundSourceProviderProLink::getPriorityHint(
+SoundSourceProviderPriority SoundSourceProviderStreaming::getPriorityHint(
         const QString& supportedFileType) const {
     Q_UNUSED(supportedFileType);
     // Ahead of the ordinary decoders, so a file that IS being streamed is
@@ -206,7 +206,7 @@ SoundSourceProviderPriority SoundSourceProviderProLink::getPriorityHint(
     return SoundSourceProviderPriority::Higher;
 }
 
-SoundSourcePointer SoundSourceProviderProLink::newSoundSource(const QUrl& url) {
+SoundSourcePointer SoundSourceProviderStreaming::newSoundSource(const QUrl& url) {
     const auto pStream = mixxx::deck::StreamingFileRegistry::lookup(url.toLocalFile());
     if (!pStream) {
         // An ordinary file. Declining is how SoundSourceProxy is told to try
@@ -215,7 +215,7 @@ SoundSourcePointer SoundSourceProviderProLink::newSoundSource(const QUrl& url) {
         return SoundSourcePointer();
     }
     kLogger.info() << "claiming" << url.toLocalFile() << "-- still streaming";
-    return newSoundSourceFromUrl<SoundSourceProLink>(url);
+    return newSoundSourceFromUrl<SoundSourceStreaming>(url);
 }
 
 } // namespace mixxx

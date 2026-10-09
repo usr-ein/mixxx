@@ -35,8 +35,8 @@ class SoundSourceFFmpeg : public SoundSource {
     /// Returning null -- as this does -- means "open the path normally", which
     /// is every ordinary file. A subclass returns an AVIOContext to feed FFmpeg
     /// from somewhere else instead; that is the whole hook needed to decode a
-    /// file that is still arriving over the network, because everything after
-    /// the open is identical either way.
+    /// file that is still arriving, because everything after the open is
+    /// identical either way.
     virtual AVIOContext* createAvioContext() {
         return nullptr;
     }
