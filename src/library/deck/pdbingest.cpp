@@ -16,9 +16,7 @@ namespace {
 const mixxx::Logger kLogger("DeckIngest");
 
 /// Separator for a playlist's full path, matching what the Rekordbox feature
-/// used. Transitional: it only exists to keep `deck_playlists.name` unique per
-/// medium while the old library view is still reading these tables through
-/// BaseExternalPlaylistModel, which looks playlists up by name.
+/// used. It only builds `deck_playlists.name`: see that column.
 const QString kPathDelimiter = QStringLiteral("-->");
 
 /// rekordbox's eight track colours, by the id the pdb stores.
@@ -165,9 +163,11 @@ bool createTables(QSqlDatabase& database) {
     // The playlist *tree*, folders included, rather than a flat list of names.
     // rekordbox nests arbitrarily deep and the browser walks it by parent_rb_id.
     //
-    // `name` is transitional and will go once the old library view does: it is
-    // the namespaced full path that BaseExternalPlaylistModel looks a playlist
-    // up by. `display_name` is what a human sees.
+    // `name` is the namespaced full path the old library view looked a
+    // playlist up by, and nothing reads it since that view went. It stays for
+    // now because its UNIQUE still decides what is written: a playlist whose
+    // path repeats a sibling's is not. Dropping it would change that, so it
+    // waits. `display_name` is what a human sees.
     query.prepare(QStringLiteral(
             "CREATE TABLE IF NOT EXISTS %1 ("
             "    id INTEGER PRIMARY KEY AUTOINCREMENT,"
@@ -455,7 +455,7 @@ IngestResult writeMedium(QSqlDatabase& database,
                                 .arg(kPlaylistTracksTable));
 
     // A playlist's full path, walked up through its folders. Only used to build
-    // the transitional unique `name`; the browser navigates by parent_rb_id.
+    // the unique `name`; the browser navigates by parent_rb_id.
     const auto fullPath = [&contents](const PdbPlaylist& playlist) {
         QStringList parts{playlist.name};
         quint32 parentId = playlist.parentId;
@@ -503,7 +503,7 @@ IngestResult writeMedium(QSqlDatabase& database,
         insertPlaylist.bindValue(QStringLiteral(":rb_id"), rbId);
         insertPlaylist.bindValue(QStringLiteral(":parent_rb_id"), parentRbId);
         // Namespaced by medium: two sticks can both hold a "Warmup", and the
-        // column the old view looks up by is globally unique.
+        // column is globally unique.
         insertPlaylist.bindValue(QStringLiteral(":name"),
                 QStringLiteral("%1|%2").arg(medium.key(), uniqueName));
         insertPlaylist.bindValue(QStringLiteral(":display_name"), displayName);
@@ -576,27 +576,6 @@ IngestResult writeMedium(QSqlDatabase& database,
             }
         }
         result.historyCount = historyRows;
-    }
-
-    // "All tracks", in pdb order, as a real playlist row. Transitional in the
-    // same way `name` is: the browser builds its own All tracks straight off
-    // deck_library, but the old view can only show a playlist.
-    //
-    // rb_id 0 cannot collide -- rekordbox numbers playlists from 1, and 0 is
-    // what it uses to mean "no parent".
-    QList<quint32> everything;
-    everything.reserve(contents.tracks.size());
-    for (const PdbTrack& track : contents.tracks) {
-        everything.append(track.id);
-    }
-    const int allTracksId = addPlaylist(0,
-            0,
-            QStringLiteral("All tracks"),
-            QStringLiteral("All tracks"),
-            false,
-            0);
-    if (allTracksId >= 0) {
-        addEntries(allTracksId, everything);
     }
 
     if (rowIds.isEmpty() && !contents.tracks.isEmpty()) {

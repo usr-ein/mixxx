@@ -284,9 +284,6 @@ QList<PlaylistEntry> playlistsIn(QSqlDatabase& db,
         int parentRbId) {
     QList<PlaylistEntry> entries;
     QSqlQuery q(db);
-    // rb_id 0 is the synthetic "All tracks" row the ingest writes for the old
-    // view's benefit; the browser reaches all tracks by its own query and must
-    // not show it twice.
     q.prepare(QStringLiteral(
             "SELECT p.id, p.rb_id, p.display_name, p.is_folder, "
             "  (SELECT COUNT(*) FROM %2 pt WHERE pt.playlist_id = p.id), "
@@ -295,7 +292,6 @@ QList<PlaylistEntry> playlistsIn(QSqlDatabase& db,
             "  (SELECT COUNT(*) FROM %1 c WHERE c.medium = p.medium "
             "     AND c.parent_rb_id = p.rb_id) "
             "FROM %1 p WHERE p.medium = :medium AND p.parent_rb_id = :parent "
-            "  AND p.rb_id != 0 "
             "ORDER BY p.is_folder DESC, p.sort_order, p.display_name COLLATE NOCASE")
                       .arg(kPlaylistsTable, kPlaylistTracksTable, kLibraryTable));
     q.bindValue(QStringLiteral(":medium"), medium.key());
@@ -387,8 +383,7 @@ int keyIdForTrack(QSqlDatabase& db, const MediumId& medium, quint32 rekordboxId)
 int playlistCount(QSqlDatabase& db, const MediumId& medium) {
     QSqlQuery q(db);
     q.prepare(QStringLiteral(
-            "SELECT COUNT(*) FROM %1 WHERE medium = :medium AND is_folder = 0 "
-            "AND rb_id != 0")
+            "SELECT COUNT(*) FROM %1 WHERE medium = :medium AND is_folder = 0")
                       .arg(kPlaylistsTable));
     q.bindValue(QStringLiteral(":medium"), medium.key());
     if (!q.exec() || !q.next()) {
