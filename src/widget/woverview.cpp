@@ -745,22 +745,11 @@ void WOverview::drawWaveformPixmap(QPainter* pPainter) {
         }
 
         if (m_diffGain != diffGain || m_waveformImageScaled.isNull()) {
-            // **Crop from the top only when the waveform stands on the
-            // baseline.** Upstream takes the same number of rows off the top
-            // and the bottom, which zooms a centred waveform about its middle
-            // and is right for one -- but the RGB overview here is one-sided,
-            // so cropping the bottom would cut the base off every bar and
-            // leave the picture floating with its loudest part missing.
-            //
-            // Taking twice as much off the top instead zooms by the same
-            // amount and keeps the baseline where it is. The other overview
-            // types still draw centred, so they keep the symmetric crop.
-            const int trim = static_cast<int>(diffGain);
-            const bool oneSided = m_type == Type::RGB;
             QRect sourceRect(0,
-                    oneSided ? 2 * trim : trim,
+                    static_cast<int>(diffGain),
                     m_waveformSourceImage.width(),
-                    m_waveformSourceImage.height() - 2 * trim);
+                    m_waveformSourceImage.height() -
+                            2 * static_cast<int>(diffGain));
             QImage croppedImage = m_waveformSourceImage.copy(sourceRect);
             if (m_orientation == Qt::Vertical) {
                 // Rotate pixmap
@@ -1573,54 +1562,49 @@ void WOverview::drawNextPixmapPartRGB(QPainter* pPainter,
     float highColor_r, highColor_g, highColor_b;
     getRgbF(m_signalColors.getRgbHighColor(), &highColor_r, &highColor_g, &highColor_b);
 
-    // **One-sided, standing on the baseline, using the whole height.**
-    //
-    // Upstream draws one of the two samples of each pair upward from the centre
-    // and the other downward, which looks like a mirror and is not quite one --
-    // it is the two channels, split. Either way half the strip says what the
-    // other half already said, and on this deck the overview is 56 px of a 600
-    // px screen: 28 of them were spent on the second copy.
-    //
-    // Drawn from the baseline instead, at twice the scale, so the same passage
-    // is twice as tall and a break is twice as easy to see. The source image is
-    // 2 x 255 and the painter is translated to its middle, so the baseline is
-    // +255 and full scale is 2 x the sample.
-    //
-    // Only the RGB overview is changed, because it is the only one this deck
-    // draws. The HSV and filtered variants below are untouched.
-    // One short of the translated half-height: the image is 2 x 255 rows and the
-    // painter is translated by 255, so +255 is row 510 -- one past the last -- and
-    // a line drawn there loses its bottom pixel to the clip.
-    const float baseline = 254.0f;
     int currentCompletion = 0;
     for (currentCompletion = m_actualCompletion;
             currentCompletion < nextCompletion;
             currentCompletion += 2) {
-        const unsigned char left = pWaveform->getAll(currentCompletion);
-        const unsigned char right = pWaveform->getAll(currentCompletion + 1);
-        // The louder of the two channels sets the height, and its own bands set
-        // the colour -- so the bar is the moment that made it, rather than an
-        // average of two that never happened together.
-        const int louder = left >= right ? currentCompletion : currentCompletion + 1;
-        const float peak = static_cast<float>(std::max(left, right));
+        unsigned char left = pWaveform->getAll(currentCompletion);
+        unsigned char right = pWaveform->getAll(currentCompletion + 1);
 
         // Retrieve "raw" LMH values from waveform
-        const float low = static_cast<float>(pWaveform->getLow(louder));
-        const float mid = static_cast<float>(pWaveform->getMid(louder));
-        const float high = static_cast<float>(pWaveform->getHigh(louder));
+        float low = static_cast<float>(pWaveform->getLow(currentCompletion));
+        float mid = static_cast<float>(pWaveform->getMid(currentCompletion));
+        float high = static_cast<float>(pWaveform->getHigh(currentCompletion));
 
         // Do matrix multiplication
-        const float red = low * lowColor_r + mid * midColor_r + high * highColor_r;
-        const float green = low * lowColor_g + mid * midColor_g + high * highColor_g;
-        const float blue = low * lowColor_b + mid * midColor_b + high * highColor_b;
+        float red = low * lowColor_r + mid * midColor_r + high * highColor_r;
+        float green = low * lowColor_g + mid * midColor_g + high * highColor_g;
+        float blue = low * lowColor_b + mid * midColor_b + high * highColor_b;
 
         // Normalize and draw
-        const float max = math_max3(red, green, blue);
+        float max = math_max3(red, green, blue);
         if (max > 0.0) {
             color.setRgbF(red / max, green / max, blue / max);
             pPainter->setPen(color);
-            pPainter->drawLine(QPointF(currentCompletion / 2, baseline),
-                    QPointF(currentCompletion / 2, baseline - 2.0f * peak));
+            pPainter->drawLine(QPointF(currentCompletion / 2, -left),
+                    QPointF(currentCompletion / 2, 0));
+        }
+
+        // Retrieve "raw" LMH values from waveform
+        low = static_cast<float>(pWaveform->getLow(currentCompletion + 1));
+        mid = static_cast<float>(pWaveform->getMid(currentCompletion + 1));
+        high = static_cast<float>(pWaveform->getHigh(currentCompletion + 1));
+
+        // Do matrix multiplication
+        red = low * lowColor_r + mid * midColor_r + high * highColor_r;
+        green = low * lowColor_g + mid * midColor_g + high * highColor_g;
+        blue = low * lowColor_b + mid * midColor_b + high * highColor_b;
+
+        // Normalize and draw
+        max = math_max3(red, green, blue);
+        if (max > 0.0) {
+            color.setRgbF(red / max, green / max, blue / max);
+            pPainter->setPen(color);
+            pPainter->drawLine(QPointF(currentCompletion / 2, 0),
+                    QPointF(currentCompletion / 2, right));
         }
     }
 
