@@ -24,9 +24,6 @@ class PresentRanges {
     void add(qint64 offset, qint64 length);
     /// Whether every byte of `[offset, offset + length)` has arrived.
     bool contains(qint64 offset, qint64 length) const;
-    /// How many contiguous bytes are available from `offset`. Zero when the
-    /// byte at `offset` itself is missing.
-    qint64 availableFrom(qint64 offset) const;
     void clear();
     int rangeCount() const {
         return static_cast<int>(m_ranges.size());
@@ -140,7 +137,6 @@ class StreamingFileRegistry {
     static void remove(const QString& localPath);
     /// Null when the path is an ordinary file.
     static std::shared_ptr<StreamingFile> lookup(const QString& localPath);
-    static int count();
     /// Everything in flight, for the diagnostics page. A snapshot, so the
     /// caller is not holding the registry's lock while it draws.
     static QList<QPair<QString, std::shared_ptr<StreamingFile>>> snapshot();

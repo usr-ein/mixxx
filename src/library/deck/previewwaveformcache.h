@@ -72,15 +72,6 @@ class PreviewWaveformCache : public QObject {
     /// played, held for rows that are no longer on screen.
     void forget(const MediumId& medium);
 
-    /// Entries held, for the diagnostics page.
-    int count() const {
-        return m_previews.size();
-    }
-    /// Bytes held by the previews themselves.
-    int bytes() const {
-        return m_previews.size() * PreviewWaveform::kColumns;
-    }
-
   signals:
     /// One arrived. The panel re-asks with lookup() rather than being handed
     /// it, because by now the selection may be somewhere else.

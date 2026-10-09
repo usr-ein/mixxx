@@ -61,18 +61,6 @@ bool PresentRanges::contains(qint64 offset, qint64 length) const {
     return false;
 }
 
-qint64 PresentRanges::availableFrom(qint64 offset) const {
-    for (const auto& range : m_ranges) {
-        if (range.first <= offset && range.second > offset) {
-            return range.second - offset;
-        }
-        if (range.first > offset) {
-            break;
-        }
-    }
-    return 0;
-}
-
 void PresentRanges::clear() {
     m_ranges.clear();
 }
@@ -246,11 +234,6 @@ void StreamingFileRegistry::remove(const QString& localPath) {
 std::shared_ptr<StreamingFile> StreamingFileRegistry::lookup(const QString& localPath) {
     QMutexLocker locked(&s_registryMutex);
     return s_registry.value(localPath);
-}
-
-int StreamingFileRegistry::count() {
-    QMutexLocker locked(&s_registryMutex);
-    return static_cast<int>(s_registry.size());
 }
 
 QList<QPair<QString, std::shared_ptr<StreamingFile>>> StreamingFileRegistry::snapshot() {

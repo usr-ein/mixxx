@@ -24,7 +24,6 @@ namespace {
 TEST(PresentRangesTest, EmptyContainsNothing) {
     PresentRanges ranges;
     EXPECT_FALSE(ranges.contains(0, 1));
-    EXPECT_EQ(0, ranges.availableFrom(0));
 }
 
 TEST(PresentRangesTest, AZeroLengthRangeIsAlwaysSatisfied) {
@@ -116,16 +115,6 @@ TEST(PresentRangesTest, OutOfOrderArrivalStillMerges) {
     ranges.add(100, 100);
     EXPECT_EQ(1, ranges.rangeCount());
     EXPECT_TRUE(ranges.contains(0, 300));
-}
-
-TEST(PresentRangesTest, AvailableFromReportsTheContiguousRun) {
-    PresentRanges ranges;
-    ranges.add(0, 100);
-    ranges.add(1000, 100);
-    EXPECT_EQ(100, ranges.availableFrom(0));
-    EXPECT_EQ(40, ranges.availableFrom(60));
-    EXPECT_EQ(0, ranges.availableFrom(100)); // the hole starts here
-    EXPECT_EQ(100, ranges.availableFrom(1000));
 }
 
 TEST(PresentRangesTest, ZeroLengthAddsAreIgnored) {
