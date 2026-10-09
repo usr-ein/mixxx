@@ -962,7 +962,6 @@ void ProLinkNetworkService::start() {
         m_lastError = tr("another Pro DJ Link session is already running");
         kLogger.warning() << "refusing to start a second session;"
                           << "the first one holds the sockets and the player number";
-        emit listeningChanged(false, m_lastError);
         return;
     }
     // The library's own log, to stderr, which on the deck is where Mixxx's
@@ -977,21 +976,12 @@ void ProLinkNetworkService::start() {
         // tempo master are published. Without it we would see beats and
         // nothing else.
         config.announce = true;
-        // The number we held before a restart, so a refresh keeps the identity
-        // the decks already know. Zero on a cold start, which means "negotiate
-        // for whichever of 1-4 is free" -- and 1-4 is a requirement, not a
-        // preference: at any other number a deck accepts our announcement in
-        // full and then never offers us as a LINK source or asks us anything.
-        config.preferred_number = static_cast<::std::uint8_t>(
-                mixxx::prolink::isOurPlayerNumber(m_preferredNumber) ? m_preferredNumber
-                                                                     : 0);
         m_pImpl->pSession = std::make_unique<::rust::Box<::prolink::Session>>(
                 ::prolink::open(config));
     } catch (const std::exception& error) {
         m_lastError = QString::fromUtf8(error.what());
         m_listening = false;
         kLogger.warning() << "could not start:" << m_lastError;
-        emit listeningChanged(false, m_lastError);
         return;
     }
 
@@ -1006,7 +996,6 @@ void ProLinkNetworkService::start() {
     m_announceDetail = tr("joining the network...");
     kLogger.info() << "started;" << m_announceDetail;
 
-    emit listeningChanged(true, QString());
     emit announceChanged(m_announcedNumber, m_announceDetail);
 
     if (m_pTimer == nullptr) {
@@ -1060,31 +1049,8 @@ void ProLinkNetworkService::shutdown() {
     }
 
     if (wasListening) {
-        emit listeningChanged(false, QString());
         emit announceChanged(0, QString());
     }
-}
-
-void ProLinkNetworkService::refresh() {
-    if (!m_pImpl->pSession) {
-        start();
-        return;
-    }
-
-    // Restart, rather than only dropping the browse connections.
-    //
-    // The interface is chosen when the session opens, and a Mixxx started
-    // before the ethernet was plugged in chose whatever was there — on the
-    // deck that was the wireless interface, and the CDJs that appeared
-    // afterwards were on a network we were not listening to. Nothing about
-    // that resolves itself: no keep-alive can arrive on a socket bound to
-    // another interface, however long the user waits.
-    //
-    // So the only honest thing a refresh can do is bind again. It costs the
-    // device number and a second of re-discovery, which is what a user
-    // clicking "refresh" is asking for.
-    shutdown();
-    start();
 }
 
 int ProLinkNetworkService::numberFor(const QByteArray& mac) const {
@@ -1098,9 +1064,7 @@ int ProLinkNetworkService::numberFor(const QByteArray& mac) const {
 void ProLinkNetworkService::fetchFile(const QByteArray& mac,
         MediaSlot slot,
         const QString& remotePath,
-        const QString& localPath,
-        bool priority) {
-    Q_UNUSED(priority);
+        const QString& localPath) {
     if (!m_pImpl->pSession) {
         emit fileFetched(localPath, tr("Pro DJ Link is not running"));
         return;
@@ -1312,7 +1276,6 @@ void ProLinkNetworkService::poll() {
             m_lastError = error;
             m_listening = false;
             kLogger.warning() << "could not start:" << error;
-            emit listeningChanged(false, error);
         }
     }
 
@@ -1464,7 +1427,6 @@ void ProLinkNetworkService::syncAnnouncement() {
     m_publishedNumber = number;
     m_announcedNumber = number;
     if (mixxx::prolink::isOurPlayerNumber(number)) {
-        m_preferredNumber = number;
         m_announceDetail = tr("announced as player %1").arg(number);
     } else if (number > 0) {
         // Every player number was defended, so the library settled for one

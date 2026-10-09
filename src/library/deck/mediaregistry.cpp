@@ -873,7 +873,7 @@ void MediaRegistry::fetchCompanionBlocking(const QByteArray& mac,
     connect(&timeout, &QTimer::timeout, &loop, [&loop]() { loop.quit(); });
     timeout.start(kCompanionTimeoutMs);
 
-    m_pNetwork->fetchFile(mac, slot, remotePath, localPath, true);
+    m_pNetwork->fetchFile(mac, slot, remotePath, localPath);
     // A fetch that cannot even start -- no session, or a player that has left --
     // reports it by emitting synchronously, from inside that call. quit() on a
     // loop that has not begun does nothing, so entering it anyway would wait out

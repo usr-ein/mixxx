@@ -61,24 +61,8 @@ class ProLinkNetworkService : public QObject {
     /// Stop, releasing the device number.
     void shutdown();
 
-    QList<ProLinkDevice> devices() const {
-        return m_devices;
-    }
-    int deviceCount() const {
-        return m_devices.size();
-    }
-
-    bool isListening() const {
-        return m_listening;
-    }
     int announcedNumber() const {
         return m_announcedNumber;
-    }
-    QString announceDetail() const {
-        return m_announceDetail;
-    }
-    QString lastError() const {
-        return m_lastError;
     }
 
     server::ServeStatus serveStatus() const {
@@ -90,9 +74,6 @@ class ProLinkNetworkService : public QObject {
     static constexpr int kThisPlayer = -1;
 
   public slots:
-    /// Drop any held browse connection so the next request reconnects.
-    void refresh();
-
     /// Fetch `export.pdb` from the first player with media in `slot`.
     void pullDatabase(MediaSlot slot = MediaSlot::Usb);
 
@@ -108,14 +89,13 @@ class ProLinkNetworkService : public QObject {
     /// `remotePath` is taken verbatim from `export.pdb`, which stores paths
     /// relative to the medium root with a leading slash.
     ///
-    /// `priority` is accepted and ignored. The library serialises transfers
-    /// itself, because two pulls from one deck contend for its filehandle
-    /// table and it then answers `NFSERR_STALE` to everything.
+    /// The library serialises transfers itself, because two pulls from one
+    /// deck contend for its filehandle table and it then answers
+    /// `NFSERR_STALE` to everything.
     void fetchFile(const QByteArray& mac,
             MediaSlot slot,
             const QString& remotePath,
-            const QString& localPath,
-            bool priority = false);
+            const QString& localPath);
 
     /// Fetch one file head-first, so it can be played before it has arrived.
     ///
@@ -160,7 +140,6 @@ class ProLinkNetworkService : public QObject {
     void deviceFound(const mixxx::prolink::ProLinkDevice& device);
     void deviceChanged(const mixxx::prolink::ProLinkDevice& device);
     void deviceLost(const QByteArray& mac);
-    void listeningChanged(bool listening, const QString& error);
     void announceChanged(int deviceNumber, const QString& detail);
     void serveStatusChanged(const mixxx::prolink::server::ServeStatus& status);
     void mediaInfoFound(const QByteArray& mac,
@@ -460,14 +439,6 @@ class ProLinkNetworkService : public QObject {
     /// The number `announceChanged` last carried, so it is emitted on a change
     /// rather than thirty times a second.
     int m_publishedNumber = 0;
-    /// The number to ask for next time, kept across a shutdown.
-    ///
-    /// A refresh restarts the session, and restarting with no preference would
-    /// take whatever happens to be free -- so Mixxx could come back as a
-    /// different player than the decks have in their tables and than the user
-    /// just read off the screen. Held here rather than in `m_announcedNumber`
-    /// because that one is cleared by `shutdown()`, which is the whole point.
-    int m_preferredNumber = 0;
     QString m_announceDetail;
     QString m_lastError;
     server::ServeStatus m_serveStatus;
