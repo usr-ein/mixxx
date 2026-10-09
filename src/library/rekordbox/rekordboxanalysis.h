@@ -12,11 +12,10 @@ class AnalysisDao;
 /// memory cues and the track colour.
 ///
 /// Extracted from the old rekordbox library feature, which had it in an
-/// anonymous namespace, when the ProLink feature needed exactly the same thing
-/// for a track pulled off a CDJ over the network. The two differ only in how the
-/// files got onto local disk; everything from there on is identical, and
-/// duplicating a few hundred lines of beat-grid arithmetic is how two copies
-/// drift apart.
+/// anonymous namespace. A track off a stick and a track streamed off another
+/// player differ only in how the files got onto local disk; everything from
+/// there on is identical, and duplicating a few hundred lines of beat-grid
+/// arithmetic is how two copies drift apart.
 ///
 /// **This module applies; it does not parse.** The files are read by
 /// `prolink-rekordbox` through `network/prolink/prolinkanlz.h`, which is also

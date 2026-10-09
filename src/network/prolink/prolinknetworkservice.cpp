@@ -190,8 +190,8 @@ QString toQString(const ::rust::String& text) {
 /// Whether two serve statuses would draw the same page.
 ///
 /// Field by field rather than a memcmp or an operator==: the struct is the
-/// library feature's vocabulary, and adding a comparison to it would put a
-/// definition of "changed" somewhere nothing else looks.
+/// pages' vocabulary, and adding a comparison to it would put a definition of
+/// "changed" somewhere nothing else looks.
 bool sameServeStatus(const mixxx::prolink::server::ServeStatus& left,
         const mixxx::prolink::server::ServeStatus& right) {
     if (left.active != right.active || left.deviceNumber != right.deviceNumber ||
@@ -966,9 +966,9 @@ void ProLinkNetworkService::start() {
     // portmapper on 111, and both enter the claim chain -- so they compete with
     // each other for a player number, and the one that loses becomes a passive
     // observer that cannot serve or be browsed. That is exactly what happened
-    // here: the browser's registry created one and the old sidebar feature
-    // created another, and the deck spent a session announcing "no player
-    // number was free" against itself.
+    // here once: the browser's registry created one and the old sidebar
+    // feature, since removed, created another, and the deck spent a session
+    // announcing "no player number was free" against itself.
     //
     // Refused rather than allowed, because the failure is otherwise invisible:
     // everything logs success and the network simply does not work.
@@ -1511,9 +1511,10 @@ void ProLinkNetworkService::syncDevices() {
         fresh.append(toMixxxDevice(device));
     }
 
-    // Diffed rather than replaced wholesale, because the library feature
-    // listens for found/changed/lost and rebuilding its tree on every poll
-    // would collapse the user's selection twenty times a second.
+    // Diffed rather than replaced wholesale, because the media registry acts
+    // on found, changed and lost: a device lost takes its media and their rows
+    // with it, which thirty times a second would mean reading every remote
+    // medium again thirty times a second.
     for (const ProLinkDevice& now : fresh) {
         bool seen = false;
         for (const ProLinkDevice& before : m_devices) {

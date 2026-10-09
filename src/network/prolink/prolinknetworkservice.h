@@ -34,9 +34,7 @@ namespace prolink {
 /// **The protocol is not implemented here.** It lives in `lib/prolink`, a Rust
 /// workspace linked statically into this binary, and this class is the Qt
 /// shell around it: it turns the library's polled state and drained events
-/// into the signals and slots the library feature already expects, and does
-/// nothing else. Everything above it — `src/library/prolink/`, the phase-meter
-/// widget, the skin — is unchanged by the swap.
+/// into the signals and slots the deck's media registry listens to.
 ///
 /// # Why there is no longer a network thread
 ///

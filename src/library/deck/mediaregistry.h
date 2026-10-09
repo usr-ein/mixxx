@@ -408,9 +408,7 @@ class MediaRegistry : public QObject {
     QTimer m_rescanPoll;
 
 #ifdef __PROLINK__
-    /// Owned here rather than by a library feature, because the browser is the
-    /// only thing that shows media now and the old ProLinkFeature no longer has
-    /// a UI to hang off.
+    /// Owned here, because the browser is the only thing that shows media.
     std::unique_ptr<mixxx::prolink::ProLinkNetworkService> m_pNetwork;
     /// What announceLoadedTrack() was last asked to say, so it can be asked
     /// again when what we serve changes.
