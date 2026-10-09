@@ -298,8 +298,7 @@ class MediaRegistry : public QObject {
     void resolveMasterKey();
 
   private:
-    /// The MAC and slot behind a remote medium's id, or false if it is not one
-    /// of ours or its player has gone.
+    /// The MAC and slot behind a remote medium's id, or false for a local one.
     bool addressOf(const MediumId& medium,
             QByteArray* pMac,
             mixxx::prolink::MediaSlot* pSlot) const;

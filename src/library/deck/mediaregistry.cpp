@@ -56,6 +56,12 @@ bool isStickMount(const QString& path) {
             info.device().startsWith(QByteArrayLiteral("/dev/sd"));
 }
 
+/// The medium in a player's slot. MediaRegistry::addressOf() goes back.
+mixxx::deck::MediumId remoteMediumId(const QByteArray& mac, mixxx::prolink::MediaSlot slot) {
+    return mixxx::deck::MediumId::proLink(
+            QString::fromLatin1(mac.toHex()), static_cast<int>(slot));
+}
+
 /// How much of a track to pull before anything else.
 ///
 /// Runway, measured in seconds of playback rather than in bytes: 1 MB is about
@@ -684,8 +690,7 @@ MediumId MediaRegistry::mediumOf(int player, mixxx::prolink::MediaSlot slot) con
     }
     for (const mixxx::prolink::ProLinkDevice& device : m_devices) {
         if (device.deviceNumber == player && !device.mac.isEmpty()) {
-            return MediumId::proLink(QString::fromLatin1(device.mac.toHex()),
-                    static_cast<int>(slot));
+            return remoteMediumId(device.mac, slot);
         }
     }
     return MediumId();
@@ -738,8 +743,7 @@ void MediaRegistry::resolveMasterKey() {
 void MediaRegistry::onMediaInfo(const QByteArray& mac,
         mixxx::prolink::MediaSlot slot,
         const mixxx::prolink::MediaInfo& info) {
-    const MediumId id = MediumId::proLink(QString::fromLatin1(mac.toHex()),
-            static_cast<int>(slot));
+    const MediumId id = remoteMediumId(mac, slot);
     const int index = indexOf(id);
 
     if (!info.isOccupied()) {
@@ -804,8 +808,7 @@ void MediaRegistry::onDatabaseFetched(const QByteArray& mac,
         mixxx::prolink::MediaSlot slot,
         const QByteArray& data,
         const QString& error) {
-    const MediumId id = MediumId::proLink(QString::fromLatin1(mac.toHex()),
-            static_cast<int>(slot));
+    const MediumId id = remoteMediumId(mac, slot);
     const int index = indexOf(id);
     if (index < 0) {
         return; // The medium went away while we were fetching it.
@@ -832,18 +835,11 @@ bool MediaRegistry::addressOf(const MediumId& medium,
     if (medium.isLocal() || !medium.isValid()) {
         return false;
     }
-    // "prolink:<mac hex>|<slot>", as MediumId::proLink built it. Parsed rather
-    // than carried alongside because the key is what survives a round trip
-    // through SQL, and everything here comes back out of the database.
-    const QString key = medium.key();
-    const int bar = key.indexOf(QChar('|'));
-    if (bar < 0) {
-        return false;
-    }
-    const QString hex = key.mid(QStringLiteral("prolink:").size(),
-            bar - static_cast<int>(QStringLiteral("prolink:").size()));
-    *pMac = QByteArray::fromHex(hex.toLatin1());
-    *pSlot = static_cast<mixxx::prolink::MediaSlot>(key.mid(bar + 1).toInt());
+    // Read back out of the id rather than carried alongside it, because the
+    // id is what survives a round trip through SQL, and everything here
+    // comes back out of the database.
+    *pMac = QByteArray::fromHex(medium.deviceKey().toLatin1());
+    *pSlot = static_cast<mixxx::prolink::MediaSlot>(medium.slot());
     return !pMac->isEmpty();
 }
 
@@ -1233,17 +1229,9 @@ void MediaRegistry::onPreviewFetched(const QByteArray& mac,
     }
     // Back to a MediumId, because that is what the browser keyed its request
     // by. The MAC and slot are what the network layer speaks.
-    for (const MediumInfo& medium : m_media) {
-        if (medium.id.isLocal()) {
-            continue;
-        }
-        QByteArray candidateMac;
-        mixxx::prolink::MediaSlot candidateSlot = mixxx::prolink::MediaSlot::Usb;
-        if (addressOf(medium.id, &candidateMac, &candidateSlot) &&
-                candidateMac == mac && candidateSlot == slot) {
-            emit previewArrived(medium.id, trackId, blob);
-            return;
-        }
+    const MediumId id = remoteMediumId(mac, slot);
+    if (indexOf(id) >= 0) {
+        emit previewArrived(id, trackId, blob);
     }
 }
 
@@ -1350,11 +1338,11 @@ void MediaRegistry::onDeviceLost(const QByteArray& mac) {
                             }),
             m_devices.end());
 
-    const QString prefix = QStringLiteral("prolink:") +
-            QString::fromLatin1(mac.toHex()) + QChar('|');
+    const QString deviceKey = QString::fromLatin1(mac.toHex());
     bool changed = false;
     for (int i = m_media.size() - 1; i >= 0; --i) {
-        if (!m_media.at(i).id.key().startsWith(prefix)) {
+        const MediumId id = m_media.at(i).id;
+        if (id.isLocal() || id.deviceKey() != deviceKey) {
             continue;
         }
         const MediumInfo gone = m_media.takeAt(i);

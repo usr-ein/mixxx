@@ -47,7 +47,7 @@ class MediumId final {
     /// *volumeId* is the filesystem's UUID, which is what tells the two apart.
     /// Empty when it cannot be read, which is the old behaviour and no worse.
     static MediumId local(const QString& mountPoint, const QString& volumeId = QString()) {
-        QString key = QStringLiteral("usb:") + mountPoint;
+        QString key = kLocalPrefix + mountPoint;
         if (!volumeId.isEmpty()) {
             key += kVolumeMarker + volumeId;
         }
@@ -59,14 +59,12 @@ class MediumId final {
     /// reassigned — numbers move between sessions, MACs do not.
     static MediumId proLink(const QString& deviceKey, int slot) {
         return MediumId(Source::ProLink,
-                QStringLiteral("prolink:%1|%2").arg(deviceKey).arg(slot));
+                kProLinkPrefix + deviceKey + kSlotMarker + QString::number(slot));
     }
 
     /// Rebuild from a key read back out of the database.
     static MediumId fromKey(const QString& key) {
-        return MediumId(key.startsWith(QStringLiteral("usb:")) ? Source::Local
-                                                               : Source::ProLink,
-                key);
+        return MediumId(key.startsWith(kLocalPrefix) ? Source::Local : Source::ProLink, key);
     }
 
     Source source() const {
@@ -90,7 +88,8 @@ class MediumId final {
             return QString();
         }
         const auto marker = m_key.lastIndexOf(kVolumeMarker);
-        return marker < 0 ? m_key.mid(4) : m_key.mid(4, marker - 4);
+        return marker < 0 ? m_key.mid(kLocalPrefix.size())
+                          : m_key.mid(kLocalPrefix.size(), marker - kLocalPrefix.size());
     }
 
     /// The filesystem UUID a local medium was identified by, or empty.
@@ -100,6 +99,27 @@ class MediumId final {
         }
         const auto marker = m_key.lastIndexOf(kVolumeMarker);
         return marker < 0 ? QString() : m_key.mid(marker + kVolumeMarker.size());
+    }
+
+    /// The player a remote medium is on, as proLink() was given it: its MAC
+    /// as hex. Empty for a local one.
+    QString deviceKey() const {
+        if (m_source != Source::ProLink) {
+            return QString();
+        }
+        const auto marker = m_key.indexOf(kSlotMarker);
+        return marker < 0 ? QString()
+                          : m_key.mid(kProLinkPrefix.size(), marker - kProLinkPrefix.size());
+    }
+
+    /// The slot of that player a remote medium is in, as proLink() was given
+    /// it. 0 for a local one.
+    int slot() const {
+        if (m_source != Source::ProLink) {
+            return 0;
+        }
+        const auto marker = m_key.indexOf(kSlotMarker);
+        return marker < 0 ? 0 : m_key.mid(marker + kSlotMarker.size()).toInt();
     }
 
     friend bool operator==(const MediumId& lhs, const MediumId& rhs) {
@@ -114,10 +134,15 @@ class MediumId final {
             : m_source(source), m_key(std::move(key)) {
     }
 
+    /// A local key: `usb:<mount point>`, then the UUID after kVolumeMarker.
+    static inline const QString kLocalPrefix = QStringLiteral("usb:");
     /// Between the mount point and the UUID in a local key. Spelled out rather
     /// than a single character so that a mount point containing a `#` -- not
     /// one dj-usb makes, but one a development box might -- still parses.
     static inline const QString kVolumeMarker = QStringLiteral("#uuid:");
+    /// A remote key: `prolink:<MAC as hex>|<slot>`.
+    static inline const QString kProLinkPrefix = QStringLiteral("prolink:");
+    static inline const QString kSlotMarker = QStringLiteral("|");
 
     Source m_source = Source::Local;
     QString m_key;
