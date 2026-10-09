@@ -18,7 +18,6 @@
 #include "library/deck/trackcache.h"
 #include "library/deck/volumelabel.h"
 #include "library/rekordbox/rekordboxpdb.h"
-#include "network/prolink/prolinkkeysync.h"
 #include "network/prolink/prolinknetworkservice.h"
 #include "track/keyutils.h"
 #include "util/db/dbconnectionpooled.h"
@@ -194,7 +193,6 @@ MediaRegistry::MediaRegistry(mixxx::DbConnectionPoolPtr dbConnectionPool,
             [this]() {
                 resolveMasterKey();
             });
-    m_pKeySync = std::make_unique<mixxx::prolink::ProLinkKeySync>();
     connect(m_pNetwork,
             &mixxx::prolink::ProLinkNetworkService::masterTrackChanged,
             this,
@@ -674,9 +672,6 @@ void MediaRegistry::onMasterTrackChanged(int masterPlayer,
 }
 
 void MediaRegistry::resolveMasterKey() {
-    if (!m_pKeySync) {
-        return;
-    }
     int keyId = 0;
     const MediumId medium = mediumOf(m_masterSourcePlayer, m_masterSlot);
     if (m_masterTrackId != 0 && medium.isValid()) {
@@ -703,7 +698,7 @@ void MediaRegistry::resolveMasterKey() {
     kLogger.debug() << "master is player" << m_masterPlayer << "playing"
                     << medium.key() << m_masterTrackId << "in"
                     << KeyUtils::keyToString(key, KeyUtils::KeyNotation::Lancelot);
-    m_pKeySync->setLink(otherIsMaster, key);
+    emit masterKeyChanged(otherIsMaster, keyId);
 }
 
 void MediaRegistry::onMediaInfo(const QByteArray& mac,

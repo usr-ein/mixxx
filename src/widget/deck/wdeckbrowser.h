@@ -29,6 +29,9 @@ class BaseTrackCache;
 class QStackedWidget;
 
 namespace mixxx {
+namespace prolink {
+class ProLinkKeySync;
+} // namespace prolink
 namespace deck {
 
 class DeckAutoplay;
@@ -277,6 +280,8 @@ class WDeckBrowser : public QWidget, public WBaseWidget {
     std::unique_ptr<MediaRegistry> m_pRegistry;
     /// After the registry and the session, so it goes first: it uses both.
     std::unique_ptr<RemoteTrackStreamer> m_pStreamer;
+    /// KEY SYNC, told the master's key by the registry.
+    std::unique_ptr<mixxx::prolink::ProLinkKeySync> m_pKeySync;
     /// After the registry, so it goes first: it listens to it.
     std::unique_ptr<DeckAutoplay> m_pAutoplay;
 

@@ -20,7 +20,6 @@
 namespace mixxx {
 namespace prolink {
 class ProLinkNetworkService;
-class ProLinkKeySync;
 } // namespace prolink
 namespace deck {
 
@@ -216,6 +215,14 @@ class MediaRegistry : public QObject {
     /// level or move a selection over it; the list on screen just re-reads.
     /// *rbIds* are the rows that changed, by their id within the medium.
     void mediumUpdated(const QString& mediumKey, const QList<quint32>& rbIds);
+    /// What KEY SYNC may borrow: whether another player holds tempo master,
+    /// and the key that player is playing, 0 when it is not known.
+    ///
+    /// *masterKeyId* is a ChromaticKey's number (KeyUtils::keyFromNumericValue()),
+    /// so this header does not have to pull in the key protobuf. Said when
+    /// either half changes, and the first answer always: see
+    /// resolveMasterKey().
+    void masterKeyChanged(bool otherIsMaster, int masterKeyId);
 
   private slots:
     void onReadFinished();
@@ -244,7 +251,8 @@ class MediaRegistry : public QObject {
             mixxx::prolink::MediaSlot slot,
             quint32 trackId);
 
-    /// Work out what key the tempo master is playing in, and tell KEY SYNC.
+    /// Work out what key the tempo master is playing in, and say so
+    /// (masterKeyChanged), for KEY SYNC.
     ///
     /// **This is the only thing that can answer the question**, and it is why
     /// it is answered here rather than in the network layer: the key is not on
@@ -360,9 +368,6 @@ class MediaRegistry : public QObject {
     /// again when what we serve changes.
     MediumId m_announcedMedium;
     quint32 m_announcedRekordboxId = 0;
-    /// KEY SYNC. Owned here for one reason: it needs a key resolved out of the
-    /// medium databases, and this is what holds those.
-    std::unique_ptr<mixxx::prolink::ProLinkKeySync> m_pKeySync;
     /// What the network last said the tempo master is playing. Kept because the
     /// key it resolves to can change without any of it changing — see
     /// resolveMasterKey().
@@ -370,9 +375,8 @@ class MediaRegistry : public QObject {
     int m_masterSourcePlayer = 0;
     mixxx::prolink::MediaSlot m_masterSlot = mixxx::prolink::MediaSlot::Empty;
     quint32 m_masterTrackId = 0;
-    /// What was last handed to KEY SYNC, so a resolution that comes out the
-    /// same is dropped rather than republished. A ChromaticKey, as an int, so
-    /// this header does not have to pull in the key protobuf.
+    /// What masterKeyChanged last said, so a resolution that comes out the
+    /// same is dropped rather than said again.
     int m_publishedMasterKeyId = 0;
     bool m_publishedOtherIsMaster = false;
     bool m_masterKeyPublished = false;

@@ -30,9 +30,11 @@
 #include "library/rekordbox/rekordboxanalysis.h"
 #include "library/trackcollection.h"
 #include "library/trackcollectionmanager.h"
+#include "track/keyutils.h"
 #include "track/track.h"
 #include "track/trackref.h"
 #include "moc_wdeckbrowser.cpp"
+#include "network/prolink/prolinkkeysync.h"
 #include "network/prolink/prolinknetworkservice.h"
 #include "util/logger.h"
 #include "widget/deck/deckaccent.h"
@@ -399,6 +401,17 @@ WDeckBrowser::WDeckBrowser(QWidget* pParent, Library* pLibrary, UserSettingsPoin
             m_pLibrary->dbConnectionPool(), m_pNetwork.get(), this);
     m_pStreamer = std::make_unique<RemoteTrackStreamer>(
             m_pRegistry.get(), m_pNetwork.get(), m_pCache.get(), this);
+    // KEY SYNC borrows the master's key, which only the registry can tell:
+    // it is in the copy of the master's medium database the registry read.
+    // Listening before the session starts, which is when the first answer
+    // comes.
+    m_pKeySync = std::make_unique<mixxx::prolink::ProLinkKeySync>();
+    connect(m_pRegistry.get(),
+            &MediaRegistry::masterKeyChanged,
+            m_pKeySync.get(),
+            [pKeySync = m_pKeySync.get()](bool otherIsMaster, int masterKeyId) {
+                pKeySync->setLink(otherIsMaster, KeyUtils::keyFromNumericValue(masterKeyId));
+            });
     m_pRegistry->start();
     // Autoplay loads through the browser's own load path, so a track it picks
     // is copied off its medium, announced and marked in the list exactly like
