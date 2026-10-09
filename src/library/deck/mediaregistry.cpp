@@ -257,6 +257,11 @@ int MediaRegistry::indexOf(const MediumId& id) const {
     return -1;
 }
 
+MediumInfo::Format MediaRegistry::formatOf(const MediumId& medium) const {
+    const int index = indexOf(medium);
+    return index >= 0 ? m_media.at(index).format : MediumInfo::Format::Rekordbox;
+}
+
 QStringList MediaRegistry::findLocalMountPoints() {
     QStringList mountPoints;
     // Immediate children of /media only, matching where dj-usb mounts and what

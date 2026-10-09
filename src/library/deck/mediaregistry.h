@@ -132,6 +132,9 @@ class MediaRegistry : public QObject {
     }
     /// -1 when there is no such medium.
     int indexOf(const MediumId& id) const;
+    /// The format of *medium*, or Rekordbox if it is not (or no longer) one we
+    /// hold.
+    MediumInfo::Format formatOf(const MediumId& medium) const;
 
     /// Look again for local sticks. Cheap, and safe to call from a signal.
     void rescanLocal();

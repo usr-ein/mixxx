@@ -388,9 +388,6 @@ class WDeckBrowser : public QWidget, public WBaseWidget {
     /// When the selection last moved. A refresh re-reads the list under the
     /// selection, so it waits until the DJ has stopped scrolling.
     QElapsedTimer m_lastSelectionMove;
-    /// The format of the medium a level belongs to, or Rekordbox if it is not
-    /// (or no longer) one we hold.
-    MediumInfo::Format formatOf(const MediumId& medium) const;
 
     // The deck's controls. Rotate, push, back, and the two SORT meanings.
     std::unique_ptr<ControlEncoder> m_pMove;

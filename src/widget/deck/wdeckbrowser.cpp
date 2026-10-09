@@ -888,16 +888,6 @@ void WDeckBrowser::refreshInPlace() {
     rebuildCurrentLevel();
 }
 
-MediumInfo::Format WDeckBrowser::formatOf(const MediumId& medium) const {
-    if (m_pRegistry) {
-        const int index = m_pRegistry->indexOf(medium);
-        if (index >= 0) {
-            return m_pRegistry->media().at(index).format;
-        }
-    }
-    return MediumInfo::Format::Rekordbox;
-}
-
 void WDeckBrowser::showSources() {
     if (m_stack.isEmpty()) {
         Level level;
@@ -1094,7 +1084,7 @@ void WDeckBrowser::showMediumMenu(const Level& level) {
 
 void WDeckBrowser::showPlaylists(const Level& level) {
     QSqlDatabase db = database();
-    const bool folders = formatOf(level.medium) == MediumInfo::Format::Folder;
+    const bool folders = m_pRegistry->formatOf(level.medium) == MediumInfo::Format::Folder;
     QList<MenuRow> rows;
     for (const PlaylistEntry& entry : playlistsIn(db, level.medium, level.parentRbId)) {
         MenuRow row;
@@ -1831,7 +1821,7 @@ bool WDeckBrowser::loadRow(const LoadableRow& row, bool play, const QModelIndex&
     // the list shows it and the BPM menu can put it in a bucket -- the one
     // thing this deck learns about a stick that is worth keeping on screen.
     QObject::disconnect(m_bpmWriteBack);
-    if (trackRowId > 0 && formatOf(medium) == MediumInfo::Format::Folder) {
+    if (trackRowId > 0 && m_pRegistry->formatOf(medium) == MediumInfo::Format::Folder) {
         // Already known if the deck analysed this file earlier in the boot:
         // the beats come back with the track, and nothing changes after the
         // load to say so.
