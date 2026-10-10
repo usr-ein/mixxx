@@ -653,6 +653,8 @@ bool ProLinkSync::manageMasterLikeACdj(
     // `play_latched`, not `play`: a cue held as a preview is not the deck
     // playing, and must not hand master over or claim it.
     const bool deckPlaying = m_pDeckPlayLatched->get() > 0.0;
+    const bool startedPlaying = deckPlaying && !m_deckWasPlaying;
+    m_deckWasPlaying = deckPlaying;
     // Second half: while our deck is stopped and we are master, hand master to
     // a deck that plays, as a CDJ does: a synced one only if we are synced
     // (automaster::successorWhenStopped). Held for as long as we stay
@@ -692,14 +694,31 @@ bool ProLinkSync::manageMasterLikeACdj(
         m_eligibleForAutoClaim.invalidate();
         return weAreMaster;
     }
-    if (!m_eligibleForAutoClaim.isValid()) {
-        m_eligibleForAutoClaim.start();
+    // The first deck to play takes an empty mastership as it starts, as a CDJ
+    // does -- once every player has been heard, so that "nobody is master" is
+    // known and not merely unheard. Otherwise, a master lost while we play
+    // among them, decision 2's delay.
+    std::vector<int> players;
+    for (const ::prolink::Device& device : m_pSession->devices()) {
+        if (device.is_player && device.online) {
+            players.push_back(static_cast<int>(device.number));
+        }
     }
-    if (m_eligibleForAutoClaim.elapsed() <
-            automaster::claimDelayMs(ours, m_autoClaimCollisions)) {
-        return weAreMaster;
+    const bool atOnce = automaster::claimsAtOnce(startedPlaying,
+            automaster::everyPlayerHeard(peers, players, ours),
+            m_autoClaimCollisions);
+    if (!atOnce) {
+        if (!m_eligibleForAutoClaim.isValid()) {
+            m_eligibleForAutoClaim.start();
+        }
+        if (m_eligibleForAutoClaim.elapsed() <
+                automaster::claimDelayMs(ours, m_autoClaimCollisions)) {
+            return weAreMaster;
+        }
     }
-    kLogger.info() << "nobody holds tempo master and our deck is playing; taking it";
+    kLogger.info() << (atOnce
+                    ? "nobody holds tempo master and our deck started playing; taking it"
+                    : "nobody holds tempo master and our deck is playing; taking it");
     m_eligibleForAutoClaim.invalidate();
     m_pSession->take_tempo_master();
     m_autoClaimed = m_pSession->is_tempo_master();

@@ -79,6 +79,26 @@ class StopOffers {
     std::vector<int> m_offered;
 };
 
+/// Whether every player we know of has sent status we still believe.
+///
+/// "Nobody is master" is known only then, rather than not yet heard: a peer
+/// unicasts status only once it has heard our keep-alive, and a claim older
+/// than a second is not believed. *players* are the online player numbers in
+/// the device table; *ours* is skipped.
+bool everyPlayerHeard(const std::vector<SyncPeer>& peers,
+        const std::vector<int>& players,
+        int ours);
+
+/// Whether an empty mastership is claimed at once, rather than after
+/// claimDelayMs(): our deck has just started to play, every player has been
+/// heard, and no claim of ours has collided.
+///
+/// The first deck to play takes master as it starts (S28 22.058, one status
+/// packet later; E01 23.269, the same packet). claimDelayMs() is owner
+/// decision 2, for a master lost while we play, and it still covers that,
+/// and a collision.
+bool claimsAtOnce(bool startedPlaying, bool everyPlayerHeard, int collisions);
+
 } // namespace automaster
 } // namespace prolink
 } // namespace mixxx

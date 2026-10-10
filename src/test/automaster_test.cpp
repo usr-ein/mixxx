@@ -123,3 +123,25 @@ TEST(AutoMaster, OurSyncGoingOffWhileStoppedHandsMasterOn) {
     EXPECT_EQ(0, offers.next(peers, 3, true));
     EXPECT_EQ(4, offers.next(peers, 3, false));
 }
+
+// "Nobody is master" is known only once every player has been heard: a peer
+// sends status only after hearing our keep-alive, and a stale claim is not
+// believed.
+TEST(AutoMaster, NobodyIsMasterOnlyOnceEveryPlayerHasBeenHeard) {
+    EXPECT_TRUE(everyPlayerHeard({peer(1, false, false), peer(2, false, true)}, {1, 2, 4}, 4));
+    SyncPeer stale = peer(2, false, true);
+    stale.statusAgeMs = 1500.0;
+    EXPECT_FALSE(everyPlayerHeard({peer(1, false, false), stale}, {1, 2, 4}, 4));
+    EXPECT_FALSE(everyPlayerHeard({peer(1, false, false)}, {1, 2}, 4))
+            << "player 2 is in the device table and has sent no status yet";
+    EXPECT_TRUE(everyPlayerHeard({}, {}, 4)) << "alone on the link";
+}
+
+// The first deck to play takes master as it starts (S28 22.058, E01 23.269).
+// Decision 2's delay is for a master lost while we play, and for a collision.
+TEST(AutoMaster, TheFirstDeckToPlayClaimsAtOnce) {
+    EXPECT_TRUE(claimsAtOnce(true, true, 0));
+    EXPECT_FALSE(claimsAtOnce(false, true, 0)) << "already playing: decision 2's delay";
+    EXPECT_FALSE(claimsAtOnce(true, false, 0)) << "a player not heard yet may be master";
+    EXPECT_FALSE(claimsAtOnce(true, true, 1)) << "after a collision the delay orders the decks";
+}

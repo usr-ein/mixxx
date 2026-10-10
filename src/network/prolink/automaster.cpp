@@ -64,6 +64,21 @@ void StopOffers::reset() {
     m_offered.clear();
 }
 
+bool everyPlayerHeard(const std::vector<SyncPeer>& peers,
+        const std::vector<int>& players,
+        int ours) {
+    return std::all_of(players.begin(), players.end(), [&peers, ours](int number) {
+        return number == ours ||
+                std::any_of(peers.begin(), peers.end(), [number, ours](const SyncPeer& peer) {
+                    return peer.number == number && isHeardPlayer(peer, ours);
+                });
+    });
+}
+
+bool claimsAtOnce(bool startedPlaying, bool everyPlayerHeard, int collisions) {
+    return startedPlaying && everyPlayerHeard && collisions == 0;
+}
+
 } // namespace automaster
 } // namespace prolink
 } // namespace mixxx

@@ -168,6 +168,9 @@ class ProLinkSync : public QObject {
     /// Whom this stop of our deck has offered master to: never the same deck
     /// twice in one stop. See automaster::StopOffers.
     automaster::StopOffers m_stopOffers;
+    /// Whether our deck was playing on the last poll, to see it start: the
+    /// first deck to play takes an empty mastership at once.
+    bool m_deckWasPlaying = false;
 
     /// Tell the network what this deck is playing.
     ///
