@@ -1,5 +1,6 @@
 #pragma once
 
+#include <functional>
 #include <vector>
 
 #include "network/prolink/syncsource.h"
@@ -63,15 +64,31 @@ int successorWhenStopped(const std::vector<SyncPeer>& peers, int ours, bool weAr
 ///
 /// The rule above is held for as long as we are master and stopped, as a
 /// CDJ holds it: a deck that starts later, or our SYNC going off, hands
-/// master over too. But an offer that is not taken up is never repeated to
-/// the same deck in the same stop, or it would be renewed every two seconds
-/// for as long as the deck plays, and every listener reading `0x9f` would
-/// take that deck for the master meanwhile.
+/// master over too. Two things keep it to one successor at a time:
+///
+///  * **The session refuses an offer while one is in flight**, until it is
+///    taken up or withdrawn (two seconds, `KeepIt`). A player claims master
+///    12-69 ms after it is named (S28), so naming a second deck over the
+///    first could leave two of them claiming it.
+///  * **A deck counts as offered only once the session took the offer**, and
+///    is never offered again in the same stop: it would be renewed every two
+///    seconds for as long as it plays, and every listener reading `0x9f`
+///    would take it for the master meanwhile.
 class StopOffers {
   public:
     /// The deck to offer master to now, or 0: the lowest-numbered deck the
-    /// rule names that has not been offered it during this stop.
-    int next(const std::vector<SyncPeer>& peers, int ours, bool weAreSynced);
+    /// rule names that has not taken an offer during this stop.
+    int candidate(const std::vector<SyncPeer>& peers, int ours, bool weAreSynced) const;
+    /// The session took our offer to *deck*: not offered it again this stop.
+    void offered(int deck);
+    /// One poll: offer the candidate through *offer*, the session's, and
+    /// count it only if the session took it. Returns the deck now offered, or
+    /// 0 for none (no candidate, or the session refused, an offer being in
+    /// flight).
+    int offerNext(const std::vector<SyncPeer>& peers,
+            int ours,
+            bool weAreSynced,
+            const std::function<bool(int)>& offer);
     /// Our deck plays again: its next stop starts afresh.
     void reset();
 

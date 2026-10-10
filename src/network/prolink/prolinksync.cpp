@@ -659,15 +659,19 @@ bool ProLinkSync::manageMasterLikeACdj(
     // a deck that plays, as a CDJ does: a synced one only if we are synced
     // (automaster::successorWhenStopped). Held for as long as we stay
     // stopped, so a deck that starts later, or our SYNC going off, hands it
-    // over too; but never offered twice to one deck in one stop. If nobody
-    // picks it up we keep it -- an empty mastership is worse.
+    // over too. One successor at a time: the session refuses an offer while
+    // one is in flight, and a deck counts as offered only once the session
+    // took it -- never twice to one deck in one stop. If nobody picks it up
+    // we keep it -- an empty mastership is worse.
     if (deckPlaying) {
         m_stopOffers.reset();
     } else if (weAreMaster) {
         const bool weAreSynced = m_pControls->syncEnabled()->get() > 0.0;
-        const int successor = m_stopOffers.next(peers, ours, weAreSynced);
-        if (successor != 0 &&
-                m_pSession->offer_tempo_master(static_cast<std::uint8_t>(successor))) {
+        const int successor =
+                m_stopOffers.offerNext(peers, ours, weAreSynced, [this](int deck) {
+                    return m_pSession->offer_tempo_master(static_cast<std::uint8_t>(deck));
+                });
+        if (successor != 0) {
             kLogger.info() << "our deck stopped; offering tempo master to player" << successor;
         }
     }

@@ -52,11 +52,23 @@ int successorWhenStopped(const std::vector<SyncPeer>& peers, int ours, bool weAr
     return lowestTakingOver(peers, ours, weAreSynced, {});
 }
 
-int StopOffers::next(const std::vector<SyncPeer>& peers, int ours, bool weAreSynced) {
-    const int successor = lowestTakingOver(peers, ours, weAreSynced, m_offered);
-    if (successor != 0) {
-        m_offered.push_back(successor);
+int StopOffers::candidate(const std::vector<SyncPeer>& peers, int ours, bool weAreSynced) const {
+    return lowestTakingOver(peers, ours, weAreSynced, m_offered);
+}
+
+void StopOffers::offered(int deck) {
+    m_offered.push_back(deck);
+}
+
+int StopOffers::offerNext(const std::vector<SyncPeer>& peers,
+        int ours,
+        bool weAreSynced,
+        const std::function<bool(int)>& offer) {
+    const int successor = candidate(peers, ours, weAreSynced);
+    if (successor == 0 || !offer(successor)) {
+        return 0;
     }
+    offered(successor);
     return successor;
 }
 

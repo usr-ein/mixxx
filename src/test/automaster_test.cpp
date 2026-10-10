@@ -99,29 +99,90 @@ TEST(AutoMaster, ADeckWhosePlayingFlagIsClearIsNeverOfferedMaster) {
     EXPECT_EQ(0, successorWhenStopped({plainFile}, 3, false));
 }
 
+namespace {
+
+/// The session, as far as offers go: it refuses one while another is in
+/// flight, until that one is taken up or withdrawn (VirtualCdj).
+struct FakeSession {
+    int inFlight = 0;
+    bool offer(int deck) {
+        if (inFlight != 0) {
+            return false;
+        }
+        inFlight = deck;
+        return true;
+    }
+    /// Nobody took it up: KeepIt withdraws it after two seconds.
+    void withdraw() {
+        inFlight = 0;
+    }
+};
+
+} // namespace
+
 // The rule is held while we stay stopped, but an offer nobody takes up is not
 // renewed to the same deck: it would cycle every two seconds, and each time
 // every listener reading 0x9f would take that deck for the master.
 TEST(AutoMaster, AnOfferIsNotRepeatedToTheSameDeckInOneStop) {
     StopOffers offers;
+    FakeSession session;
+    const auto offer = [&session](int deck) { return session.offer(deck); };
     const std::vector<SyncPeer> one = {peer(4, false, true)};
-    EXPECT_EQ(4, offers.next(one, 3, false));
-    EXPECT_EQ(0, offers.next(one, 3, false)) << "not taken up: not offered again";
+    EXPECT_EQ(4, offers.offerNext(one, 3, false, offer));
+    session.withdraw();
+    EXPECT_EQ(0, offers.offerNext(one, 3, false, offer)) << "not taken up: not offered again";
     // A deck that starts later is a new candidate (E06: the rule is held).
     const std::vector<SyncPeer> two = {peer(4, false, true), peer(2, false, true)};
-    EXPECT_EQ(2, offers.next(two, 3, false));
-    EXPECT_EQ(0, offers.next(two, 3, false));
+    EXPECT_EQ(2, offers.offerNext(two, 3, false, offer));
+    session.withdraw();
+    EXPECT_EQ(0, offers.offerNext(two, 3, false, offer));
     offers.reset();
-    EXPECT_EQ(2, offers.next(two, 3, false)) << "the next stop starts afresh";
+    EXPECT_EQ(2, offers.offerNext(two, 3, false, offer)) << "the next stop starts afresh";
+}
+
+// Two decks that qualify from the stop: one is named, and nobody else while
+// its offer is in flight. The poll runs every 33 ms; naming the second over
+// the first could leave both claiming master (they claim 12-69 ms after being
+// named, S28).
+TEST(AutoMaster, TwoDecksQualifyingAtTheStopOnlyOneIsNamed) {
+    StopOffers offers;
+    FakeSession session;
+    const auto offer = [&session](int deck) { return session.offer(deck); };
+    const std::vector<SyncPeer> two = {peer(2, true, true), peer(4, true, true)};
+    EXPECT_EQ(2, offers.offerNext(two, 3, false, offer)) << "the lowest-numbered";
+    for (int poll = 0; poll < 60; ++poll) {
+        EXPECT_EQ(0, offers.offerNext(two, 3, false, offer)) << "two seconds of polls";
+    }
+    EXPECT_EQ(2, session.inFlight) << "0x9f still names the first";
+    // Withdrawn after two seconds, untaken: the next deck may have it.
+    session.withdraw();
+    EXPECT_EQ(4, offers.offerNext(two, 3, false, offer));
+    EXPECT_EQ(4, session.inFlight);
+}
+
+// A deck counts as offered only once the session took the offer: one the
+// session refused is still a candidate.
+TEST(AutoMaster, AnOfferTheSessionRefusedIsNotCounted) {
+    StopOffers offers;
+    bool accepts = false;
+    const auto offer = [&accepts](int) { return accepts; };
+    const std::vector<SyncPeer> one = {peer(4, false, true)};
+    EXPECT_EQ(0, offers.offerNext(one, 3, false, offer));
+    EXPECT_EQ(4, offers.candidate(one, 3, false)) << "still a candidate";
+    accepts = true;
+    EXPECT_EQ(4, offers.offerNext(one, 3, false, offer));
+    EXPECT_EQ(0, offers.candidate(one, 3, false));
 }
 
 // E06 E: a paused master in sync gives master to an unsynced deck that plays
 // the moment its own SYNC goes off.
 TEST(AutoMaster, OurSyncGoingOffWhileStoppedHandsMasterOn) {
     StopOffers offers;
+    FakeSession session;
+    const auto offer = [&session](int deck) { return session.offer(deck); };
     const std::vector<SyncPeer> peers = {peer(4, false, true)};
-    EXPECT_EQ(0, offers.next(peers, 3, true));
-    EXPECT_EQ(4, offers.next(peers, 3, false));
+    EXPECT_EQ(0, offers.offerNext(peers, 3, true, offer));
+    EXPECT_EQ(4, offers.offerNext(peers, 3, false, offer));
 }
 
 // "Nobody is master" is known only once every player has been heard: a peer
