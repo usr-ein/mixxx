@@ -28,6 +28,11 @@ struct SyncPeer {
     /// Status says it is auditioning its cue: CUE held, the playhead moving
     /// until it is let go.
     bool auditioning = false;
+    /// Its status says it is playing: flag `0x40`, which goes with its beats
+    /// and with its taking master. Not the same as `playing`, read off the
+    /// play state: a deck playing a plain file sits at play state 3 with this
+    /// clear, sends no beats and never takes master (emulated, E12).
+    bool playingFlag = false;
     /// The tempo from its last beat packet, pitch applied; <= 0 for none.
     double beatBpm = -1.0;
     /// How long ago that beat packet arrived, ms; negative for never.

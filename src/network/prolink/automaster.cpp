@@ -21,10 +21,22 @@ bool mayClaim(const ClaimInputs& inputs) {
             inputs.playingWithTempo && !inputs.following && !inputs.holdingOff;
 }
 
-int successorWhenStopped(const std::vector<SyncPeer>& peers, int ours) {
+namespace {
+
+/// Whether *peer* is a deck a stopped master hands over to.
+bool takesOver(const SyncPeer& peer, int ours, bool weAreSynced) {
+    return isHeardPlayer(peer, ours) && peer.playingFlag && (!weAreSynced || peer.isSynced);
+}
+
+/// The lowest-numbered deck that takes over, leaving out *offered*.
+int lowestTakingOver(const std::vector<SyncPeer>& peers,
+        int ours,
+        bool weAreSynced,
+        const std::vector<int>& offered) {
     int best = 0;
     for (const SyncPeer& peer : peers) {
-        if (!isHeardPlayer(peer, ours) || !peer.isSynced || !peer.playing) {
+        if (!takesOver(peer, ours, weAreSynced) ||
+                std::find(offered.begin(), offered.end(), peer.number) != offered.end()) {
             continue;
         }
         if (best == 0 || peer.number < best) {
@@ -32,6 +44,51 @@ int successorWhenStopped(const std::vector<SyncPeer>& peers, int ours) {
         }
     }
     return best;
+}
+
+} // namespace
+
+int successorWhenStopped(const std::vector<SyncPeer>& peers, int ours, bool weAreSynced) {
+    return lowestTakingOver(peers, ours, weAreSynced, {});
+}
+
+int StopOffers::candidate(const std::vector<SyncPeer>& peers, int ours, bool weAreSynced) const {
+    return lowestTakingOver(peers, ours, weAreSynced, m_offered);
+}
+
+void StopOffers::offered(int deck) {
+    m_offered.push_back(deck);
+}
+
+int StopOffers::offerNext(const std::vector<SyncPeer>& peers,
+        int ours,
+        bool weAreSynced,
+        const std::function<bool(int)>& offer) {
+    const int successor = candidate(peers, ours, weAreSynced);
+    if (successor == 0 || !offer(successor)) {
+        return 0;
+    }
+    offered(successor);
+    return successor;
+}
+
+void StopOffers::reset() {
+    m_offered.clear();
+}
+
+bool everyPlayerHeard(const std::vector<SyncPeer>& peers,
+        const std::vector<int>& players,
+        int ours) {
+    return std::all_of(players.begin(), players.end(), [&peers, ours](int number) {
+        return number == ours ||
+                std::any_of(peers.begin(), peers.end(), [number, ours](const SyncPeer& peer) {
+                    return peer.number == number && isHeardPlayer(peer, ours);
+                });
+    });
+}
+
+bool claimsAtOnce(bool startedPlaying, bool everyPlayerHeard, int collisions) {
+    return startedPlaying && everyPlayerHeard && collisions == 0;
 }
 
 } // namespace automaster

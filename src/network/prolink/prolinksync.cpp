@@ -100,6 +100,7 @@ mixxx::prolink::SyncPeer syncPeerOf(const ::prolink::Player& player) {
     peer.isMaster = player.is_master;
     peer.yieldingTo = static_cast<int>(player.yielding_to);
     peer.isSynced = player.is_synced;
+    peer.playingFlag = player.is_playing;
     switch (player.play_state) {
     case ::prolink::PlayState::Playing:
     case ::prolink::PlayState::Looping:
@@ -652,19 +653,26 @@ bool ProLinkSync::manageMasterLikeACdj(
     // `play_latched`, not `play`: a cue held as a preview is not the deck
     // playing, and must not hand master over or claim it.
     const bool deckPlaying = m_pDeckPlayLatched->get() > 0.0;
-    // Second half: when our deck stops while we are master, hand master to a
-    // synced deck playing on, once per stop. If it does not pick it up we keep
-    // it -- an empty mastership is worse.
+    const bool startedPlaying = deckPlaying && !m_deckWasPlaying;
+    m_deckWasPlaying = deckPlaying;
+    // Second half: while our deck is stopped and we are master, hand master to
+    // a deck that plays, as a CDJ does: a synced one only if we are synced
+    // (automaster::successorWhenStopped). Held for as long as we stay
+    // stopped, so a deck that starts later, or our SYNC going off, hands it
+    // over too. One successor at a time: the session refuses an offer while
+    // one is in flight, and a deck counts as offered only once the session
+    // took it -- never twice to one deck in one stop. If nobody picks it up
+    // we keep it -- an empty mastership is worse.
     if (deckPlaying) {
-        m_offeredSinceStop = false;
-    } else if (weAreMaster && !m_offeredSinceStop) {
-        const int successor = automaster::successorWhenStopped(peers, ours);
+        m_stopOffers.reset();
+    } else if (weAreMaster) {
+        const bool weAreSynced = m_pControls->syncEnabled()->get() > 0.0;
+        const int successor =
+                m_stopOffers.offerNext(peers, ours, weAreSynced, [this](int deck) {
+                    return m_pSession->offer_tempo_master(static_cast<std::uint8_t>(deck));
+                });
         if (successor != 0) {
-            m_offeredSinceStop = true;
-            if (m_pSession->offer_tempo_master(static_cast<std::uint8_t>(successor))) {
-                kLogger.info() << "our deck stopped; offering tempo master to player"
-                               << successor;
-            }
+            kLogger.info() << "our deck stopped; offering tempo master to player" << successor;
         }
     }
 
@@ -690,14 +698,31 @@ bool ProLinkSync::manageMasterLikeACdj(
         m_eligibleForAutoClaim.invalidate();
         return weAreMaster;
     }
-    if (!m_eligibleForAutoClaim.isValid()) {
-        m_eligibleForAutoClaim.start();
+    // The first deck to play takes an empty mastership as it starts, as a CDJ
+    // does -- once every player has been heard, so that "nobody is master" is
+    // known and not merely unheard. Otherwise, a master lost while we play
+    // among them, decision 2's delay.
+    std::vector<int> players;
+    for (const ::prolink::Device& device : m_pSession->devices()) {
+        if (device.is_player && device.online) {
+            players.push_back(static_cast<int>(device.number));
+        }
     }
-    if (m_eligibleForAutoClaim.elapsed() <
-            automaster::claimDelayMs(ours, m_autoClaimCollisions)) {
-        return weAreMaster;
+    const bool atOnce = automaster::claimsAtOnce(startedPlaying,
+            automaster::everyPlayerHeard(peers, players, ours),
+            m_autoClaimCollisions);
+    if (!atOnce) {
+        if (!m_eligibleForAutoClaim.isValid()) {
+            m_eligibleForAutoClaim.start();
+        }
+        if (m_eligibleForAutoClaim.elapsed() <
+                automaster::claimDelayMs(ours, m_autoClaimCollisions)) {
+            return weAreMaster;
+        }
     }
-    kLogger.info() << "nobody holds tempo master and our deck is playing; taking it";
+    kLogger.info() << (atOnce
+                    ? "nobody holds tempo master and our deck started playing; taking it"
+                    : "nobody holds tempo master and our deck is playing; taking it");
     m_eligibleForAutoClaim.invalidate();
     m_pSession->take_tempo_master();
     m_autoClaimed = m_pSession->is_tempo_master();
