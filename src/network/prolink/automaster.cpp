@@ -21,10 +21,22 @@ bool mayClaim(const ClaimInputs& inputs) {
             inputs.playingWithTempo && !inputs.following && !inputs.holdingOff;
 }
 
-int successorWhenStopped(const std::vector<SyncPeer>& peers, int ours) {
+namespace {
+
+/// Whether *peer* is a deck a stopped master hands over to.
+bool takesOver(const SyncPeer& peer, int ours, bool weAreSynced) {
+    return isHeardPlayer(peer, ours) && peer.playingFlag && (!weAreSynced || peer.isSynced);
+}
+
+/// The lowest-numbered deck that takes over, leaving out *offered*.
+int lowestTakingOver(const std::vector<SyncPeer>& peers,
+        int ours,
+        bool weAreSynced,
+        const std::vector<int>& offered) {
     int best = 0;
     for (const SyncPeer& peer : peers) {
-        if (!isHeardPlayer(peer, ours) || !peer.isSynced || !peer.playing) {
+        if (!takesOver(peer, ours, weAreSynced) ||
+                std::find(offered.begin(), offered.end(), peer.number) != offered.end()) {
             continue;
         }
         if (best == 0 || peer.number < best) {
@@ -32,6 +44,24 @@ int successorWhenStopped(const std::vector<SyncPeer>& peers, int ours) {
         }
     }
     return best;
+}
+
+} // namespace
+
+int successorWhenStopped(const std::vector<SyncPeer>& peers, int ours, bool weAreSynced) {
+    return lowestTakingOver(peers, ours, weAreSynced, {});
+}
+
+int StopOffers::next(const std::vector<SyncPeer>& peers, int ours, bool weAreSynced) {
+    const int successor = lowestTakingOver(peers, ours, weAreSynced, m_offered);
+    if (successor != 0) {
+        m_offered.push_back(successor);
+    }
+    return successor;
+}
+
+void StopOffers::reset() {
+    m_offered.clear();
 }
 
 } // namespace automaster

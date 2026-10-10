@@ -100,6 +100,7 @@ mixxx::prolink::SyncPeer syncPeerOf(const ::prolink::Player& player) {
     peer.isMaster = player.is_master;
     peer.yieldingTo = static_cast<int>(player.yielding_to);
     peer.isSynced = player.is_synced;
+    peer.playingFlag = player.is_playing;
     switch (player.play_state) {
     case ::prolink::PlayState::Playing:
     case ::prolink::PlayState::Looping:
@@ -652,19 +653,20 @@ bool ProLinkSync::manageMasterLikeACdj(
     // `play_latched`, not `play`: a cue held as a preview is not the deck
     // playing, and must not hand master over or claim it.
     const bool deckPlaying = m_pDeckPlayLatched->get() > 0.0;
-    // Second half: when our deck stops while we are master, hand master to a
-    // synced deck playing on, once per stop. If it does not pick it up we keep
-    // it -- an empty mastership is worse.
+    // Second half: while our deck is stopped and we are master, hand master to
+    // a deck that plays, as a CDJ does: a synced one only if we are synced
+    // (automaster::successorWhenStopped). Held for as long as we stay
+    // stopped, so a deck that starts later, or our SYNC going off, hands it
+    // over too; but never offered twice to one deck in one stop. If nobody
+    // picks it up we keep it -- an empty mastership is worse.
     if (deckPlaying) {
-        m_offeredSinceStop = false;
-    } else if (weAreMaster && !m_offeredSinceStop) {
-        const int successor = automaster::successorWhenStopped(peers, ours);
-        if (successor != 0) {
-            m_offeredSinceStop = true;
-            if (m_pSession->offer_tempo_master(static_cast<std::uint8_t>(successor))) {
-                kLogger.info() << "our deck stopped; offering tempo master to player"
-                               << successor;
-            }
+        m_stopOffers.reset();
+    } else if (weAreMaster) {
+        const bool weAreSynced = m_pControls->syncEnabled()->get() > 0.0;
+        const int successor = m_stopOffers.next(peers, ours, weAreSynced);
+        if (successor != 0 &&
+                m_pSession->offer_tempo_master(static_cast<std::uint8_t>(successor))) {
+            kLogger.info() << "our deck stopped; offering tempo master to player" << successor;
         }
     }
 

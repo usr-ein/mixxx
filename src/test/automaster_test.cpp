@@ -21,6 +21,7 @@ SyncPeer peer(int number, bool synced, bool playing) {
     p.statusAgeMs = 100.0;
     p.isSynced = synced;
     p.playing = playing;
+    p.playingFlag = playing;
     return p;
 }
 
@@ -68,12 +69,57 @@ TEST(AutoMaster, LowerNumbersClaimFirstAndCollisionsBackOff) {
     EXPECT_EQ(claimDelayMs(1, kMaxCollisions), claimDelayMs(1, kMaxCollisions + 5));
 }
 
-// Decision 13: a stopped master hands over to a synced deck that plays on.
-TEST(AutoMaster, HandsOverToTheLowestSyncedPlayingDeck) {
-    EXPECT_EQ(2, successorWhenStopped({peer(4, true, true), peer(2, true, true)}, 3));
-    EXPECT_EQ(0, successorWhenStopped({peer(4, false, true)}, 3));
-    EXPECT_EQ(0, successorWhenStopped({peer(4, true, false)}, 3));
+// Decision 13, as a CDJ-2000NXS does it: a stopped master hands master to a
+// deck that plays, unless the master is synced and that deck is not. Each
+// case of E06's four, and the hardware's (S28 193.655, 208.276).
+TEST(AutoMaster, AStoppedMasterHandsOverAsACdjDoes) {
+    // E06 D (S28 208.276): master in sync, the deck that plays in sync.
+    EXPECT_EQ(4, successorWhenStopped({peer(4, true, true)}, 3, true));
+    // E06 A: master not in sync, the deck in sync.
+    EXPECT_EQ(4, successorWhenStopped({peer(4, true, true)}, 3, false));
+    // E06 C, E01 78.031, E09 10.040: neither in sync.
+    EXPECT_EQ(4, successorWhenStopped({peer(4, false, true)}, 3, false));
+    // E06 B: master in sync, the deck not: the master keeps it.
+    EXPECT_EQ(0, successorWhenStopped({peer(4, false, true)}, 3, true));
+    // The lowest-numbered of the decks that qualify.
+    EXPECT_EQ(2, successorWhenStopped({peer(4, true, true), peer(2, false, true)}, 3, false));
+    EXPECT_EQ(4, successorWhenStopped({peer(4, true, true), peer(2, false, true)}, 3, true));
+    // Nobody playing, or nobody still heard: the master keeps it.
+    EXPECT_EQ(0, successorWhenStopped({peer(4, true, false)}, 3, false));
     SyncPeer gone = peer(4, true, true);
     gone.statusAgeMs = 5000.0;
-    EXPECT_EQ(0, successorWhenStopped({gone}, 3));
+    EXPECT_EQ(0, successorWhenStopped({gone}, 3, false));
+}
+
+// E12: an NXS playing a plain file sits at play state 3 with its playing flag
+// clear, and never takes master. Offered it, it would leave the offer hanging.
+TEST(AutoMaster, ADeckWhosePlayingFlagIsClearIsNeverOfferedMaster) {
+    SyncPeer plainFile = peer(4, false, true);
+    plainFile.playingFlag = false;
+    EXPECT_EQ(0, successorWhenStopped({plainFile}, 3, false));
+}
+
+// The rule is held while we stay stopped, but an offer nobody takes up is not
+// renewed to the same deck: it would cycle every two seconds, and each time
+// every listener reading 0x9f would take that deck for the master.
+TEST(AutoMaster, AnOfferIsNotRepeatedToTheSameDeckInOneStop) {
+    StopOffers offers;
+    const std::vector<SyncPeer> one = {peer(4, false, true)};
+    EXPECT_EQ(4, offers.next(one, 3, false));
+    EXPECT_EQ(0, offers.next(one, 3, false)) << "not taken up: not offered again";
+    // A deck that starts later is a new candidate (E06: the rule is held).
+    const std::vector<SyncPeer> two = {peer(4, false, true), peer(2, false, true)};
+    EXPECT_EQ(2, offers.next(two, 3, false));
+    EXPECT_EQ(0, offers.next(two, 3, false));
+    offers.reset();
+    EXPECT_EQ(2, offers.next(two, 3, false)) << "the next stop starts afresh";
+}
+
+// E06 E: a paused master in sync gives master to an unsynced deck that plays
+// the moment its own SYNC goes off.
+TEST(AutoMaster, OurSyncGoingOffWhileStoppedHandsMasterOn) {
+    StopOffers offers;
+    const std::vector<SyncPeer> peers = {peer(4, false, true)};
+    EXPECT_EQ(0, offers.next(peers, 3, true));
+    EXPECT_EQ(4, offers.next(peers, 3, false));
 }

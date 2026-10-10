@@ -5,6 +5,7 @@
 #include <memory>
 #include <vector>
 
+#include "network/prolink/automaster.h"
 #include "network/prolink/prolinktypes.h"
 #include "network/prolink/syncsource.h"
 
@@ -164,8 +165,9 @@ class ProLinkSync : public QObject {
     QElapsedTimer m_eligibleForAutoClaim;
     /// Since we last stood down or handed over; see automaster::kHoldOffMs.
     QElapsedTimer m_lastStoodDown;
-    /// Whether this stop of our deck has already offered master to someone.
-    bool m_offeredSinceStop = false;
+    /// Whom this stop of our deck has offered master to: never the same deck
+    /// twice in one stop. See automaster::StopOffers.
+    automaster::StopOffers m_stopOffers;
 
     /// Tell the network what this deck is playing.
     ///

@@ -49,9 +49,35 @@ struct ClaimInputs {
 bool mayClaim(const ClaimInputs& inputs);
 
 /// The deck to hand master to when we are master and our deck has stopped:
-/// the lowest-numbered player that is synced and playing, heard from
-/// recently. 0 for none.
-int successorWhenStopped(const std::vector<SyncPeer>& peers, int ours);
+/// the lowest-numbered player heard from recently whose status says it plays
+/// (`SyncPeer::playingFlag`), and a synced one only if we are synced. 0 for
+/// none.
+///
+/// What the CDJ-2000NXS does (`docs/prolink-learnings.md`, L2). A master that
+/// is not playing hands master to a deck that plays (S28 193.655 and 208.276;
+/// E01, E05, E06 A, C, D), **unless it is synced and that deck is not** (E06
+/// B), and gives it away the moment its own SYNC goes off (E06 E).
+int successorWhenStopped(const std::vector<SyncPeer>& peers, int ours, bool weAreSynced);
+
+/// The successors offered master during one stop of our deck.
+///
+/// The rule above is held for as long as we are master and stopped, as a
+/// CDJ holds it: a deck that starts later, or our SYNC going off, hands
+/// master over too. But an offer that is not taken up is never repeated to
+/// the same deck in the same stop, or it would be renewed every two seconds
+/// for as long as the deck plays, and every listener reading `0x9f` would
+/// take that deck for the master meanwhile.
+class StopOffers {
+  public:
+    /// The deck to offer master to now, or 0: the lowest-numbered deck the
+    /// rule names that has not been offered it during this stop.
+    int next(const std::vector<SyncPeer>& peers, int ours, bool weAreSynced);
+    /// Our deck plays again: its next stop starts afresh.
+    void reset();
+
+  private:
+    std::vector<int> m_offered;
+};
 
 } // namespace automaster
 } // namespace prolink
