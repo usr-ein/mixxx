@@ -536,7 +536,11 @@ void MenuRowDelegate::paint(QPainter* pPainter,
                 option.rect.bottom() - 9,
                 option.rect.width() - 2 * kPadding,
                 5);
-        pPainter->fillRect(strip, filled ? kBackground : kBarTrack);
+        // On the selected row, over the accent: the part to go is the dark
+        // of its text, faint, and what is done the same dark, solid.
+        QColor toGo = kSelectedText;
+        toGo.setAlpha(70);
+        pPainter->fillRect(strip, filled ? toGo : kBarTrack);
         pPainter->fillRect(QRectF(strip.left(),
                                    strip.top(),
                                    std::clamp(row.barLeft, 0.0, 1.0) * strip.width(),
