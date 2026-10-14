@@ -1015,6 +1015,7 @@ add_library(mixxx-lib STATIC EXCLUDE_FROM_ALL
   src/library/deck/decktrackmodel.cpp
   src/library/deck/folderlibrary.cpp
   src/library/deck/folderscan.cpp
+  src/library/deck/historystore.cpp
   src/library/deck/mediaregistry.cpp
   src/library/deck/pdbingest.cpp
   src/library/deck/playhistory.cpp
@@ -2226,6 +2227,7 @@ if(BUILD_TESTING)
     src/test/folderlibrary_test.cpp
     src/test/frametest.cpp
     src/test/globaltrackcache_test.cpp
+    src/test/historystore_test.cpp
     src/test/hotcuecontrol_test.cpp
     src/test/imageutils_test.cpp
     src/test/indexrange_test.cpp
