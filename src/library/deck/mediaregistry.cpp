@@ -797,8 +797,6 @@ void MediaRegistry::announceLoadedTrack(const MediumId& medium, quint32 rekordbo
         // **And nothing at all when we are not serving it.** This used to fall
         // back to the USB slot, which names a track that is not there -- or,
         // worse, a different track in whatever stick *is* being served as USB.
-        // A folder medium is never served (docs/plain-usb-plan.md D5), so for
-        // one of those this is the only right answer.
         bool served = false;
         for (const mixxx::prolink::ServedSlot& candidate :
                 m_pNetwork->serveStatus().media) {
@@ -817,6 +815,25 @@ void MediaRegistry::announceLoadedTrack(const MediumId& medium, quint32 rekordbo
         // and may change on a rebind: the service resolves this to whatever
         // number we hold each time it publishes.
         player = mixxx::prolink::kThisPlayer;
+        if (formatOf(medium) == MediumInfo::Format::Folder) {
+            // A plain stick is served by its folders, as a CDJ serves one,
+            // and its files have the server's ids, not the deck's rows'
+            // (PLAIN-STICKS.md §4.2). Announced as a plain file, which a
+            // player names with GENERIC_METADATA.
+            const quint32 fileId =
+                    m_pNetwork->servedFileId(slot, relativePathOf(medium, rekordboxId));
+            if (fileId == 0) {
+                // Not offered yet: the session finds a stick within seconds of
+                // the deck, and a change of what it serves asks again.
+                kLogger.debug() << "no served id yet for" << medium.key() << rekordboxId;
+                announceNothingLoaded();
+                return;
+            }
+            kLogger.debug() << "announcing what is loaded: a plain file, id" << fileId
+                            << "in slot" << static_cast<int>(slot);
+            m_pNetwork->setLoadedTrack(player, slot, fileId, true);
+            return;
+        }
     } else {
         QByteArray mac;
         if (!addressOf(medium, &mac, &slot)) {
@@ -831,15 +848,70 @@ void MediaRegistry::announceLoadedTrack(const MediumId& medium, quint32 rekordbo
         announceNothingLoaded();
         return;
     }
+    // A remote stick with no rekordbox library is read by its folders, and its
+    // ids are its player's own: announced as plain files.
+    const bool plain = formatOf(medium) == MediumInfo::Format::Folder;
     kLogger.debug() << "announcing what is loaded: player" << player << "slot"
-                    << static_cast<int>(slot) << "rekordbox id" << rekordboxId;
-    m_pNetwork->setLoadedTrack(player, slot, rekordboxId);
+                    << static_cast<int>(slot) << (plain ? "plain file" : "rekordbox id")
+                    << rekordboxId;
+    m_pNetwork->setLoadedTrack(player, slot, rekordboxId, plain);
 }
 
 void MediaRegistry::announceNothingLoaded() {
     if (m_pNetwork) {
-        m_pNetwork->setLoadedTrack(0, mixxx::prolink::MediaSlot::Empty, 0);
+        m_pNetwork->setLoadedTrack(0, mixxx::prolink::MediaSlot::Empty, 0, false);
     }
+}
+
+quint32 MediaRegistry::rowOfServedFile(const MediumId& medium, quint32 fileId) const {
+    if (!m_pNetwork || !medium.isLocal()) {
+        return 0;
+    }
+    QString path;
+    for (const mixxx::prolink::ServedSlot& served : m_pNetwork->serveStatus().media) {
+        if (served.localPath == medium.mountPoint() && !served.phantom) {
+            path = m_pNetwork->servedFilePath(served.slot, fileId);
+            break;
+        }
+    }
+    if (path.isEmpty()) {
+        return 0;
+    }
+    const mixxx::DbConnectionPooler pooler(m_dbConnectionPool);
+    QSqlDatabase database = mixxx::DbConnectionPooled(m_dbConnectionPool);
+    if (!database.isOpen()) {
+        return 0;
+    }
+    QSqlQuery query(database);
+    query.prepare(QStringLiteral(
+            "SELECT rb_id FROM deck_library WHERE medium = :medium AND location = :location"));
+    query.bindValue(QStringLiteral(":medium"), medium.key());
+    query.bindValue(QStringLiteral(":location"), QString(medium.mountPoint() + path));
+    if (!query.exec() || !query.next()) {
+        return 0;
+    }
+    return query.value(0).toUInt();
+}
+
+QString MediaRegistry::relativePathOf(const MediumId& medium, quint32 rekordboxId) const {
+    // A local track's location is the mount point and the medium-relative
+    // path the library was built from (PdbIngest), so the path is the rest.
+    const mixxx::DbConnectionPooler pooler(m_dbConnectionPool);
+    QSqlDatabase database = mixxx::DbConnectionPooled(m_dbConnectionPool);
+    if (!database.isOpen()) {
+        return QString();
+    }
+    QSqlQuery query(database);
+    query.prepare(QStringLiteral(
+            "SELECT location FROM deck_library WHERE medium = :medium AND rb_id = :rb"));
+    query.bindValue(QStringLiteral(":medium"), medium.key());
+    query.bindValue(QStringLiteral(":rb"), rekordboxId);
+    if (!query.exec() || !query.next()) {
+        return QString();
+    }
+    const QString location = query.value(0).toString();
+    const QString root = medium.mountPoint();
+    return location.startsWith(root) ? location.mid(root.size()) : QString();
 }
 
 mixxx::prolink::ServeStatus MediaRegistry::serveStatus() const {

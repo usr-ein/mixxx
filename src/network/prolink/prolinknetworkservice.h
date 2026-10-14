@@ -114,7 +114,18 @@ class ProLinkNetworkService : public QObject {
 
     /// Say which track this deck has loaded, and whose medium it came from:
     /// see ProLinkSync::setLoadedTrack(). Safe to call before start().
-    void setLoadedTrack(int sourcePlayer, MediaSlot slot, quint32 rekordboxId);
+    void setLoadedTrack(int sourcePlayer, MediaSlot slot, quint32 trackId, bool plain);
+
+    /// The id the plain stick we serve in *slot* gives the file at
+    /// *relativePath* from its root, or 0: what this deck says it has loaded
+    /// when it plays that file, so a player browsing us can name it. 0 too
+    /// before start(), and when nothing plain is served there.
+    quint32 servedFileId(MediaSlot slot, const QString& relativePath) const;
+
+    /// The other way: where the file the plain stick we serve in *slot* gives
+    /// *fileId* is from its root, `/` first, or empty. A player playing one
+    /// of our plain files names it by that id.
+    QString servedFilePath(MediaSlot slot, quint32 fileId) const;
 
     /// Ask a player for a track's preview waveform, over dbserver.
     ///

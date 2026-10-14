@@ -65,9 +65,13 @@ class ProLinkSync : public QObject {
     /// published. See `MediaRegistry::announceLoadedTrack` for why a tempo
     /// without this is ignored by every other player.
     ///
+    /// *trackId* is the rekordbox row id, or with *plain* a plain file's id on
+    /// its medium: a file off a stick with no rekordbox library, which a
+    /// player names with `GET_GENERIC_METADATA` (PLAIN-STICKS.md §7.8).
+    ///
     /// Remembered rather than passed straight through, and safe to call with
     /// no session: see publishLoadedTrack().
-    void setLoadedTrack(int sourcePlayer, MediaSlot slot, quint32 rekordboxId);
+    void setLoadedTrack(int sourcePlayer, MediaSlot slot, quint32 trackId, bool plain);
 
   signals:
     /// What the deck holding tempo master has loaded, whenever it changes.
@@ -111,7 +115,8 @@ class ProLinkSync : public QObject {
     struct LoadedTrack {
         int sourcePlayer = 0;
         MediaSlot slot = MediaSlot::Empty;
-        quint32 rekordboxId = 0;
+        quint32 trackId = 0;
+        bool plain = false;
     };
     LoadedTrack m_loadedTrack;
 

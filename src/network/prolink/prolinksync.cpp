@@ -261,7 +261,8 @@ void ProLinkSync::sessionStopped() {
 
 void ProLinkSync::setLoadedTrack(int sourcePlayer,
         MediaSlot slot,
-        quint32 rekordboxId) {
+        quint32 trackId,
+        bool plain) {
     // Kept, and stated again on every poll by publishPlayback(), rather than
     // handed to the session once. **Once was lost more often than not.** The
     // session drops the call until it holds a player number, which takes about
@@ -272,7 +273,8 @@ void ProLinkSync::setLoadedTrack(int sourcePlayer,
     // draws a phase for that.
     m_loadedTrack.sourcePlayer = sourcePlayer;
     m_loadedTrack.slot = slot;
-    m_loadedTrack.rekordboxId = rekordboxId;
+    m_loadedTrack.trackId = trackId;
+    m_loadedTrack.plain = plain;
 }
 
 void ProLinkSync::publishLoadedTrack() {
@@ -282,13 +284,14 @@ void ProLinkSync::publishLoadedTrack() {
     if (player == kThisPlayer) {
         player = static_cast<int>(m_pSession->device_number());
     }
-    if (player <= 0 || m_loadedTrack.rekordboxId == 0) {
-        m_pSession->set_loaded_track(0, ::prolink::Slot::None, 0);
+    if (player <= 0 || m_loadedTrack.trackId == 0) {
+        m_pSession->set_loaded_track(0, ::prolink::Slot::None, 0, false);
         return;
     }
     m_pSession->set_loaded_track(static_cast<quint8>(qBound(0, player, 255)),
             toRustSlot(m_loadedTrack.slot),
-            m_loadedTrack.rekordboxId);
+            m_loadedTrack.trackId,
+            m_loadedTrack.plain);
 }
 
 void ProLinkSync::publishPlayback() {

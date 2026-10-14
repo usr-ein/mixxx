@@ -410,9 +410,17 @@ void DeckHistory::apply(const QList<history::Recorder::Change>& changes) {
 
 QString DeckHistory::keyFor(const mixxx::prolink::ProLinkPlayer& player) {
     const MediumId medium = m_pRegistry->mediumOf(player.trackSourcePlayer, player.trackSourceSlot);
+    // The deck's own row for the track, when it has one: a rekordbox track's
+    // id is its row's. A plain file off a stick of ours is named by the id we
+    // serve it under, which is no row's, and is looked up by its path; then
+    // one played here and on a player is one track.
+    quint32 row = player.trackIsRekordbox ? player.trackId : 0;
+    if (player.trackId != 0 && !player.trackIsRekordbox && medium.isLocal()) {
+        row = m_pRegistry->rowOfServedFile(medium, player.trackId);
+    }
     QString key;
-    if (player.trackId != 0 && player.trackIsRekordbox && medium.isValid()) {
-        key = mediumTrackKey(medium, player.trackId);
+    if (row != 0 && medium.isValid()) {
+        key = mediumTrackKey(medium, row);
     } else if (player.trackId != 0) {
         // The player's own numbering, on its own medium: a plain file, which
         // no database the deck has can name. Told apart all the same, so one
@@ -431,8 +439,8 @@ QString DeckHistory::keyFor(const mixxx::prolink::ProLinkPlayer& player) {
     if (!m_origins.contains(key)) {
         Origin origin;
         origin.medium = medium;
-        origin.rekordboxId = player.trackId;
-        origin.rekordbox = player.trackId != 0 && player.trackIsRekordbox && medium.isValid();
+        origin.rekordboxId = row != 0 ? row : player.trackId;
+        origin.rekordbox = row != 0 && medium.isValid();
         origin.sourcePlayer = player.trackId != 0 ? player.trackSourcePlayer : player.number;
         origin.slot = player.trackSourceSlot;
         m_origins.insert(key, origin);

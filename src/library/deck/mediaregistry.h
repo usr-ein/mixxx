@@ -118,7 +118,8 @@ class MediaRegistry : public QObject {
             mixxx::prolink::MediaSlot* pSlot);
 
     /// Tell the network which track this deck has loaded, and whose medium it
-    /// came from.
+    /// came from: a rekordbox track by its row id, a plain file off a stick
+    /// served by its folders by the id the server gave it.
     ///
     /// **Not decoration: a tempo without this is ignored.** A CDJ publishes
     /// what it is playing alongside what tempo it is playing at, and one asked
@@ -131,6 +132,11 @@ class MediaRegistry : public QObject {
 
     /// Nothing is loaded here any more.
     void announceNothingLoaded();
+
+    /// The deck's own row id for a file of a plain stick of ours, by the id
+    /// we serve it under, or 0. A player playing one of our plain files names
+    /// it by that id, which is the server's own and no row's.
+    quint32 rowOfServedFile(const MediumId& medium, quint32 fileId) const;
 
     /// The medium *player* keeps in *slot*, or an invalid id.
     ///
@@ -264,6 +270,10 @@ class MediaRegistry : public QObject {
 
     /// Player number for a MAC, or 0. Linear over a handful of devices.
     int playerNumberFor(const QByteArray& mac) const;
+
+    /// Where a local medium's track is from the medium's root, `/` first, or
+    /// empty when the deck has no such row.
+    QString relativePathOf(const MediumId& medium, quint32 rekordboxId) const;
 
     /// One pending read. A local medium names a mount to read from; a remote
     /// one arrives with the bytes already in hand, because the network layer

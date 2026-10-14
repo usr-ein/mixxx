@@ -115,8 +115,25 @@ ProLinkNetworkService::ProLinkNetworkService(const QString& deckGroup,
 
 void ProLinkNetworkService::setLoadedTrack(int sourcePlayer,
         MediaSlot slot,
-        quint32 rekordboxId) {
-    m_pSync->setLoadedTrack(sourcePlayer, slot, rekordboxId);
+        quint32 trackId,
+        bool plain) {
+    m_pSync->setLoadedTrack(sourcePlayer, slot, trackId, plain);
+}
+
+QString ProLinkNetworkService::servedFilePath(MediaSlot slot, quint32 fileId) const {
+    if (!m_pImpl->pSession) {
+        return QString();
+    }
+    return toQString((*m_pImpl->pSession)->served_file_path(toRustSlot(slot), fileId));
+}
+
+quint32 ProLinkNetworkService::servedFileId(MediaSlot slot, const QString& relativePath) const {
+    if (!m_pImpl->pSession) {
+        return 0;
+    }
+    const QByteArray path = relativePath.toUtf8();
+    return (*m_pImpl->pSession)
+            ->served_file_id(toRustSlot(slot), ::rust::Str(path.constData(), path.size()));
 }
 
 /*static*/ ProLinkNetworkService* ProLinkNetworkService::s_pListening = nullptr;
