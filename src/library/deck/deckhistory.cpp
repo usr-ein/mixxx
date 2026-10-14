@@ -148,6 +148,10 @@ DeckHistory::DeckHistory(const QString& group,
     // A medium read is the moment its tracks can be named.
     connect(m_pRegistry, &MediaRegistry::mediaChanged, this, &DeckHistory::resolvePending);
     connect(m_pRegistry,
+            &MediaRegistry::mediumAppeared,
+            this,
+            &DeckHistory::onMediumAppeared);
+    connect(m_pRegistry,
             &MediaRegistry::artworkArrived,
             this,
             [this](const QString& coverPath) {
@@ -428,35 +432,31 @@ QString DeckHistory::mediumTrackKey(const MediumId& medium, quint32 rekordboxId)
             .arg(rekordboxId);
 }
 
-int DeckHistory::generationOf(const MediumId& medium) {
+int DeckHistory::generationOf(const MediumId& medium) const {
+    return m_generations.value(medium.key()).number;
+}
+
+void DeckHistory::onMediumAppeared(const MediumInfo& medium) {
     // A remote medium is a player's slot, and a slot holds one stick after
     // another: two DJs share a CDJ in one night, and both sticks number their
-    // tracks from 1. So which stick it is goes in the key, as what it says of
-    // itself -- its name and its counts -- and a different one moves the
-    // number on. The same stick seen again, after a player dropped off the
-    // link for a moment, is the same stick.
-    //
-    // Counts of 0 are a slot the player has not described yet, which says
-    // nothing either way.
-    QString fingerprint;
-    const int index = m_pRegistry->indexOf(medium);
-    if (index >= 0) {
-        const MediumInfo& info = m_pRegistry->media().at(index);
-        if (info.trackCount > 0) {
-            fingerprint = QStringLiteral("%1|%2|%3")
-                                  .arg(info.name)
-                                  .arg(info.trackCount)
-                                  .arg(info.playlistCount);
-        }
+    // tracks from 1. So which stick it is goes in a track's key, as what the
+    // player says of it when it appears -- its name and counts, from the one
+    // description a medium is born with -- and a different stick moves the
+    // number on. The same stick seen again, after its player dropped off the
+    // link for a moment, is the same stick. A stick of our own needs none:
+    // its id carries its filesystem's UUID.
+    if (medium.id.isLocal()) {
+        return;
     }
-    Generation& generation = m_generations[medium.key()];
-    if (!fingerprint.isEmpty() && fingerprint != generation.fingerprint) {
-        if (!generation.fingerprint.isEmpty()) {
-            ++generation.number;
-        }
-        generation.fingerprint = fingerprint;
+    const QString fingerprint = QStringLiteral("%1|%2|%3")
+                                        .arg(medium.name)
+                                        .arg(medium.trackCount)
+                                        .arg(medium.playlistCount);
+    Generation& generation = m_generations[medium.id.key()];
+    if (!generation.fingerprint.isEmpty() && generation.fingerprint != fingerprint) {
+        ++generation.number;
     }
-    return generation.number;
+    generation.fingerprint = fingerprint;
 }
 
 int DeckHistory::trackIdFor(const QString& key, HistoryWrite* pWrite) {

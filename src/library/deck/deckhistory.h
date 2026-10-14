@@ -134,8 +134,9 @@ class DeckHistory : public QObject {
     /// What a rekordbox track on *medium* is called in the History.
     QString mediumTrackKey(const MediumId& medium, quint32 rekordboxId);
     /// Which stick a slot holds, as a number that moves when another one is
-    /// put in: see the body.
-    int generationOf(const MediumId& medium);
+    /// put in: see onMediumAppeared().
+    int generationOf(const MediumId& medium) const;
+    void onMediumAppeared(const MediumInfo& medium);
     /// A thumbnail's name in the store, from its track and the cover's path.
     static QString thumbnailName(const QString& trackKey, const QString& coverPath);
     /// The session's id for *key*, adding the track to it if it is new.
