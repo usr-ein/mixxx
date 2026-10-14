@@ -1,37 +1,44 @@
 #pragma once
 
+#include <optional>
+
 #include "proto/keys.pb.h"
 
 namespace mixxx {
 namespace prolink {
 
-/// KEY SYNC, as a state machine and nothing else.
+/// KEY SYNC's rules, and nothing else: which shift a press asks for.
 ///
-/// A CDJ's KEY SYNC pitches this deck into a key compatible with the track the
-/// deck the room is following has loaded -- the same key, its relative, or a
-/// neighbour on the wheel. The rules below are what separate that from "track
-/// the master's key", which is what it looks like from outside and is not what
-/// a DJ wants:
+/// A **shift** is what this deck does to the key of the track on it: a whole
+/// number of semitones, from -5 to +6, on top of the track's own key. Pitch
+/// shifting keeps the mode, so the twelve shifts reach the twelve keys of the
+/// track's own mode, one each. A semitone is seven steps round the Camelot
+/// wheel, and seven and twelve share no factor, so -5..+6 lands on every
+/// Camelot number exactly once, whatever key the track is in. The tritone is
+/// the one key both ways reach, and it is +6.
 ///
-///  1. **It can only be engaged against a master.** Another player has to hold
-///     tempo master and we have to know what key its track is in. Without both
-///     there is nothing to sync *to*, and a button that engages against nothing
-///     is a button that silently does nothing.
-///  2. **Engaging latches the key.** What is captured is a key, not a deck. The
-///     master moving to another player, that player loading something else, or
-///     the whole network going away afterwards changes nothing here: this deck
-///     is in a key now, and a key does not stop being a key.
-///  3. **It never releases itself.** Only the DJ lets go. Dropping the sync
-///     because the network moved would re-pitch a playing track under the
-///     DJ's hands, which is the one thing this must never do.
-///  4. **Re-latching takes a release first.** Off, then on, and the new key is
-///     whatever the network is offering at that moment.
+/// The rules (Sam, 2026-10-14):
 ///
-/// Rules 2 and 3 together are why this holds a key rather than reading one:
-/// there is exactly one moment at which the network is consulted, and it is
-/// `engage()`.
+///  1. **A press puts the deck on the master's Camelot number:** the master's
+///     key, or the key relative to it in our own mode. The master in A minor
+///     (8A) and our track in C major (8B) is already there.
+///  2. **A press already there goes back to the original.** The pad that
+///     matched is the pad that lets go.
+///  3. **A press with nothing to match goes back to the original too:** no
+///     other player holds tempo master, or nobody knows its track's key, or
+///     our own track's. A lit pad that did nothing when pressed would leave
+///     the key list as the only way back.
+///  4. **Nothing else moves the shift.** The network is read at the press and
+///     only then: the master loading something else, handing over or leaving
+///     changes nothing here, because re-pitching a playing track under the
+///     DJ's hands is the one thing this must never do.
+///
+/// Picking a key off the list sets the shift directly and needs no rule here.
 class KeySync {
   public:
+    static constexpr int kLowestShift = -5;
+    static constexpr int kHighestShift = 6;
+
     /// What the network is offering, this instant.
     struct Link {
         /// A player that is **not us** holds tempo master.
@@ -43,41 +50,24 @@ class KeySync {
         mixxx::track::io::key::ChromaticKey masterKey = mixxx::track::io::key::INVALID;
     };
 
-    /// Whether pressing the button would engage it (rule 1).
-    ///
-    /// Says nothing about whether it is *already* engaged: an engaged sync is
-    /// released by the same press whether or not the network still offers one.
-    static bool canEngage(const Link& link) {
-        return link.otherIsMaster && link.masterKey != mixxx::track::io::key::INVALID;
-    }
+    /// *semitones* as the shift that reaches the same key: folded into
+    /// -5..+6, since a whole octave changes no key.
+    static int foldShift(int semitones);
 
-    bool engaged() const {
-        return m_engaged;
-    }
+    /// The shift that puts a track in *ours* on the Camelot number of
+    /// *master* (rule 1). Empty when either key is unknown.
+    static std::optional<int> shiftOntoCamelotNumber(
+            mixxx::track::io::key::ChromaticKey ours,
+            mixxx::track::io::key::ChromaticKey master);
 
-    /// The latched key, or INVALID while released.
-    mixxx::track::io::key::ChromaticKey target() const {
-        return m_target;
-    }
+    /// The key a track in *ours* plays in with *shift* applied. INVALID when
+    /// *ours* is.
+    static mixxx::track::io::key::ChromaticKey keyAtShift(
+            mixxx::track::io::key::ChromaticKey ours, int shift);
 
-    /// Engage against *link*, returning whether it took.
-    ///
-    /// False leaves everything untouched, which is what makes a refusal safe to
-    /// answer by simply putting the button back.
-    bool engage(const Link& link);
-
-    /// Pick up a latch that was already engaged on *key*, by an earlier
-    /// instance whose state outlived it. Not a new engagement: rule 1 was
-    /// checked when it was made.
-    void resume(mixxx::track::io::key::ChromaticKey key);
-
-    /// Let go, forgetting the key. What to do with the deck's pitch afterwards
-    /// is the caller's, not this class's.
-    void release();
-
-  private:
-    bool m_engaged = false;
-    mixxx::track::io::key::ChromaticKey m_target = mixxx::track::io::key::INVALID;
+    /// The shift a press asks for (rules 1 to 3), from what the network
+    /// offers, the track's own key and the shift in force.
+    static int press(const Link& link, mixxx::track::io::key::ChromaticKey ours, int shift);
 };
 
 } // namespace prolink

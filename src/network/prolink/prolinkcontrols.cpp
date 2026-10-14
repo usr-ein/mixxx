@@ -44,17 +44,15 @@ ProLinkControls::ProLinkControls() {
     m_pFollowing->setReadOnly();
     m_pFollowing->forceSet(0.0);
 
-    // TOGGLE, unlike `take_master`: this one is not a request anybody has to
-    // grant. It latches a key off the network and then holds it, so it has a
-    // state of its own and the button shows exactly that state.
-    m_pKeySyncEnabled = std::make_unique<ControlPushButton>(key("key_sync_enabled"));
-    m_pKeySyncEnabled->setButtonMode(ControlPushButton::TOGGLE);
+    // TRIGGER, like `take_master`: a press is an action, and what it did is
+    // `key_shift`, which is what the pad and the key readout show.
+    m_pKeySync = std::make_unique<ControlPushButton>(key("key_sync"));
+    m_pKeySync->setButtonMode(ControlPushButton::TRIGGER);
+    m_pKeyShift = std::make_unique<ControlObject>(key("key_shift"));
+    m_pKeyShift->forceSet(0.0);
     m_pKeySyncAvailable = std::make_unique<ControlObject>(key("key_sync_available"));
     m_pKeySyncAvailable->setReadOnly();
     m_pKeySyncAvailable->forceSet(0.0);
-    m_pKeySyncTarget = std::make_unique<ControlObject>(key("key_sync_target"));
-    m_pKeySyncTarget->setReadOnly();
-    m_pKeySyncTarget->forceSet(0.0);
 
     // Persistent: read from mixxx.cfg, which is where a rig's measured value
     // lives (the fork never writes the file back, so it is set there).

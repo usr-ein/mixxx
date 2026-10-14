@@ -1,34 +1,61 @@
 #include "network/prolink/keysync.h"
 
+#include "track/keyutils.h"
+
 namespace mixxx {
 namespace prolink {
 
-bool KeySync::engage(const Link& link) {
-    if (m_engaged) {
-        // Already holding one. Re-reading the network here is exactly what
-        // rule 4 forbids: it would turn every press into a re-latch and make
-        // the button impossible to switch off.
-        return true;
-    }
-    if (!canEngage(link)) {
-        return false;
-    }
-    m_target = link.masterKey;
-    m_engaged = true;
-    return true;
+namespace {
+
+bool isKey(mixxx::track::io::key::ChromaticKey key) {
+    return mixxx::track::io::key::ChromaticKey_IsValid(key) &&
+            key != mixxx::track::io::key::INVALID;
 }
 
-void KeySync::resume(mixxx::track::io::key::ChromaticKey key) {
-    if (key == mixxx::track::io::key::INVALID) {
-        return;
+} // namespace
+
+int KeySync::foldShift(int semitones) {
+    int folded = semitones % 12;
+    if (folded < 0) {
+        folded += 12;
     }
-    m_target = key;
-    m_engaged = true;
+    if (folded > kHighestShift) {
+        folded -= 12;
+    }
+    return folded;
 }
 
-void KeySync::release() {
-    m_engaged = false;
-    m_target = mixxx::track::io::key::INVALID;
+std::optional<int> KeySync::shiftOntoCamelotNumber(
+        mixxx::track::io::key::ChromaticKey ours,
+        mixxx::track::io::key::ChromaticKey master) {
+    if (!isKey(ours) || !isKey(master)) {
+        return std::nullopt;
+    }
+    const bool major = KeyUtils::keyIsMajor(ours);
+    int targetTonic = KeyUtils::keyToTonic(master);
+    if (major != KeyUtils::keyIsMajor(master)) {
+        // The key relative to the master's, in our mode, which shares its
+        // Camelot number: a minor key's relative major is a minor third up,
+        // a major key's relative minor a minor third down.
+        targetTonic += major ? 3 : -3;
+    }
+    return foldShift(targetTonic - KeyUtils::keyToTonic(ours));
+}
+
+mixxx::track::io::key::ChromaticKey KeySync::keyAtShift(
+        mixxx::track::io::key::ChromaticKey ours, int shift) {
+    return KeyUtils::scaleKeySteps(ours, shift);
+}
+
+int KeySync::press(const Link& link, mixxx::track::io::key::ChromaticKey ours, int shift) {
+    if (!link.otherIsMaster) {
+        return 0; // Rule 3: nothing to match.
+    }
+    const std::optional<int> target = shiftOntoCamelotNumber(ours, link.masterKey);
+    if (!target || *target == shift) {
+        return 0; // Rule 3, or rule 2: already there.
+    }
+    return *target; // Rule 1.
 }
 
 } // namespace prolink

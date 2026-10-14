@@ -86,32 +86,28 @@ class ProLinkControls {
         return m_pSyncEnabled.get();
     }
 
-    /// KEY SYNC: hold this deck at the key the network master was in.
-    ///
-    /// Writable, because it is a button, and a *latch* rather than a follower:
-    /// what it holds is decided once, when it is pressed. See ProLinkKeySync.
-    ControlPushButton* keySyncEnabled() const {
-        return m_pKeySyncEnabled.get();
+    /// KEY SYNC pressed: put the deck on the master's Camelot number, or back
+    /// in its own key if it is there already or there is nothing to match.
+    /// See KeySync for the rules.
+    ControlPushButton* keySync() const {
+        return m_pKeySync.get();
     }
-    /// Whether pressing KEY SYNC would do anything: another player holds tempo
-    /// master and we know what key its track is in. Read-only.
+    /// The shift on the track on the deck, in semitones, -5..+6; 0 for its
+    /// own key. Writable: the key list picks a key by writing its shift
+    /// here, and ProLinkKeySync applies whatever lands, folded into range.
     ///
-    /// **Not the same as "the button is off".** An engaged sync stays engaged
-    /// when this goes back to 0 — it is holding a key it already has, and a
-    /// key does not stop being a key because the deck that named it stopped
-    /// being master.
+    /// Here rather than in ProLinkKeySync because these controls are made
+    /// before anything that writes or watches it, and outlive it.
+    ControlObject* keyShift() const {
+        return m_pKeyShift.get();
+    }
+    /// Whether pressing KEY SYNC would change the deck's key. Read-only.
+    ///
+    /// What lights the pad dim. While the deck is shifted a press always does
+    /// something, matching the master or going back, and the pad is lit for
+    /// the shift anyway.
     ControlObject* keySyncAvailable() const {
         return m_pKeySyncAvailable.get();
-    }
-    /// The key KEY SYNC is holding, as a ChromaticKey, or 0 while released.
-    /// Read-only.
-    ///
-    /// Kept here rather than only in ProLinkKeySync because that lives with
-    /// the skin and these controls do not: a skin reload rebuilt it released
-    /// while `key_sync_enabled` stayed lit and the deck stayed shifted, and
-    /// the press that should have let go found nothing to release.
-    ControlObject* keySyncTarget() const {
-        return m_pKeySyncTarget.get();
     }
 
   private:
@@ -124,9 +120,9 @@ class ProLinkControls {
     std::unique_ptr<ControlObject> m_pIsMaster;
     std::unique_ptr<ControlPushButton> m_pSyncEnabled;
     std::unique_ptr<ControlObject> m_pFollowing;
-    std::unique_ptr<ControlPushButton> m_pKeySyncEnabled;
+    std::unique_ptr<ControlPushButton> m_pKeySync;
+    std::unique_ptr<ControlObject> m_pKeyShift;
     std::unique_ptr<ControlObject> m_pKeySyncAvailable;
-    std::unique_ptr<ControlObject> m_pKeySyncTarget;
     /// `[ProLink] phase_trim_ms`: how much later this deck is heard than
     /// Mixxx's own latency accounts for, against a CDJ's beat packets. From
     /// mixxx.cfg, measured once per rig; read by AudibleBeatClock.
