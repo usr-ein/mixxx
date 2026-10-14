@@ -14,6 +14,7 @@
 #include "library/deck/mediaregistry.h"
 #include "library/deck/previewwaveformcache.h"
 #include "library/deck/mediumid.h"
+#include "library/deck/setrecording.h"
 #include "preferences/usersettings.h"
 #include "skin/legacy/skincontext.h"
 #include "track/trackid.h"
@@ -32,6 +33,7 @@ namespace deck {
 class DeckAutoplay;
 class DeckHistory;
 class DeckListView;
+class DeckRecorder;
 class DeckServices;
 class DeckMenuModel;
 class DeckTrackModel;
@@ -150,6 +152,9 @@ class WDeckBrowser : public QWidget, public WBaseWidget {
             History,
             /// One power-up's History: what played, the latest first.
             HistorySession,
+            /// "Write the set to": a recording's sticks, the deck's own, and
+            /// Discard.
+            RecordedSet,
         };
         Kind kind = Kind::Sources;
         MediumId medium;
@@ -190,6 +195,21 @@ class WDeckBrowser : public QWidget, public WBaseWidget {
     /// The History changed, or a second went by while a row is playing: the
     /// History's levels and the root re-read, in place where they can be.
     void refreshHistory();
+    /// The home list's "Record set" row: Record set, End recording with the
+    /// input's meter, or the recording waiting to be written.
+    MenuRow recordRow() const;
+    /// "Write the set to": the deck's own sticks, then Discard.
+    void showRecordedSet(const Level& level);
+    QList<MenuRow> recordedSetRows() const;
+    /// The recorder changed, a second went by, its input moved, or a stick
+    /// came or went: the rows that show it, redrawn in place where they can
+    /// be.
+    void refreshRecording();
+    /// The silence prompt's END RECORDING: the browser opens on the sticks.
+    void openRecordedSet();
+    /// *level* is being left: what leaving it means. Discard asks again next
+    /// time, and a set written once is done with.
+    void leaving(const Level& level);
     void showMediumMenu(const Level& level);
     void showPlaylists(const Level& level);
     void showCategory(const Level& level);
@@ -229,6 +249,19 @@ class WDeckBrowser : public QWidget, public WBaseWidget {
     DeckLoader* const m_pLoader;
     DeckAutoplay* const m_pAutoplay;
     DeckHistory* const m_pHistory;
+    DeckRecorder* const m_pRecorder;
+    /// "End recording"'s two bars, moved on as the input's levels come, on a
+    /// clock of their own.
+    setrecording::LevelMeter m_meterLeft;
+    setrecording::LevelMeter m_meterRight;
+    QElapsedTimer m_meterClock;
+    qint64 m_meterDrawnMs = 0;
+    /// Discard pushed once: its row asks "Are you sure?" until it is pushed
+    /// again or left.
+    bool m_discardArmed = false;
+    /// While the sticks are listed, a second's look at what is mounted: a
+    /// stick put in or pulled shows at once (Sam).
+    QTimer m_stickPoll;
 
     QLabel* m_pBreadcrumb;
     DeckSortChip* m_pSortChip;

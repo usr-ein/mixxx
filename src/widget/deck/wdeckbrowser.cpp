@@ -16,6 +16,7 @@
 #include "library/deck/deckautoplay.h"
 #include "library/deck/deckhistory.h"
 #include "library/deck/deckqueries.h"
+#include "library/deck/deckrecorder.h"
 #include "library/deck/deckservices.h"
 #include "library/deck/decktrackmodel.h"
 #include "library/deck/pdbingest.h"
@@ -54,6 +55,9 @@ constexpr int kTopBezelPadHeight = 36;
 /// the one thing on screen that says which track is under the needle.
 constexpr int kLeftBezelPadWidth = 16;
 constexpr int kSourceRowHeight = 80;
+/// How often "End recording"'s meter is redrawn at most: 12.5 times a second,
+/// a mixer's meter's pace, against the input's twenty blocks.
+constexpr qint64 kMeterDrawMs = 80;
 constexpr int kMenuRowHeight = 72;
 constexpr int kValueRowHeight = 64;
 constexpr int kPlaylistRowHeight = 88;
@@ -125,7 +129,8 @@ WDeckBrowser::WDeckBrowser(QWidget* pParent,
           m_pRegistry(pServices->registry()),
           m_pLoader(pServices->loader()),
           m_pAutoplay(pServices->autoplay()),
-          m_pHistory(pServices->history()) {
+          m_pHistory(pServices->history()),
+          m_pRecorder(pServices->recorder()) {
     setAttribute(Qt::WA_StyledBackground, true);
     // A flush panel has none of the three lips below, and the lists take the
     // space instead.
@@ -387,6 +392,45 @@ WDeckBrowser::WDeckBrowser(QWidget* pParent,
             m_coverRedraw.start();
         });
     }
+    // "Record set": its row on the home list and the list of sticks to write
+    // the set to follow the recorder, and the row's meter its input, twenty
+    // times a second while it records.
+    m_meterClock.start();
+    if (m_pRecorder) {
+        connect(m_pRecorder, &DeckRecorder::stateChanged, this, [this]() {
+            if (m_pRecorder->state() != DeckRecorder::State::Recording) {
+                m_meterLeft = setrecording::LevelMeter();
+                m_meterRight = setrecording::LevelMeter();
+            }
+            // Written once, while the DJ was elsewhere (BACK during the
+            // write): done with, as if they had left the sticks after it.
+            if (m_pRecorder->state() == DeckRecorder::State::Recorded &&
+                    m_pRecorder->isWritten() && !m_pRecorder->isWriting() &&
+                    (m_stack.isEmpty() || m_stack.last().kind != Level::Kind::RecordedSet)) {
+                m_pRecorder->finish();
+                return; // finish() said so again, and that redrew it
+            }
+            refreshRecording();
+        });
+        connect(m_pRecorder, &DeckRecorder::tick, this, &WDeckBrowser::refreshRecording);
+        connect(m_pRecorder, &DeckRecorder::levelsChanged, this, [this]() {
+            const QPair<double, double> peaks = m_pRecorder->takePeaks();
+            const qint64 now = m_meterClock.elapsed();
+            m_meterLeft.update(now, peaks.first);
+            m_meterRight.update(now, peaks.second);
+            // Drawn at a meter's pace, not the input's: every block's peak is
+            // in the bars, and the row is redrawn at most every kMeterDrawMs
+            // -- and not at all when the bars have not moved.
+            if (now - m_meterDrawnMs >= kMeterDrawMs && isVisible() && !m_stack.isEmpty() &&
+                    m_stack.last().kind == Level::Kind::Sources) {
+                m_meterDrawnMs = now;
+                refreshRecording();
+            }
+        });
+        connect(m_pRecorder, &DeckRecorder::endAsked, this, &WDeckBrowser::openRecordedSet);
+    }
+    m_stickPoll.setInterval(1000);
+    connect(&m_stickPoll, &QTimer::timeout, this, &WDeckBrowser::refreshRecording);
     // A cover asked for while a row was being drawn has landed. Both delegates
     // cached the grey placeholder they drew in its place, so the caches have to
     // go before the redraw -- otherwise the square stays grey and the fetch
@@ -590,8 +634,22 @@ void WDeckBrowser::popLevel() {
         ControlObject::set(ConfigKey("[Master]", "show_library"), 0.0);
         return;
     }
-    m_stack.removeLast();
+    // Off the stack first: what leaving it does may redraw what is under it.
+    leaving(m_stack.takeLast());
     rebuildCurrentLevel();
+}
+
+void WDeckBrowser::leaving(const Level& level) {
+    if (level.kind != Level::Kind::RecordedSet) {
+        return;
+    }
+    m_discardArmed = false;
+    // Written to a stick, and the DJ has gone back: done with it, and the home
+    // list offers "Record set" again. Unwritten, it waits there as "Recorded
+    // set".
+    if (m_pRecorder && m_pRecorder->isWritten() && !m_pRecorder->isWriting()) {
+        m_pRecorder->finish();
+    }
 }
 
 void WDeckBrowser::rebuildCurrentLevel() {
@@ -636,10 +694,18 @@ void WDeckBrowser::rebuildCurrentLevel() {
     case Level::Kind::HistorySession:
         showHistorySession(level);
         break;
+    case Level::Kind::RecordedSet:
+        showRecordedSet(level);
+        break;
     }
     // Sampling follows visibility: a page nobody is looking at has no business
     // reading /proc once a second.
     m_pDiagnostics->setActive(level.kind == Level::Kind::Diagnostics);
+    if (level.kind == Level::Kind::RecordedSet) {
+        m_stickPoll.start();
+    } else {
+        m_stickPoll.stop();
+    }
     // While something plays, this power-up's lengths count up: on its list,
     // and on the list of power-ups.
     if (level.kind == Level::Kind::History ||
@@ -733,6 +799,10 @@ void WDeckBrowser::onMediaChanged() {
     if (kind == Level::Kind::Sources || kind == Level::Kind::Autoplay) {
         m_stack.last().selectedRow = m_pMenuView->selectedRow();
         rebuildCurrentLevel();
+    } else if (kind == Level::Kind::RecordedSet) {
+        // And the deck's sticks to write a set to: a stick put in or pulled
+        // while they are listed (Sam).
+        refreshRecording();
     }
 }
 
@@ -875,6 +945,9 @@ QList<MenuRow> WDeckBrowser::sourcesRows() const {
         }
     }
     rows.append(history);
+
+    // What plays, recorded: beside what played.
+    rows.append(recordRow());
 
     MenuRow diagnostics;
     diagnostics.mark = MenuRow::Mark::Diagnostics;
@@ -1227,9 +1300,16 @@ void WDeckBrowser::runSearch() {
 }
 
 void WDeckBrowser::onSelectionMoved(int row) {
-    Q_UNUSED(row);
     m_lastSelectionMove.restart();
     updateInfoPanel();
+    // "Are you sure?" is asked of the row it is on: moving off it takes the
+    // question back.
+    if (m_discardArmed && !m_stack.isEmpty() &&
+            m_stack.last().kind == Level::Kind::RecordedSet &&
+            m_pMenuModel->rowAt(row).payload != QVariant(QStringLiteral("#discard"))) {
+        m_discardArmed = false;
+        refreshRecording();
+    }
 }
 
 MediumId WDeckBrowser::currentMedium() const {
@@ -1348,7 +1428,7 @@ void WDeckBrowser::onBreadcrumbClicked(const QString& levelIndex) {
         return; // The last segment is where we already are.
     }
     while (m_stack.size() > target + 1) {
-        m_stack.removeLast();
+        leaving(m_stack.takeLast());
     }
     rebuildCurrentLevel();
 }
@@ -1657,12 +1737,55 @@ void WDeckBrowser::onActivated(int row) {
             pushLevel(level);
             return;
         }
+        if (payload == QStringLiteral("#record")) {
+            if (!m_pRecorder) {
+                return;
+            }
+            if (m_pRecorder->state() == DeckRecorder::State::Idle) {
+                // It starts at once (Sam: "When selected, it will start
+                // recording"), and the row turns into End recording.
+                m_pRecorder->start();
+                return;
+            }
+            // End recording stops it where the DJ pushed, then asks where to
+            // write it (Sam: "When the recording is stopped, it will then ask
+            // which USB to write to").
+            m_pRecorder->stop();
+            openRecordedSet();
+            return;
+        }
         Level level;
         level.kind = Level::Kind::MediumMenu;
         level.medium = MediumId::fromKey(payload);
         level.title = menuRow.title;
         pushLevel(level);
         break;
+    }
+    case Level::Kind::RecordedSet: {
+        if (!m_pRecorder) {
+            return;
+        }
+        if (payload == QStringLiteral("#discard")) {
+            // Twice: once to be asked, once to mean it (Sam: "a Discard
+            // option, which turns into 'Are you sure?'").
+            if (!m_discardArmed) {
+                m_discardArmed = true;
+                refreshRecording();
+                return;
+            }
+            m_discardArmed = false;
+            m_pRecorder->discard();
+            // Nothing left to write: back to the home list, if discarding
+            // has not taken the level away already (refreshRecording()).
+            if (!m_stack.isEmpty() && m_stack.last().kind == Level::Kind::RecordedSet) {
+                popLevel();
+            }
+            return;
+        }
+        if (payload.startsWith(QStringLiteral("stick:"))) {
+            m_pRecorder->writeTo(payload.mid(6));
+        }
+        return;
     }
     case Level::Kind::MediumMenu: {
         Level level;
@@ -1901,6 +2024,177 @@ QList<MenuRow> WDeckBrowser::historyRows(int session) const {
         rows.append(row);
     }
     return rows;
+}
+
+MenuRow WDeckBrowser::recordRow() const {
+    MenuRow row;
+    row.mark = MenuRow::Mark::Record;
+    row.title = tr("Record set");
+    row.payload = QStringLiteral("#record");
+    if (!m_pRecorder) {
+        row.dimmed = true;
+        return row;
+    }
+    switch (m_pRecorder->state()) {
+    case DeckRecorder::State::Idle: {
+        // Dimmed, saying why, when it cannot: no input, or no room for three
+        // hours on the card.
+        const QString why = m_pRecorder->cannotStart();
+        if (!why.isEmpty()) {
+            row.detail = why;
+            row.dimmed = true;
+        }
+        break;
+    }
+    case DeckRecorder::State::Recording:
+        // Sam: "the menu turns from 'Record set' to 'End recording'. On the
+        // row saying end recording, there is also a VU meter of the input
+        // levels, displayed horizontally", L and R apart.
+        row.mark = MenuRow::Mark::Recording;
+        row.title = tr("End recording");
+        row.detail = setrecording::lengthText(m_pRecorder->lengthMs());
+        row.bar = MenuRow::Bar::Levels;
+        row.barLeft = m_meterLeft.levelDb();
+        row.holdLeft = m_meterLeft.holdDb();
+        row.barRight = m_meterRight.levelDb();
+        row.holdRight = m_meterRight.holdDb();
+        break;
+    case DeckRecorder::State::Recorded:
+        // Stopped and on the card, not yet written or discarded.
+        row.title = tr("Recorded set");
+        if (m_pRecorder->isWriting()) {
+            const double done = m_pRecorder->writeProgress();
+            row.detail = tr("Writing %1%").arg(qRound(done * 100.0));
+            row.subtitle = tr("To %1: don't remove it until it's written")
+                                   .arg(m_pRecorder->writingName());
+            row.bar = MenuRow::Bar::Progress;
+            row.barLeft = done;
+        } else {
+            row.detail = setrecording::lengthText(m_pRecorder->lengthMs());
+        }
+        break;
+    }
+    return row;
+}
+
+void WDeckBrowser::showRecordedSet(const Level& level) {
+    const QList<MenuRow> rows = recordedSetRows();
+    m_pMenuModel->setRows(rows);
+    m_pMenuDelegate->setRowHeight(kSourceRowHeight);
+    m_pMenuView->setRowHeight(kSourceRowHeight);
+    m_pStack->setCurrentWidget(m_pMenuView);
+    m_pMenuView->selectRow(qBound(0, level.selectedRow, rows.size() - 1));
+}
+
+QList<MenuRow> WDeckBrowser::recordedSetRows() const {
+    QList<MenuRow> rows;
+    if (!m_pRecorder) {
+        return rows;
+    }
+    // The sticks in this deck's own ports, and no player's (Sam: "Only USBs
+    // in the Trimixxx deck can be written to"), one at a time.
+    const bool writing = m_pRecorder->isWriting();
+    const QList<DeckRecorder::Stick> sticks = m_pRecorder->sticks();
+    for (const DeckRecorder::Stick& stick : sticks) {
+        MenuRow row;
+        row.mark = MenuRow::Mark::Usb;
+        row.slot = stick.slot;
+        row.title = stick.name;
+        row.payload = QStringLiteral("stick:%1").arg(stick.mountPoint);
+        if (writing && m_pRecorder->writingTo() == stick.mountPoint) {
+            // Sam: "a progress bar on screen for the copy and a message to
+            // not remove the USB that is plugged in".
+            const double done = m_pRecorder->writeProgress();
+            row.detail = tr("Writing %1%").arg(qRound(done * 100.0));
+            row.subtitle = tr("Don't remove it until it's written");
+            row.bar = MenuRow::Bar::Progress;
+            row.barLeft = done;
+        } else if (stick.written) {
+            row.detail = tr("written");
+            row.dimmed = true;
+        } else if (!stick.refusal.isEmpty()) {
+            row.detail = stick.refusal;
+            row.dimmed = true;
+        } else {
+            row.detail = tr("%1 free").arg(setrecording::sizeText(stick.freeBytes));
+            row.dimmed = writing;
+        }
+        rows.append(row);
+    }
+    if (sticks.isEmpty()) {
+        MenuRow none;
+        none.title = tr("Insert a USB stick to write the set to");
+        none.dimmed = true;
+        rows.append(none);
+    }
+    MenuRow discard;
+    discard.mark = MenuRow::Mark::Discard;
+    discard.title = m_discardArmed ? tr("Are you sure?") : tr("Discard");
+    if (m_discardArmed) {
+        discard.detail = tr("push again to delete it");
+    }
+    discard.payload = QStringLiteral("#discard");
+    discard.dimmed = writing;
+    rows.append(discard);
+    return rows;
+}
+
+void WDeckBrowser::refreshRecording() {
+    if (m_stack.isEmpty() || !m_pRecorder) {
+        return;
+    }
+    Level& level = m_stack.last();
+    if (level.kind == Level::Kind::Sources) {
+        // Its own row only: the meter moves twenty times a second, and the
+        // rest of the home list has not changed.
+        const int row = m_pMenuModel->indexOf(QStringLiteral("#record"));
+        if (row >= 0) {
+            m_pMenuModel->updateRow(row, recordRow());
+        }
+        return;
+    }
+    if (level.kind != Level::Kind::RecordedSet) {
+        return;
+    }
+    if (m_pRecorder->state() == DeckRecorder::State::Idle) {
+        // Nothing left to write: discarded, or done with.
+        popLevel();
+        return;
+    }
+    const QList<MenuRow> rows = recordedSetRows();
+    if (m_pMenuModel->updateRows(rows)) {
+        return;
+    }
+    // A stick came or went: rebuilt, on the row it was on -- the same stick,
+    // or Discard, wherever the change moved it.
+    const QVariant selected = m_pMenuModel->rowAt(m_pMenuView->selectedRow()).payload;
+    level.selectedRow = 0;
+    for (int i = 0; i < rows.size(); ++i) {
+        if (rows.at(i).payload == selected) {
+            level.selectedRow = i;
+        }
+    }
+    rebuildCurrentLevel();
+}
+
+void WDeckBrowser::openRecordedSet() {
+    if (!m_pRecorder || m_pRecorder->state() == DeckRecorder::State::Idle) {
+        return;
+    }
+    // On screen, wherever the DJ was: the deck view, or deep in a stick.
+    ControlObject::set(ConfigKey("[Master]", "show_library"), 1.0);
+    if (!m_stack.isEmpty() && m_stack.last().kind == Level::Kind::RecordedSet) {
+        refreshRecording();
+        return;
+    }
+    while (m_stack.size() > 1) {
+        leaving(m_stack.takeLast());
+    }
+    m_discardArmed = false;
+    Level level;
+    level.kind = Level::Kind::RecordedSet;
+    level.title = tr("Write the set to");
+    pushLevel(level);
 }
 
 void WDeckBrowser::refreshHistory() {

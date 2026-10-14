@@ -29,6 +29,23 @@ struct MenuRow {
         Autoplay,
         Stop,
         History,
+        /// "Record set": the record button's dot.
+        Record,
+        /// "End recording": the same dot, lit, while it records.
+        Recording,
+        /// Discard, and nothing else: it deletes.
+        Discard,
+    };
+
+    /// A bar across the row under its title.
+    enum class Bar {
+        None,
+        /// "End recording": the input's two channels, L over R, each with
+        /// its peak tick, so a channel that is missing or low shows (Sam:
+        /// "to diagnose bad cabling").
+        Levels,
+        /// A write to a stick: how much of the set is on it.
+        Progress,
     };
 
     Mark mark = Mark::None;
@@ -49,6 +66,13 @@ struct MenuRow {
     /// The covers as squares side by side instead, one per path, up to four:
     /// the tracks that played together in a History row, each its own.
     bool coversSideBySide = false;
+    Bar bar = Bar::None;
+    /// Bar::Levels: each channel's level and its peak tick, in dBFS.
+    /// Bar::Progress: how much is done, 0..1, in barLeft.
+    double barLeft = 0.0;
+    double barRight = 0.0;
+    double holdLeft = 0.0;
+    double holdRight = 0.0;
     /// Drawn dimmed, and not enterable: a medium still being read, a category
     /// with nothing in it.
     bool dimmed = false;
@@ -72,6 +96,11 @@ class DeckMenuModel : public QAbstractListModel {
     /// its selection and its scroll, and only what changed is redrawn. False,
     /// and nothing changed, when the number differs -- that is setRows().
     bool updateRows(const QList<MenuRow>& rows);
+    /// One row's new contents, in place: a meter moving twenty times a second
+    /// redraws its row and builds no other.
+    void updateRow(int row, const MenuRow& contents);
+    /// The row whose payload is *payload*, or -1.
+    int indexOf(const QVariant& payload) const;
     const MenuRow& rowAt(int row) const;
     bool isEmpty() const {
         return m_rows.isEmpty();

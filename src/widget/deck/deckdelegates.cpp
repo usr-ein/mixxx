@@ -9,6 +9,7 @@
 #include "library/dao/trackschema.h"
 #include "library/deck/deckqueries.h"
 #include "library/deck/mediaregistry.h"
+#include "library/deck/setrecording.h"
 #include "widget/deck/deckaccent.h"
 #include "widget/deck/decklistview.h"
 #include "widget/deck/deckmenumodel.h"
@@ -100,6 +101,80 @@ QPixmap loadCover(const QString& path, mixxx::deck::MediaRegistry* pRegistry) {
 const QPixmap& defaultCover() {
     static const QPixmap kCover(CoverArtUtils::defaultCoverLocation());
     return kCover;
+}
+
+/// A recording, as the deck shows one: the lit record mark, the meter's top.
+const QColor kRecordingRed(0xff, 0x33, 0x33);
+/// The meter's colours: what a mixer's send sits in, near full scale, and too
+/// close to it (setrecording's kMeterAmberDb and kMeterRedDb).
+const QColor kMeterGreen(0x44, 0xdd, 0x55);
+const QColor kMeterAmber(0xff, 0xaa, 0x00);
+/// Under a bar: the part not reached.
+const QColor kBarTrack(0x26, 0x26, 0x26);
+
+QColor meterColourAt(double db) {
+    using namespace mixxx::deck::setrecording;
+    if (db >= kMeterRedDb) {
+        return kRecordingRed;
+    }
+    return db >= kMeterAmberDb ? kMeterAmber : kMeterGreen;
+}
+
+/// "End recording"'s meter in *rect*: L over R, each a bar from the floor
+/// with its colours by zone and a tick where it peaked, a letter before it.
+void paintLevels(QPainter* pPainter,
+        const QRect& rect,
+        const mixxx::deck::MenuRow& row,
+        const QFont& font,
+        const QColor& letterColour) {
+    using namespace mixxx::deck::setrecording;
+    constexpr int kLetterWidth = 18;
+    constexpr int kGap = 4;
+    const int barHeight = std::max(4, (rect.height() - kGap) / 2);
+    const int left = rect.left() + kLetterWidth;
+    const int width = std::max(0, rect.width() - kLetterWidth);
+    QFont letterFont = font;
+    letterFont.setPixelSize(std::max(9, barHeight + 3));
+    pPainter->save();
+    pPainter->setFont(letterFont);
+    const struct {
+        QString letter;
+        double level;
+        double hold;
+    } channels[] = {
+            {QStringLiteral("L"), row.barLeft, row.holdLeft},
+            {QStringLiteral("R"), row.barRight, row.holdRight},
+    };
+    const double amberAt = meterPosition(kMeterAmberDb);
+    const double redAt = meterPosition(kMeterRedDb);
+    int top = rect.top();
+    for (const auto& channel : channels) {
+        pPainter->setPen(letterColour);
+        pPainter->drawText(QRect(rect.left(), top - 2, kLetterWidth, barHeight + 4),
+                Qt::AlignLeft | Qt::AlignVCenter,
+                channel.letter);
+        pPainter->fillRect(QRect(left, top, width, barHeight), kBarTrack);
+        // Zone by zone, so the colours stay where they are on the scale, as
+        // on a mixer's meter.
+        const double level = meterPosition(channel.level);
+        const auto span = [&](double from, double to, const QColor& colour) {
+            const double end = std::min(level, to);
+            if (end > from) {
+                pPainter->fillRect(QRectF(left + from * width, top, (end - from) * width, barHeight),
+                        colour);
+            }
+        };
+        span(0.0, amberAt, kMeterGreen);
+        span(amberAt, redAt, kMeterAmber);
+        span(redAt, 1.0, kRecordingRed);
+        const double hold = meterPosition(channel.hold);
+        if (hold > 0.0) {
+            pPainter->fillRect(QRectF(left + hold * width - 2, top, 2, barHeight),
+                    meterColourAt(channel.hold));
+        }
+        top += barHeight + kGap;
+    }
+    pPainter->restore();
 }
 
 /// The mark on the left of a menu row. Drawn rather than loaded: these are
@@ -200,6 +275,29 @@ void paintMark(QPainter* pPainter,
         // Solid, unlike every other mark: it is the one that ends something.
         pPainter->setBrush(colour);
         pPainter->drawRect(box.adjusted(size / 3, size / 3, -size / 3, -size / 3));
+        break;
+    }
+    case Mark::Record: {
+        // A record button: a dot in a ring.
+        pPainter->drawEllipse(box.adjusted(size / 6, size / 6, -size / 6, -size / 6));
+        pPainter->setBrush(colour);
+        pPainter->drawEllipse(box.adjusted(size / 3, size / 3, -size / 3, -size / 3));
+        break;
+    }
+    case Mark::Recording: {
+        // The same button, lit: red whatever the row's colours, as a
+        // recording lamp is.
+        pPainter->setPen(QPen(kRecordingRed, 2));
+        pPainter->drawEllipse(box.adjusted(size / 6, size / 6, -size / 6, -size / 6));
+        pPainter->setBrush(kRecordingRed);
+        pPainter->drawEllipse(box.adjusted(size / 3, size / 3, -size / 3, -size / 3));
+        break;
+    }
+    case Mark::Discard: {
+        // A cross: it takes the recording away.
+        const QRect cross = box.adjusted(size / 3, size / 3, -size / 3, -size / 3);
+        pPainter->drawLine(cross.topLeft(), cross.bottomRight());
+        pPainter->drawLine(cross.topRight(), cross.bottomLeft());
         break;
     }
     case Mark::None:
@@ -384,7 +482,25 @@ void MenuRowDelegate::paint(QPainter* pPainter,
     }
     const QFontMetrics titleMetrics(titleFont);
     pPainter->setPen(textColour);
-    if (row.subtitle.isEmpty()) {
+    if (row.bar == MenuRow::Bar::Levels) {
+        // The title above the middle, the meter below it.
+        const int middle = content.top() + content.height() / 2;
+        const QRect titleRect(content.left(),
+                content.top(),
+                content.width() - detailWidth,
+                middle - content.top() + 2);
+        pPainter->drawText(titleRect,
+                Qt::AlignLeft | Qt::AlignBottom,
+                titleMetrics.elidedText(title, Qt::ElideRight, titleRect.width()));
+        paintLevels(pPainter,
+                QRect(content.left(),
+                        middle + 8,
+                        content.width() - detailWidth,
+                        content.bottom() - middle - 18),
+                row,
+                option.font,
+                detailColour);
+    } else if (row.subtitle.isEmpty()) {
         const QRect titleRect = content.adjusted(0, 0, -detailWidth, 0);
         pPainter->drawText(titleRect,
                 Qt::AlignLeft | Qt::AlignVCenter,
@@ -412,6 +528,20 @@ void MenuRowDelegate::paint(QPainter* pPainter,
         pPainter->drawText(subtitleRect,
                 Qt::AlignLeft | Qt::AlignTop,
                 subtitleMetrics.elidedText(row.subtitle, Qt::ElideRight, subtitleRect.width()));
+    }
+
+    if (row.bar == MenuRow::Bar::Progress) {
+        // A write's progress: a strip along the row's foot, the whole width.
+        const QRect strip(option.rect.left() + kPadding,
+                option.rect.bottom() - 9,
+                option.rect.width() - 2 * kPadding,
+                5);
+        pPainter->fillRect(strip, filled ? kBackground : kBarTrack);
+        pPainter->fillRect(QRectF(strip.left(),
+                                   strip.top(),
+                                   std::clamp(row.barLeft, 0.0, 1.0) * strip.width(),
+                                   strip.height()),
+                filled ? kSelectedText : m_selected);
     }
 
     if (!selected) {
