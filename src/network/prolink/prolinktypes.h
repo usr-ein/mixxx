@@ -77,8 +77,13 @@ struct MediaInfo {
     /// **Often empty, and legitimately so**: an unlabelled stick reports no
     /// name at all while still carrying a full library.
     QString name;
+    /// Zero for a stick with no rekordbox library, which a player offers all
+    /// the same, by its folders (PLAIN-STICKS.md §3).
     quint32 trackCount = 0;
     quint32 playlistCount = 0;
+    /// A stick with no rekordbox library: no `export.pdb` to fetch, and read
+    /// by its FOLDER menus instead. Its player says so when it describes it.
+    bool plain = false;
 
     /// A slot with something in it, as its player's status says.
     ///
@@ -88,6 +93,35 @@ struct MediaInfo {
     bool isOccupied() const {
         return hasMedia;
     }
+};
+
+/// One folder or file of a player's plain stick, as its FOLDER menus list it.
+struct PlainEntry {
+    /// Its id on the player's medium.
+    quint32 id = 0;
+    /// The folder holding it, or 0 at the top of the stick.
+    quint32 parent = 0;
+    /// Its name; a file's with its extension.
+    QString name;
+    bool isFolder = false;
+};
+
+/// What a player says of one of its plain files, a file off a stick with no
+/// rekordbox library: what `GET_GENERIC_METADATA` answers from the file's tags
+/// (PLAIN-STICKS.md §5). The title is the file's name when it has no tag.
+struct PlainFileTags {
+    /// The file's id on its player's medium.
+    quint32 id = 0;
+    QString title;
+    QString artist;
+    QString album;
+    QString genre;
+    QString comment;
+    int durationSeconds = 0;
+    /// The BPM tag, or 0.
+    double bpm = 0.0;
+    /// In kbps, or 0.
+    int bitrate = 0;
 };
 
 /// What one player on the link is doing, as its status packets say: what it
@@ -143,3 +177,4 @@ struct ProLinkPlayer {
 // a registered metatype.
 Q_DECLARE_METATYPE(mixxx::prolink::ProLinkDevice)
 Q_DECLARE_METATYPE(mixxx::prolink::MediaInfo)
+Q_DECLARE_METATYPE(mixxx::prolink::PlainFileTags)

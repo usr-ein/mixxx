@@ -138,6 +138,30 @@ class ProLinkNetworkService : public QObject {
             quint32 artworkId,
             const QString& localPath);
 
+    /// Ask a player what one of its plain files is: the tags it reads off it
+    /// (`GENERIC_METADATA`), which is the only name such a file has on the
+    /// link. Returns without blocking; the answer arrives as
+    /// plainFileTagsFetched().
+    void fetchPlainFileTags(const QByteArray& mac, MediaSlot slot, quint32 fileId);
+
+    /// Walk a player's plain stick through its FOLDER menus: every folder and
+    /// file, by name and id. Returns without blocking; the answer arrives as
+    /// plainTreeFetched().
+    void fetchPlainTree(const QByteArray& mac, MediaSlot slot);
+
+    /// fetchArtwork() for a plain file, by the file's own id.
+    void fetchPlainArtwork(const QByteArray& mac,
+            MediaSlot slot,
+            quint32 fileId,
+            const QString& localPath);
+
+    /// fetchFileStreaming() for a plain file, which has no path: by its id.
+    void fetchPlainFileStreaming(const QByteArray& mac,
+            MediaSlot slot,
+            quint32 fileId,
+            const QString& localPath,
+            quint32 headBytes);
+
   signals:
     void deviceFound(const mixxx::prolink::ProLinkDevice& device);
     void deviceChanged(const mixxx::prolink::ProLinkDevice& device);
@@ -163,6 +187,18 @@ class ProLinkNetworkService : public QObject {
             const QByteArray& data,
             const QString& error);
     void fileFetched(const QString& localPath, const QString& error);
+    /// What fetchPlainTree() found: every folder and file of the stick.
+    /// *entries* is empty when *error* is not.
+    void plainTreeFetched(const QByteArray& mac,
+            mixxx::prolink::MediaSlot slot,
+            const QList<mixxx::prolink::PlainEntry>& entries,
+            const QString& error);
+    /// What fetchPlainFileTags() asked. *tags* carries only its id when
+    /// *error* is not empty.
+    void plainFileTagsFetched(const QByteArray& mac,
+            mixxx::prolink::MediaSlot slot,
+            const mixxx::prolink::PlainFileTags& tags,
+            const QString& error);
     void artworkFetched(const QString& localPath, const QString& error);
     /// A track's preview waveform arrived, as the 900 bytes a player sends.
     /// *blob* is empty when *error* is not.
@@ -223,12 +259,17 @@ class ProLinkNetworkService : public QObject {
             /// fetchWaveformPreview(): previewFetched(). No file at either
             /// end: the bytes are taken off the session when it finishes.
             Preview,
+            /// fetchPlainFileTags(): plainFileTagsFetched(), the answer taken
+            /// off the session as a preview's bytes are.
+            PlainTags,
+            /// fetchPlainTree(): plainTreeFetched(), likewise.
+            PlainTree,
         };
         Kind kind = Kind::File;
         QByteArray mac;
         MediaSlot slot = MediaSlot::Usb;
         QString localPath;
-        /// For a preview, which track was asked about.
+        /// For a preview and a plain file's tags, which track was asked about.
         quint32 trackId = 0;
     };
 

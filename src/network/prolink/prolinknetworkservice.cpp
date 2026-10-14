@@ -348,6 +348,15 @@ void ProLinkNetworkService::emitFailed(const Pending& pending, const QString& er
     case Pending::Kind::Preview:
         emit previewFetched(pending.mac, pending.slot, pending.trackId, QByteArray(), error);
         break;
+    case Pending::Kind::PlainTags: {
+        PlainFileTags tags;
+        tags.id = pending.trackId;
+        emit plainFileTagsFetched(pending.mac, pending.slot, tags, error);
+        break;
+    }
+    case Pending::Kind::PlainTree:
+        emit plainTreeFetched(pending.mac, pending.slot, QList<PlainEntry>(), error);
+        break;
     }
 }
 
@@ -456,6 +465,78 @@ void ProLinkNetworkService::fetchWaveformPreview(
     });
 }
 
+void ProLinkNetworkService::fetchPlainFileTags(
+        const QByteArray& mac, MediaSlot slot, quint32 fileId) {
+    Pending pending;
+    pending.kind = Pending::Kind::PlainTags;
+    pending.mac = mac;
+    pending.slot = slot;
+    pending.trackId = fileId;
+    // Over dbserver, on the connection artwork uses, as a CDJ's browser asks
+    // it of the row under its cursor.
+    startTransfer(pending, [&](int number) {
+        return (*m_pImpl->pSession)
+                ->fetch_plain_metadata(static_cast<::std::uint8_t>(number),
+                        toRustSlot(slot),
+                        fileId);
+    });
+}
+
+void ProLinkNetworkService::fetchPlainTree(const QByteArray& mac, MediaSlot slot) {
+    Pending pending;
+    pending.kind = Pending::Kind::PlainTree;
+    pending.mac = mac;
+    pending.slot = slot;
+    startTransfer(pending, [&](int number) {
+        return (*m_pImpl->pSession)
+                ->fetch_plain_tree(static_cast<::std::uint8_t>(number), toRustSlot(slot));
+    });
+}
+
+void ProLinkNetworkService::fetchPlainArtwork(const QByteArray& mac,
+        MediaSlot slot,
+        quint32 fileId,
+        const QString& localPath) {
+    Pending pending;
+    pending.kind = Pending::Kind::Artwork;
+    pending.mac = mac;
+    pending.slot = slot;
+    pending.localPath = localPath;
+    startTransfer(pending, [&](int number) {
+        const QByteArray local = localPath.toUtf8();
+        return (*m_pImpl->pSession)
+                ->fetch_plain_artwork(static_cast<::std::uint8_t>(number),
+                        toRustSlot(slot),
+                        fileId,
+                        ::rust::Str(local.constData(), local.size()));
+    });
+}
+
+void ProLinkNetworkService::fetchPlainFileStreaming(const QByteArray& mac,
+        MediaSlot slot,
+        quint32 fileId,
+        const QString& localPath,
+        quint32 headBytes) {
+    Pending pending;
+    pending.kind = Pending::Kind::File;
+    pending.mac = mac;
+    pending.slot = slot;
+    pending.localPath = localPath;
+    startTransfer(pending, [&](int number) {
+        const QByteArray local = localPath.toUtf8();
+        const quint32 id = (*m_pImpl->pSession)
+                                   ->fetch_plain_file_streaming(
+                                           static_cast<::std::uint8_t>(number),
+                                           toRustSlot(slot),
+                                           fileId,
+                                           ::rust::Str(local.constData(), local.size()),
+                                           headBytes);
+        kLogger.info() << "streaming plain file" << fileId << "from player" << number
+                       << "with a" << headBytes << "byte head";
+        return id;
+    });
+}
+
 void ProLinkNetworkService::fetchArtwork(const QByteArray& mac,
         MediaSlot slot,
         quint32 artworkId,
@@ -519,7 +600,9 @@ void ProLinkNetworkService::poll() {
         case ::prolink::EventKind::TransferProgress: {
             const auto found = m_pending.constFind(event.transfer);
             if (found != m_pending.constEnd() && found->kind != Pending::Kind::Artwork &&
-                    found->kind != Pending::Kind::Preview) {
+                    found->kind != Pending::Kind::Preview &&
+                    found->kind != Pending::Kind::PlainTags &&
+                    found->kind != Pending::Kind::PlainTree) {
                 emit fileFetchProgress(found->localPath,
                         static_cast<quint64>(event.done),
                         static_cast<quint64>(event.total),
@@ -544,7 +627,9 @@ void ProLinkNetworkService::poll() {
             // error: a medium has hundreds of them, a few are always absent,
             // and this string is what the UI shows about the network itself.
             if (!error.isEmpty() && pending.kind != Pending::Kind::Artwork &&
-                    pending.kind != Pending::Kind::Preview) {
+                    pending.kind != Pending::Kind::Preview &&
+                    pending.kind != Pending::Kind::PlainTags &&
+                    pending.kind != Pending::Kind::PlainTree) {
                 m_lastError = error;
             }
             switch (pending.kind) {
@@ -581,6 +666,40 @@ void ProLinkNetworkService::poll() {
                 }
                 emit previewFetched(
                         pending.mac, pending.slot, pending.trackId, blob, error);
+                break;
+            }
+            case Pending::Kind::PlainTree: {
+                QList<PlainEntry> entries;
+                if (error.isEmpty()) {
+                    for (const ::prolink::PlainEntry& found :
+                            (*m_pImpl->pSession)->take_plain_tree(event.transfer)) {
+                        PlainEntry entry;
+                        entry.id = found.id;
+                        entry.parent = found.parent;
+                        entry.name = toQString(found.name);
+                        entry.isFolder = found.is_folder;
+                        entries.append(entry);
+                    }
+                }
+                emit plainTreeFetched(pending.mac, pending.slot, entries, error);
+                break;
+            }
+            case Pending::Kind::PlainTags: {
+                PlainFileTags tags;
+                tags.id = pending.trackId;
+                if (error.isEmpty()) {
+                    const ::prolink::Metadata found =
+                            (*m_pImpl->pSession)->take_metadata(event.transfer);
+                    tags.title = toQString(found.title);
+                    tags.artist = toQString(found.artist);
+                    tags.album = toQString(found.album);
+                    tags.genre = toQString(found.genre);
+                    tags.comment = toQString(found.comment);
+                    tags.durationSeconds = static_cast<int>(found.duration_seconds);
+                    tags.bpm = found.tempo_centibpm / 100.0;
+                    tags.bitrate = static_cast<int>(found.bitrate);
+                }
+                emit plainFileTagsFetched(pending.mac, pending.slot, tags, error);
                 break;
             }
             case Pending::Kind::Artwork:
@@ -719,6 +838,7 @@ void ProLinkNetworkService::syncMedia(int deviceNumber, MediaSlot slot) {
         }
         MediaInfo info;
         info.hasMedia = found.has_media;
+        info.plain = found.plain;
         info.name = toQString(found.volume_name);
         info.trackCount = found.track_count;
         info.playlistCount = found.playlist_count;

@@ -120,7 +120,10 @@ bool DeckLoader::loadRow(const LoadableRow& row,
             // while it copies. What comes back is a file of the right size
             // whose unwritten parts block a reader instead of handing it the
             // zeros a sparse file would.
-            local = m_pStreamer->startStreaming(medium, source, analyzePath);
+            // A player's plain file is opened by its id, which is its row's.
+            const bool plain = m_pRegistry->formatOf(medium) == MediumInfo::Format::Folder;
+            local = m_pStreamer->startStreaming(
+                    medium, source, analyzePath, plain ? rekordboxId : 0);
         }
         if (!local.isEmpty()) {
             playPath = local;

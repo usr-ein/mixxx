@@ -383,7 +383,7 @@ FolderLibrary buildFolderLibrary(const FolderListing& listing,
         for (const int index : directory.files) {
             const FolderFile& file = listing.files.at(index);
             mixxx::rekordbox::PdbTrack track;
-            track.id = static_cast<quint32>(tracks.size() + 1);
+            track.id = file.id != 0 ? file.id : static_cast<quint32>(tracks.size() + 1);
             QString path = file.relativePath;
             if (!path.startsWith(QLatin1Char('/'))) {
                 path.prepend(QLatin1Char('/'));

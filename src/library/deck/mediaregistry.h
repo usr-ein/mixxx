@@ -33,7 +33,7 @@ struct MediumInfo {
         /// A rekordbox export, read out of its `export.pdb`.
         Rekordbox,
         /// Loose files and no usable library: read out of its directory tree
-        /// (docs/plain-usb-plan.md). Local media only, for now.
+        /// (docs/plain-usb-plan.md), or a player's out of its FOLDER menus.
         Folder,
     };
     enum class State {
@@ -220,6 +220,17 @@ class MediaRegistry : public QObject {
             mixxx::prolink::MediaSlot slot,
             const QByteArray& data,
             const QString& error);
+    /// A player's plain stick, walked: read it as a folder medium.
+    void onPlainTreeFetched(const QByteArray& mac,
+            mixxx::prolink::MediaSlot slot,
+            const QList<mixxx::prolink::PlainEntry>& entries,
+            const QString& error);
+    /// One of a player's plain files' tags, in the pass that fills a plain
+    /// stick's rows in behind its walk.
+    void onPlainFileTags(const QByteArray& mac,
+            mixxx::prolink::MediaSlot slot,
+            const mixxx::prolink::PlainFileTags& tags,
+            const QString& error);
     /// Add *device*, or update the one with its MAC.
     void upsertDevice(const mixxx::prolink::ProLinkDevice& device);
     void onDeviceLost(const QByteArray& mac);
@@ -295,6 +306,13 @@ class MediaRegistry : public QObject {
         QString volumeName;
         /// Tags only.
         QList<FolderTagTarget> tagTargets;
+        /// Tags only, a player's plain files': what it said of them, to be
+        /// written as they are.
+        QList<TrackTagUpdate> tagUpdates;
+        /// A player's plain stick: what its FOLDER menus list. Read instead of
+        /// a pdb.
+        FolderListing remoteFolders;
+        bool remoteFolder = false;
     };
     /// What a worker produced. Copyable, because QFuture demands it.
     struct ReadResult {
@@ -312,6 +330,9 @@ class MediaRegistry : public QObject {
         /// Tags only: how many rows the batch changed, and which.
         int tagsUpdated = 0;
         QList<quint32> updatedRbIds;
+        /// A player's plain stick: its files, whose tags are asked of the
+        /// player next, one at a time.
+        QList<quint32> remoteTagIds;
     };
     static ReadResult readMedium(mixxx::DbConnectionPoolPtr pool, PendingRead pending);
     /// The folder half of readMedium(): pass A, and the list pass B will read.
@@ -319,6 +340,16 @@ class MediaRegistry : public QObject {
     static ReadResult readFolderMedium(QSqlDatabase* pDatabase,
             const PendingRead& pending,
             ReadResult result);
+    /// A player's plain stick, from its walk: the same mapping as a stick of
+    /// our own, under the player's own ids, a cover per file asked of the
+    /// player by that id.
+    static ReadResult readRemoteFolderMedium(QSqlDatabase* pDatabase,
+            const PendingRead& pending,
+            ReadResult result);
+    /// Ask the player holding *medium* for the next of its plain files' tags.
+    void askNextPlainTags(const QString& mediumKey);
+    /// Write the plain files' tags gathered so far for *medium*.
+    void flushPlainTags(const MediumId& medium);
     void enqueue(PendingRead pending);
 
     mixxx::DbConnectionPoolPtr m_dbConnectionPool;
@@ -370,6 +401,17 @@ class MediaRegistry : public QObject {
     /// every redraw, so without this a cover the player does not have would be
     /// requested for as long as its row is on screen.
     QSet<QString> m_artworkAsked;
+
+    /// The tags pass of a player's plain stick: its files still to ask about,
+    /// one request out at a time, and what has come back unwritten. By medium
+    /// key.
+    struct PlainTagPass {
+        MediumId medium;
+        QList<quint32> waiting;
+        quint32 asked = 0;
+        QList<TrackTagUpdate> gathered;
+    };
+    QHash<QString, PlainTagPass> m_plainTagPasses;
 };
 
 } // namespace deck

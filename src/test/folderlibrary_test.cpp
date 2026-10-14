@@ -116,6 +116,30 @@ TEST(FolderLibraryTest, TrackIdsFollowTheTreeAndAreStable) {
     }
 }
 
+TEST(FolderLibraryTest, APlayersFileKeepsTheIdThePlayerNamesItBy) {
+    // A CDJ's plain stick, walked through its FOLDER menus: its ids are its
+    // own (FAT clusters), and they are what its status and every request
+    // name a file by.
+    FolderListing listing = listingOf({"/b.mp3", "/A/x.mp3", "/a.mp3"});
+    for (FolderFile& file : listing.files) {
+        file.id = file.relativePath == "/a.mp3" ? 1158u
+                : file.relativePath == "/b.mp3" ? 6u
+                                                 : 361u;
+    }
+    const FolderLibrary library = buildFolderLibrary(listing, "PLAINMP3");
+    QHash<QString, quint32> ids;
+    for (const PdbTrack& track : library.contents.tracks) {
+        ids.insert(track.filePath, track.id);
+    }
+    EXPECT_EQ(1158u, ids.value("/a.mp3"));
+    EXPECT_EQ(6u, ids.value("/b.mp3"));
+    EXPECT_EQ(361u, ids.value("/A/x.mp3"));
+    // And the folders list them by those ids.
+    const QList<PdbPlaylist> top = childrenOf(library, 0);
+    ASSERT_EQ(2, top.size());
+    EXPECT_EQ(QStringList({"/a.mp3", "/b.mp3"}), pathsOf(library, top.at(0).trackIds));
+}
+
 TEST(FolderLibraryTest, NaturalOrderPutsTwoBeforeTen) {
     const FolderLibrary library = buildFolderLibrary(
             listingOf({"/Track 10.mp3", "/track 2.mp3", "/Track 1.mp3"}), "USB");

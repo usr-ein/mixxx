@@ -52,12 +52,17 @@ class RemoteTrackStreamer : public QObject {
     /// fetched in full before the audio starts and is why a streamed track has
     /// a beat grid. Pass it empty to skip.
     ///
+    /// *plainFileId* is a plain file's id on its player's stick, for a medium
+    /// read by its folders: such a file has no path a player opens it by, only
+    /// its id (PLAIN-STICKS.md §7.3). 0 for a rekordbox track.
+    ///
     /// The caller must snapshot everything it needs off its model **before**
     /// calling: a nested event loop runs inside, and a QModelIndex does not
     /// survive it.
     QString startStreaming(const MediumId& medium,
             const QString& sourcePath,
-            const QString& analyzePath);
+            const QString& analyzePath,
+            quint32 plainFileId = 0);
 
     /// The track is off the deck: nothing is reading it any more.
     ///

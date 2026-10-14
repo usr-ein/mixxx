@@ -37,6 +37,14 @@ constexpr int kRescanDebounceMs = 400;
 /// more than a second or two of somebody else's tag reads; large enough that
 /// the batch's one transaction is not mostly overhead.
 constexpr int kTagChunk = 40;
+/// The pause between two of a player's plain files' tags. A CDJ reads a file
+/// off its own stick to answer, while it may be playing off that stick: a
+/// player browsing one asks once per row it rests on, and this is about as
+/// often as a DJ scrolling.
+constexpr int kPlainTagPauseMs = 50;
+/// The tempo range a tag's BPM is believed in, as for a stick of our own.
+constexpr double kMinPlainBpm = 40.0;
+constexpr double kMaxPlainBpm = 300.0;
 /// How long tag reads wait for a track copy to get off the USB bus.
 constexpr int kTagYieldMs = 500;
 
@@ -121,6 +129,14 @@ MediaRegistry::MediaRegistry(mixxx::DbConnectionPoolPtr dbConnectionPool,
             &mixxx::prolink::ProLinkNetworkService::databaseFetched,
             this,
             &MediaRegistry::onDatabaseFetched);
+    connect(m_pNetwork,
+            &mixxx::prolink::ProLinkNetworkService::plainTreeFetched,
+            this,
+            &MediaRegistry::onPlainTreeFetched);
+    connect(m_pNetwork,
+            &mixxx::prolink::ProLinkNetworkService::plainFileTagsFetched,
+            this,
+            &MediaRegistry::onPlainFileTags);
     connect(m_pNetwork,
             &mixxx::prolink::ProLinkNetworkService::deviceLost,
             this,
@@ -421,7 +437,11 @@ MediaRegistry::ReadResult MediaRegistry::readMedium(
     // Pass B of a folder medium: a batch of its files' tags, written over what
     // their names said.
     if (pending.kind == PendingRead::Kind::Tags) {
-        const QList<TrackTagUpdate> updates = readFolderTags(pending.tagTargets);
+        // A player's plain files come with their tags, asked of the player;
+        // a stick of our own has them read off the files here.
+        const QList<TrackTagUpdate> updates = pending.tagUpdates.isEmpty()
+                ? readFolderTags(pending.tagTargets)
+                : pending.tagUpdates;
         result.tagsUpdated = updateTrackTags(database, pending.id, updates);
         result.updatedRbIds.reserve(updates.size());
         for (const TrackTagUpdate& update : updates) {
@@ -429,6 +449,10 @@ MediaRegistry::ReadResult MediaRegistry::readMedium(
         }
         result.ok = true;
         return result;
+    }
+
+    if (pending.remoteFolder) {
+        return readRemoteFolderMedium(&database, pending, std::move(result));
     }
 
     // A local medium is read off its mount; a remote one arrives with the bytes
@@ -540,6 +564,33 @@ MediaRegistry::ReadResult MediaRegistry::readFolderMedium(QSqlDatabase* pDatabas
     return result;
 }
 
+MediaRegistry::ReadResult MediaRegistry::readRemoteFolderMedium(QSqlDatabase* pDatabase,
+        const PendingRead& pending,
+        ReadResult result) {
+    result.format = MediumInfo::Format::Folder;
+    FolderLibrary library = buildFolderLibrary(pending.remoteFolders, pending.volumeName);
+    if (library.contents.tracks.isEmpty()) {
+        result.error = tr("no music found");
+        return result;
+    }
+    // A cover per file, asked of the player by the file's own id: its embedded
+    // picture, or its folder's (PLAIN-STICKS.md §6). Where it lands is the
+    // medium's mirror, under a name no file of the stick can have.
+    library.contents.artwork.clear();
+    for (mixxx::rekordbox::PdbTrack& track : library.contents.tracks) {
+        track.artworkId = track.id;
+        track.artworkPath = QStringLiteral("/.prolink-artwork/%1.jpg").arg(track.id);
+        library.contents.artwork.insert(track.id, track.artworkPath);
+        result.remoteTagIds.append(track.id);
+    }
+    result.ingest = writeMedium(*pDatabase, library.contents, pending.id, pending.localRoot);
+    result.folderCount = library.directoryCount;
+    result.ok = true;
+    kLogger.info() << "read a player's plain stick as folders:" << result.ingest.trackCount
+                   << "tracks in" << result.folderCount << "folders";
+    return result;
+}
+
 void MediaRegistry::onReadFinished() {
     m_reading = false;
     const ReadResult result = m_readWatcher.result();
@@ -574,6 +625,15 @@ void MediaRegistry::onReadFinished() {
         }
         if (!result.notice.isEmpty()) {
             emit mediumNotice(medium, result.notice);
+        }
+        // A player's plain stick: its tags are asked of the player, a file at
+        // a time, and written a chunk at a time.
+        if (result.ok && !result.remoteTagIds.isEmpty()) {
+            PlainTagPass pass;
+            pass.medium = result.id;
+            pass.waiting = result.remoteTagIds;
+            m_plainTagPasses.insert(result.id.key(), pass);
+            askNextPlainTags(result.id.key());
         }
         // Pass B, a chunk at a time, behind anything already waiting. Each
         // chunk is its own read so that the queue can put a newly plugged-in
@@ -680,6 +740,7 @@ void MediaRegistry::onMediaInfo(const QByteArray& mac,
         // medium being taken out of a player reaches us.
         if (index >= 0) {
             const MediumInfo gone = m_media.takeAt(index);
+            m_plainTagPasses.remove(gone.id.key());
             const mixxx::DbConnectionPooler pooler(m_dbConnectionPool);
             QSqlDatabase database = mixxx::DbConnectionPooled(m_dbConnectionPool);
             if (database.isOpen()) {
@@ -722,15 +783,158 @@ void MediaRegistry::onMediaInfo(const QByteArray& mac,
     medium.trackCount = static_cast<int>(info.trackCount);
     medium.playlistCount = static_cast<int>(info.playlistCount);
     medium.state = MediumInfo::State::Reading;
+    // A stick with no rekordbox library has no export.pdb to fetch: it is read
+    // by its folders, as a player's LINK browses it (plain-usb-plan.md D6).
+    medium.format = info.plain ? MediumInfo::Format::Folder : MediumInfo::Format::Rekordbox;
     m_media.append(medium);
     kLogger.info() << "remote medium found:" << medium.name << "on player"
-                   << medium.playerNumber;
+                   << medium.playerNumber << (info.plain ? "-- no rekordbox library" : "");
     emit mediumAppeared(medium);
     emit mediaChanged();
 
     // Read on detection, like a stick: the fetch takes seconds, and doing it
     // now is what makes entering it instant later.
-    m_pNetwork->fetchDatabase(mac, slot);
+    if (info.plain) {
+        m_pNetwork->fetchPlainTree(mac, slot);
+    } else {
+        m_pNetwork->fetchDatabase(mac, slot);
+    }
+}
+
+void MediaRegistry::onPlainTreeFetched(const QByteArray& mac,
+        mixxx::prolink::MediaSlot slot,
+        const QList<mixxx::prolink::PlainEntry>& entries,
+        const QString& error) {
+    const MediumId id = remoteMediumId(mac, slot);
+    const int index = indexOf(id);
+    if (index < 0) {
+        return; // The medium went away while it was walked.
+    }
+    if (!error.isEmpty() || entries.isEmpty()) {
+        m_media[index].state = MediumInfo::State::Failed;
+        m_media[index].error = error.isEmpty() ? tr("no music found") : error;
+        kLogger.warning() << "remote plain medium failed:" << m_media[index].name << error;
+        emit mediumFailed(m_media[index]);
+        emit mediaChanged();
+        return;
+    }
+
+    // Paths from the folders' names, which is what the folder mapping groups
+    // by and what a file's copy is named after in the medium's mirror. Only
+    // what the deck would play off a stick of its own.
+    QHash<quint32, const mixxx::prolink::PlainEntry*> folders;
+    for (const mixxx::prolink::PlainEntry& entry : entries) {
+        if (entry.isFolder) {
+            folders.insert(entry.id, &entry);
+        }
+    }
+    PendingRead pending;
+    pending.id = id;
+    pending.remoteFolder = true;
+    pending.localRoot = remoteCacheRoot(id);
+    pending.volumeName = m_media.at(index).name;
+    for (const mixxx::prolink::PlainEntry& entry : entries) {
+        if (entry.isFolder || !isMusicFileName(entry.name)) {
+            continue;
+        }
+        QString path = QLatin1Char('/') + entry.name;
+        quint32 parent = entry.parent;
+        // Bounded by the walk's own depth: a folder that names itself, or a
+        // loop, ends here rather than spinning.
+        for (int depth = 0; parent != 0 && depth < 64; ++depth) {
+            const auto* pFolder = folders.value(parent);
+            if (pFolder == nullptr) {
+                break;
+            }
+            path.prepend(QLatin1Char('/') + pFolder->name);
+            parent = pFolder->parent;
+        }
+        FolderFile file;
+        file.relativePath = path;
+        file.id = entry.id;
+        pending.remoteFolders.files.append(file);
+    }
+    enqueue(std::move(pending));
+}
+
+void MediaRegistry::askNextPlainTags(const QString& mediumKey) {
+    auto pass = m_plainTagPasses.find(mediumKey);
+    if (pass == m_plainTagPasses.end() || pass->asked != 0) {
+        return;
+    }
+    QByteArray mac;
+    mixxx::prolink::MediaSlot slot = mixxx::prolink::MediaSlot::Usb;
+    if (pass->waiting.isEmpty() || !addressOf(pass->medium, &mac, &slot) ||
+            indexOf(pass->medium) < 0) {
+        const MediumId medium = pass->medium;
+        flushPlainTags(medium);
+        m_plainTagPasses.remove(mediumKey);
+        return;
+    }
+    pass->asked = pass->waiting.takeFirst();
+    // May answer at once, from inside the call, when the player has gone.
+    m_pNetwork->fetchPlainFileTags(mac, slot, pass->asked);
+}
+
+void MediaRegistry::onPlainFileTags(const QByteArray& mac,
+        mixxx::prolink::MediaSlot slot,
+        const mixxx::prolink::PlainFileTags& tags,
+        const QString& error) {
+    const QString key = remoteMediumId(mac, slot).key();
+    auto pass = m_plainTagPasses.find(key);
+    if (pass == m_plainTagPasses.end() || pass->asked != tags.id) {
+        return; // Somebody else's question: the History asks too.
+    }
+    pass->asked = 0;
+    if (!error.isEmpty()) {
+        kLogger.info() << "no tags for plain file" << tags.id << "--" << error;
+        if (indexOf(pass->medium) < 0 || playerNumberFor(mac) == 0) {
+            // The player has gone: nothing more will be answered.
+            const MediumId medium = pass->medium;
+            flushPlainTags(medium);
+            m_plainTagPasses.remove(key);
+            return;
+        }
+    } else {
+        TrackTagUpdate update;
+        update.rbId = tags.id;
+        update.title = tags.title;
+        update.artist = tags.artist;
+        update.album = tags.album;
+        update.genre = tags.genre;
+        update.comment = tags.comment;
+        update.durationSeconds = tags.durationSeconds;
+        update.bitrate = tags.bitrate;
+        if (tags.bpm >= kMinPlainBpm && tags.bpm <= kMaxPlainBpm) {
+            update.bpm = tags.bpm;
+        }
+        // A file with no title tag is named by its file name, extension and
+        // all (PLAIN-STICKS.md §5): no better than what the row already has
+        // from that name, so the row keeps its own.
+        if (isMusicFileName(update.title)) {
+            update.title.clear();
+        }
+        pass->gathered.append(update);
+        if (pass->gathered.size() >= kTagChunk) {
+            flushPlainTags(pass->medium);
+        }
+    }
+    QTimer::singleShot(kPlainTagPauseMs, this, [this, key]() {
+        askNextPlainTags(key);
+    });
+}
+
+void MediaRegistry::flushPlainTags(const MediumId& medium) {
+    auto pass = m_plainTagPasses.find(medium.key());
+    if (pass == m_plainTagPasses.end() || pass->gathered.isEmpty()) {
+        return;
+    }
+    PendingRead tags;
+    tags.kind = PendingRead::Kind::Tags;
+    tags.id = medium;
+    tags.tagUpdates = pass->gathered;
+    pass->gathered.clear();
+    enqueue(std::move(tags));
 }
 
 void MediaRegistry::onDatabaseFetched(const QByteArray& mac,
@@ -964,11 +1168,18 @@ void MediaRegistry::requestArtwork(const QString& coverPath) {
     // to everything -- including the track a DJ is loading (F49). It also means
     // covers do not queue behind a streaming transfer, which holds the one NFS
     // turn for the length of a whole download.
+    if (formatOf(medium) == MediumInfo::Format::Folder) {
+        // A plain file's cover is asked for by the file's own id.
+        m_pNetwork->fetchPlainArtwork(mac, slot, artworkId, coverPath);
+        return;
+    }
     m_pNetwork->fetchArtwork(mac, slot, artworkId, coverPath);
 }
 
 void MediaRegistry::requestPreview(const MediumId& medium, quint32 rekordboxId) {
-    if (medium.isLocal() || rekordboxId == 0 || !m_pNetwork) {
+    // A plain file has no analysis, and its player answers with 900 zeros.
+    if (medium.isLocal() || rekordboxId == 0 || !m_pNetwork ||
+            formatOf(medium) == MediumInfo::Format::Folder) {
         // A local medium has its analysis files on the stick, and reading them
         // is both cheaper and better -- the file carries the colour preview,
         // which the wire does not.
@@ -1037,6 +1248,7 @@ void MediaRegistry::onDeviceLost(const QByteArray& mac) {
             continue;
         }
         const MediumInfo gone = m_media.takeAt(i);
+        m_plainTagPasses.remove(gone.id.key());
         {
             const mixxx::DbConnectionPooler pooler(m_dbConnectionPool);
             QSqlDatabase database = mixxx::DbConnectionPooled(m_dbConnectionPool);

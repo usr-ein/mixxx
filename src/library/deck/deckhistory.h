@@ -127,6 +127,9 @@ class DeckHistory : public QObject {
         MediumId medium;
         quint32 rekordboxId = 0;
         bool rekordbox = false;
+        /// A plain file off another player's stick, by that player's own id
+        /// for it: named by what the player says of it (GENERIC_METADATA).
+        bool plain = false;
         /// Whose medium, in the network's numbers, and which slot.
         int sourcePlayer = 0;
         mixxx::prolink::MediaSlot slot = mixxx::prolink::MediaSlot::Empty;
@@ -158,6 +161,15 @@ class DeckHistory : public QObject {
     bool resolve(HistoryTrack* pTrack, const Origin& origin);
     /// The tracks of this power-up still unnamed, named if they can be now.
     void resolvePending();
+    /// Ask the player holding a plain file what it is, once for every track
+    /// waiting on the answer. False when it cannot be asked at all.
+    bool askPlainTags(const HistoryTrack& track, const Origin& origin);
+    /// A player said what one of its plain files is: name the tracks that
+    /// were waiting on it.
+    void onPlainFileTags(const QByteArray& mac,
+            mixxx::prolink::MediaSlot slot,
+            const mixxx::prolink::PlainFileTags& tags,
+            const QString& error);
     void requestArtwork(const QString& coverPath, const QString& name);
     void post(const HistoryWrite& write);
     HistorySession& current() {
@@ -199,6 +211,9 @@ class DeckHistory : public QObject {
     QHash<QString, Origin> m_origins;
     /// Tracks of this power-up with no name yet, by id.
     QSet<int> m_unnamed;
+    /// Plain files asked about and not answered yet, by player, slot and file
+    /// id: the tracks waiting on each.
+    QHash<QString, QList<int>> m_plainAsked;
     /// This run of Mixxx, in keys: a slot's stick numbering starts again with
     /// every run, and two runs within one power-up must not share a key.
     const QString m_epoch;

@@ -30,6 +30,10 @@ struct FolderFile {
     QString relativePath;
     qint64 size = 0;
     QDateTime modified;
+    /// A player's plain file: its id on that player's medium, which is what
+    /// the network names it by and what its row is keyed on. 0 for a file of
+    /// a stick of our own, numbered in the order the tree shows it.
+    quint32 id = 0;
 };
 
 /// What the walk found, as the builder wants it.

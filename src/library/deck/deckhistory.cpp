@@ -160,6 +160,12 @@ DeckHistory::DeckHistory(const QString& group,
                     requestArtwork(coverPath, name);
                 }
             });
+    if (m_pNetwork) {
+        connect(m_pNetwork,
+                &mixxx::prolink::ProLinkNetworkService::plainFileTagsFetched,
+                this,
+                &DeckHistory::onPlainFileTags);
+    }
 
     m_sampleTimer.setInterval(kSampleMs);
     connect(&m_sampleTimer, &QTimer::timeout, this, &DeckHistory::sample);
@@ -312,7 +318,8 @@ void DeckHistory::sample() {
     QList<history::Sample> playing;
 
     // This deck. Its own track is the one DeckLoader put on it, named by the
-    // medium it came from, whichever player's that is.
+    // medium it came from, whichever player's that is: a player's plain file
+    // by what that player says of it, as when the player plays it.
     if (m_pPlay->get() > 0.0 && m_pTrackLoaded->get() > 0.0 &&
             m_pLoader->loadedMedium().isValid()) {
         const MediumId& medium = m_pLoader->loadedMedium();
@@ -322,7 +329,9 @@ void DeckHistory::sample() {
             Origin origin;
             origin.medium = medium;
             origin.rekordboxId = rekordboxId;
-            origin.rekordbox = rekordboxId != 0;
+            origin.plain = rekordboxId != 0 && !medium.isLocal() &&
+                    m_pRegistry->formatOf(medium) == MediumInfo::Format::Folder;
+            origin.rekordbox = rekordboxId != 0 && !origin.plain;
             m_origins.insert(key, origin);
         }
         playing.append({history::kThisDeck, key});
@@ -418,9 +427,18 @@ QString DeckHistory::keyFor(const mixxx::prolink::ProLinkPlayer& player) {
     if (player.trackId != 0 && !player.trackIsRekordbox && medium.isLocal()) {
         row = m_pRegistry->rowOfServedFile(medium, player.trackId);
     }
+    // A plain file off a player's stick the deck has read by its folders: its
+    // row is keyed on the player's own id, so one played here and there is
+    // one track. It is still named by what its player says of it, which is
+    // the file's own tags whether or not the deck has got to them yet.
+    const bool plainRemote = player.trackId != 0 && !player.trackIsRekordbox &&
+            !medium.isLocal() && medium.isValid() &&
+            m_pRegistry->formatOf(medium) == MediumInfo::Format::Folder;
     QString key;
     if (row != 0 && medium.isValid()) {
         key = mediumTrackKey(medium, row);
+    } else if (plainRemote) {
+        key = mediumTrackKey(medium, player.trackId);
     } else if (player.trackId != 0) {
         // The player's own numbering, on its own medium: a plain file, which
         // no database the deck has can name. Told apart all the same, so one
@@ -441,6 +459,7 @@ QString DeckHistory::keyFor(const mixxx::prolink::ProLinkPlayer& player) {
         origin.medium = medium;
         origin.rekordboxId = row != 0 ? row : player.trackId;
         origin.rekordbox = row != 0 && medium.isValid();
+        origin.plain = player.trackId != 0 && !player.trackIsRekordbox && row == 0;
         origin.sourcePlayer = player.trackId != 0 ? player.trackSourcePlayer : player.number;
         origin.slot = player.trackSourceSlot;
         m_origins.insert(key, origin);
@@ -514,6 +533,12 @@ bool DeckHistory::resolve(HistoryTrack* pTrack, const Origin& origin) {
     } else {
         pTrack->sourcePlayer = origin.sourcePlayer;
         pTrack->sourceSlot = slotName(origin.slot);
+    }
+    if (origin.plain) {
+        // A plain file, by its player's own id: the player that holds it is
+        // the one thing that can name it. Off a stick of ours it is a file the
+        // deck has no row for, and nothing names it.
+        return origin.medium.isLocal() || !askPlainTags(*pTrack, origin);
     }
     if (!origin.rekordbox && !origin.medium.isLocal()) {
         // Nothing will name it: an unknown track, from there.
@@ -611,6 +636,59 @@ void DeckHistory::resolvePending() {
             m_unnamed.remove(track.id);
             write.changedTracks.append(track);
         }
+    }
+    if (!write.isEmpty()) {
+        post(write);
+        emit changed();
+    }
+}
+
+bool DeckHistory::askPlainTags(const HistoryTrack& track, const Origin& origin) {
+    QByteArray mac;
+    mixxx::prolink::MediaSlot slot = origin.slot;
+    if (!m_pNetwork || !MediaRegistry::addressOf(origin.medium, &mac, &slot)) {
+        return false;
+    }
+    const QString asked = QStringLiteral("%1|%2|%3")
+                                  .arg(QString::fromLatin1(mac.toHex()))
+                                  .arg(static_cast<int>(slot))
+                                  .arg(origin.rekordboxId);
+    QList<int>& waiting = m_plainAsked[asked];
+    if (!waiting.contains(track.id)) {
+        waiting.append(track.id);
+    }
+    if (waiting.size() == 1) {
+        m_pNetwork->fetchPlainFileTags(mac, slot, origin.rekordboxId);
+    }
+    return true;
+}
+
+void DeckHistory::onPlainFileTags(const QByteArray& mac,
+        mixxx::prolink::MediaSlot slot,
+        const mixxx::prolink::PlainFileTags& tags,
+        const QString& error) {
+    const QList<int> waiting = m_plainAsked.take(QStringLiteral("%1|%2|%3")
+                    .arg(QString::fromLatin1(mac.toHex()))
+                    .arg(static_cast<int>(slot))
+                    .arg(tags.id));
+    if (waiting.isEmpty()) {
+        return;
+    }
+    if (!error.isEmpty()) {
+        // Still unnamed, and asked again when the media next change.
+        kLogger.info() << "a player did not say what its plain file" << tags.id << "is:"
+                       << error;
+        return;
+    }
+    HistoryWrite write;
+    for (HistoryTrack& track : current().tracks) {
+        if (!waiting.contains(track.id) || !m_unnamed.contains(track.id)) {
+            continue;
+        }
+        track.title = tags.title;
+        track.artist = tags.artist;
+        m_unnamed.remove(track.id);
+        write.changedTracks.append(track);
     }
     if (!write.isEmpty()) {
         post(write);

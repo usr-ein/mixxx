@@ -120,7 +120,8 @@ void RemoteTrackStreamer::fetchCompanionBlocking(const QByteArray& mac,
 
 QString RemoteTrackStreamer::startStreaming(const MediumId& medium,
         const QString& sourcePath,
-        const QString& analyzePath) {
+        const QString& analyzePath,
+        quint32 plainFileId) {
     if (m_pCache == nullptr || sourcePath.isEmpty()) {
         return QString();
     }
@@ -242,7 +243,11 @@ QString RemoteTrackStreamer::startStreaming(const MediumId& medium,
 
     QElapsedTimer elapsed;
     elapsed.start();
-    m_pNetwork->fetchFileStreaming(mac, slot, remotePath, localPath, kStreamHeadBytes);
+    if (plainFileId != 0) {
+        m_pNetwork->fetchPlainFileStreaming(mac, slot, plainFileId, localPath, kStreamHeadBytes);
+    } else {
+        m_pNetwork->fetchFileStreaming(mac, slot, remotePath, localPath, kStreamHeadBytes);
+    }
     // A transfer that cannot even start -- no session, or a player that has
     // left -- reports it by emitting synchronously, from inside that call.
     // quit() on a loop that has not begun does nothing, so entering it anyway
