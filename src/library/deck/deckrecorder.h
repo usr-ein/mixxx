@@ -150,14 +150,7 @@ class DeckRecorder : public QObject {
 
   private:
     /// Whether this set's names are on the stick at *mountPoint* already.
-    enum class OnStick {
-        Absent,
-        /// Its MP3, the size of the recording: this very set.
-        SameSet,
-        /// Another set's, under the same digits.
-        OtherFile,
-    };
-    OnStick onStick(const QString& mountPoint) const;
+    bool namesTaken(const QString& mountPoint) const;
     /// New digits, free on the stick at *mountPoint* and on the card: the
     /// recording renamed, its tag's title with it.
     bool renumber(const QString& mountPoint);

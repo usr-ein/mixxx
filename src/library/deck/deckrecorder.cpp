@@ -452,16 +452,10 @@ double DeckRecorder::writeProgress() const {
     return std::clamp(static_cast<double>(done) / static_cast<double>(m_writeTotalBytes), 0.0, 0.99);
 }
 
-DeckRecorder::OnStick DeckRecorder::onStick(const QString& mountPoint) const {
+bool DeckRecorder::namesTaken(const QString& mountPoint) const {
     const QDir stick(mountPoint);
-    const QFileInfo audio(stick.filePath(setrecording::audioFileName(m_digits)));
-    if (audio.exists() && audio.size() == QFileInfo(audioPath()).size()) {
-        return OnStick::SameSet;
-    }
-    if (audio.exists() || QFileInfo::exists(stick.filePath(setrecording::trackListFileName(m_digits)))) {
-        return OnStick::OtherFile;
-    }
-    return OnStick::Absent;
+    return QFileInfo::exists(stick.filePath(setrecording::audioFileName(m_digits))) ||
+            QFileInfo::exists(stick.filePath(setrecording::trackListFileName(m_digits)));
 }
 
 bool DeckRecorder::renumber(const QString& mountPoint) {
@@ -508,33 +502,14 @@ void DeckRecorder::writeTo(const QString& mountPoint) {
         emit notice(tr("%1: %2").arg(it->name, it->refusal));
         return;
     }
-    QStringList files = {audioPath(), trackListPath()};
-    switch (onStick(mountPoint)) {
-    case OnStick::SameSet:
-        // This very set, from a write that outlived the Mixxx that asked for
-        // it (it goes on as root) and was offered again by the one that came
-        // back: written already, with its track list, or but for it.
-        if (QFileInfo::exists(QDir(mountPoint).filePath(setrecording::trackListFileName(m_digits)))) {
-            m_written.insert(stickId(mountPoint));
-            save();
-            emit notice(tr("%1 has this set already").arg(it->name));
-            emit stateChanged();
-            return;
-        }
-        files = {trackListPath()};
-        break;
-    case OnStick::OtherFile:
-        // Another set under these digits (Sam, 3a: "a name already there
-        // gets new digits").
-        if (!renumber(mountPoint)) {
-            emit notice(tr("The set was not written: %1 has a set of that name").arg(it->name));
-            return;
-        }
-        files = {audioPath(), trackListPath()};
-        break;
-    case OnStick::Absent:
-        break;
+    // Its names on the stick already, whatever is under them -- another set,
+    // or this one from a write that outlived the Mixxx that asked for it --
+    // and the set goes under new digits (Sam: "give it new digits").
+    if (namesTaken(mountPoint) && !renumber(mountPoint)) {
+        emit notice(tr("The set was not written: %1 has a set of that name").arg(it->name));
+        return;
     }
+    const QStringList files = {audioPath(), trackListPath()};
     // The track list as the History has it now, names that came late and all.
     QSaveFile list(trackListPath());
     if (!list.open(QIODevice::WriteOnly) || list.write(trackListText().toUtf8()) < 0 ||
