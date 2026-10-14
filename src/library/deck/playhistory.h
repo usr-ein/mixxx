@@ -69,6 +69,9 @@ struct Segment {
 /// stopping, or one player going from a track to another. It does not end
 /// where only the players change and the tracks do not -- a track that stops
 /// on one player as it starts on another plays on.
+///
+/// In time growing as P log P with the plays: they are sorted once and
+/// walked once.
 QList<Segment> segmentsOf(QList<Play> plays);
 
 /// One row of the History list: one or more segments of the same tracks.
@@ -96,6 +99,9 @@ struct RowRules {
 ///  - a row shorter than `rules.minimumMs` is left out;
 ///  - and the rows that leaves side by side with the same tracks are one row.
 QList<Row> rowsOf(const QList<Segment>& segments, const RowRules& rules = RowRules());
+
+/// How many different tracks *rows* name.
+int trackCount(const QList<Row>& rows);
 
 /// A length as the History shows it: `10s`, `1m20s`, `2m`, `1h05m`.
 QString durationText(qint64 ms);

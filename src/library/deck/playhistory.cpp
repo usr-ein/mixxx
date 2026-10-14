@@ -2,6 +2,8 @@
 
 #include <QSet>
 #include <algorithm>
+#include <set>
+#include <tuple>
 #include <utility>
 
 namespace mixxx {
@@ -42,43 +44,54 @@ QList<Segment> segmentsOf(QList<Play> plays) {
                             return play.endMs <= play.startMs;
                         }),
             plays.end());
-    // Every moment anything starts or stops. Between two of them nothing
-    // changes, so the stretch is either one set of tracks or silence.
-    QList<qint64> times;
-    times.reserve(plays.size() * 2);
-    for (const Play& play : std::as_const(plays)) {
-        times.append(play.startMs);
-        times.append(play.endMs);
+
+    // Every moment anything starts or stops, in order, walked once with the
+    // plays under way kept as it goes: a long set holds thousands of plays,
+    // and the list of this power-up is worked out again every second while
+    // anything plays, on the GUI thread.
+    struct Event {
+        qint64 atMs;
+        bool starts;
+        int play;
+    };
+    QList<Event> events;
+    events.reserve(plays.size() * 2);
+    for (int i = 0; i < plays.size(); ++i) {
+        events.append({plays.at(i).startMs, true, i});
+        events.append({plays.at(i).endMs, false, i});
     }
-    std::sort(times.begin(), times.end());
-    times.erase(std::unique(times.begin(), times.end()), times.end());
+    std::sort(events.begin(), events.end(), [](const Event& lhs, const Event& rhs) {
+        return lhs.atMs < rhs.atMs;
+    });
+    // The plays under way, in the order they started, and by player for two
+    // that started at the same moment, so the order never depends on how the
+    // plays were stored. The play's index makes each its own.
+    std::set<std::tuple<qint64, int, int>> under;
 
     QList<Segment> segments;
-    for (int i = 0; i + 1 < times.size(); ++i) {
-        const qint64 from = times.at(i);
-        const qint64 to = times.at(i + 1);
-        QList<const Play*> active;
-        for (const Play& play : std::as_const(plays)) {
-            if (play.startMs <= from && play.endMs > from) {
-                active.append(&play);
+    int next = 0;
+    while (next < events.size()) {
+        // Everything that happens at this moment, before looking at what
+        // plays from it on: between two moments nothing changes.
+        const qint64 from = events.at(next).atMs;
+        for (; next < events.size() && events.at(next).atMs == from; ++next) {
+            const Play& play = plays.at(events.at(next).play);
+            const auto key = std::make_tuple(play.startMs, play.player, events.at(next).play);
+            if (events.at(next).starts) {
+                under.insert(key);
+            } else {
+                under.erase(key);
             }
         }
-        if (active.isEmpty()) {
+        if (next >= events.size() || under.empty()) {
+            // The last moment, or silence until the next.
             continue;
         }
-        // In the order they started, and by player for two that started at
-        // the same moment, so the order never depends on how the plays were
-        // stored.
-        std::sort(active.begin(), active.end(), [](const Play* pLhs, const Play* pRhs) {
-            if (pLhs->startMs != pRhs->startMs) {
-                return pLhs->startMs < pRhs->startMs;
-            }
-            return pLhs->player < pRhs->player;
-        });
+        const qint64 to = events.at(next).atMs;
         QList<int> tracks;
-        tracks.reserve(active.size());
-        for (const Play* pPlay : std::as_const(active)) {
-            tracks.append(pPlay->track);
+        tracks.reserve(static_cast<qsizetype>(under.size()));
+        for (const auto& entry : under) {
+            tracks.append(plays.at(std::get<2>(entry)).track);
         }
         // The same tracks straight on: the same segment, in the order it
         // started with. Only straight on -- after a silence it is a segment of
@@ -120,6 +133,16 @@ QList<Row> rowsOf(const QList<Segment>& segments, const RowRules& rules) {
     // be the same tracks -- a CUE tapped on another deck in the middle of a
     // track is no reason to list that track twice.
     return mergeNeighbours(rows);
+}
+
+int trackCount(const QList<Row>& rows) {
+    QSet<int> tracks;
+    for (const Row& row : rows) {
+        for (const int track : row.tracks) {
+            tracks.insert(track);
+        }
+    }
+    return static_cast<int>(tracks.size());
 }
 
 QString durationText(qint64 ms) {

@@ -2,7 +2,9 @@
 
 #include <gtest/gtest.h>
 
+#include <QRandomGenerator>
 #include <QStringList>
+#include <algorithm>
 
 namespace {
 
@@ -282,8 +284,107 @@ TEST(PlayHistoryTest, OnlyCueTapsListNothing) {
 }
 
 // ---------------------------------------------------------------------------
+// The sweep against the obvious way of doing it.
+// ---------------------------------------------------------------------------
+
+/// What played at each stretch between two moments, asking every play each
+/// time: quadratic, and plainly right. The sweep has to agree with it.
+QList<Segment> naiveSegmentsOf(QList<Play> plays) {
+    plays.erase(std::remove_if(plays.begin(),
+                        plays.end(),
+                        [](const Play& p) {
+                            return p.endMs <= p.startMs;
+                        }),
+            plays.end());
+    QList<qint64> times;
+    for (const Play& p : std::as_const(plays)) {
+        times.append(p.startMs);
+        times.append(p.endMs);
+    }
+    std::sort(times.begin(), times.end());
+    times.erase(std::unique(times.begin(), times.end()), times.end());
+    QList<Segment> segments;
+    for (int i = 0; i + 1 < times.size(); ++i) {
+        QList<const Play*> active;
+        for (const Play& p : std::as_const(plays)) {
+            if (p.startMs <= times.at(i) && p.endMs > times.at(i)) {
+                active.append(&p);
+            }
+        }
+        if (active.isEmpty()) {
+            continue;
+        }
+        // Stable: two plays of one player starting at one moment -- which no
+        // player does, and a random night does -- keep the order they were
+        // stored in, as the sweep keeps them.
+        std::stable_sort(active.begin(), active.end(), [](const Play* pLhs, const Play* pRhs) {
+            return pLhs->startMs != pRhs->startMs ? pLhs->startMs < pRhs->startMs
+                                                  : pLhs->player < pRhs->player;
+        });
+        QList<int> tracks;
+        for (const Play* pPlay : std::as_const(active)) {
+            tracks.append(pPlay->track);
+        }
+        QList<int> sorted = tracks;
+        std::sort(sorted.begin(), sorted.end());
+        if (!segments.isEmpty() && segments.last().endMs == times.at(i)) {
+            QList<int> last = segments.last().tracks;
+            std::sort(last.begin(), last.end());
+            if (last == sorted) {
+                segments.last().endMs = times.at(i + 1);
+                continue;
+            }
+        }
+        segments.append({times.at(i), times.at(i + 1), tracks});
+    }
+    return segments;
+}
+
+/// A night of four players, at random but the same every run: overlaps,
+/// pauses, replays, plays starting and ending at the same moments, and plays
+/// of no length.
+TEST(PlayHistoryTest, TheSweepAgreesWithAskingEveryPlay) {
+    QRandomGenerator random(20261014);
+    for (int night = 0; night < 50; ++night) {
+        QList<Play> plays;
+        const int count = 1 + static_cast<int>(random.bounded(300));
+        for (int i = 0; i < count; ++i) {
+            // Whole seconds, so that many plays meet at the same moment.
+            const qint64 start = random.bounded(3600) * kSecond;
+            const qint64 length = random.bounded(400) * kSecond;
+            Play p;
+            p.player = static_cast<int>(random.bounded(5));
+            p.track = 1 + static_cast<int>(random.bounded(40));
+            p.startMs = start;
+            p.endMs = start + length;
+            plays.append(p);
+        }
+        const QList<Segment> swept = segmentsOf(plays);
+        const QList<Segment> asked = naiveSegmentsOf(plays);
+        ASSERT_EQ(asked.size(), swept.size()) << "night " << night;
+        for (int i = 0; i < asked.size(); ++i) {
+            EXPECT_EQ(asked.at(i).startMs, swept.at(i).startMs) << "night " << night;
+            EXPECT_EQ(asked.at(i).endMs, swept.at(i).endMs) << "night " << night;
+            EXPECT_EQ(asked.at(i).tracks, swept.at(i).tracks) << "night " << night;
+        }
+    }
+}
+
+// ---------------------------------------------------------------------------
 // Lengths, as the list prints them.
 // ---------------------------------------------------------------------------
+
+/// The tracks a list names, each once.
+TEST(PlayHistoryTest, ATrackCountCountsEachTrackOnce) {
+    EXPECT_EQ(0, mixxx::deck::history::trackCount({}));
+    EXPECT_EQ(3,
+            mixxx::deck::history::trackCount(rowsOf(segmentsOf({
+                    play(1, 1, 0, 30),
+                    play(2, 2, 10, 160),
+                    play(3, 3, 70, 80),
+                    play(3, 3, 160, 280),
+            }))));
+}
 
 TEST(PlayHistoryTest, DurationsReadAsSamWritesThem) {
     EXPECT_EQ(QStringLiteral("10s"), durationText(10 * kSecond));
