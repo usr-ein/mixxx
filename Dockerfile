@@ -50,13 +50,15 @@ ARG WITH_DEBUG=0
 # files and never gets wide enough to matter -- which is why this went unnoticed
 # until the first build after the ccache was pruned.
 #
-# The build's own sub-builds are capped by it too, in the environment of the
-# RUN that builds mixxx: ninja counts each as one job, and each would otherwise
-# start as many processes as the VM has CPUs. cargo (lib/prolink, run by
-# cmake/modules/ProlinkRust.cmake) reads CARGO_BUILD_JOBS; the ExternalProject
-# builds of libdjinterop and libkeyfinder (`cmake --build .`) read
-# CMAKE_BUILD_PARALLEL_LEVEL. Uncapped, a cold build peaked at 25 cc1plus
-# (4 GB) in those two, and 9 rustc (2 GB) in cargo.
+# The build's own sub-builds are capped too, in the environment of the RUN
+# that builds mixxx: ninja counts each as one job, and each would otherwise
+# start as many processes as the VM has CPUs. The ExternalProject builds of
+# libdjinterop and libkeyfinder (`cmake --build .`) read
+# CMAKE_BUILD_PARALLEL_LEVEL, held to MIXXX_BUILD_JOBS: uncapped, a cold build
+# peaked at 25 cc1plus (4 GB) in those two. cargo (lib/prolink, run by
+# cmake/modules/ProlinkRust.cmake) reads CARGO_BUILD_JOBS, held to CARGO_JOBS
+# (declared by that RUN): its peak was smaller (9 rustc, 2 GB), and after a Rust
+# change cargo is what a deploy waits for, 4 jobs costing it ~2 s against 12.
 ARG MIXXX_BUILD_JOBS=4
 
 # Mixxx's build dependencies, from packaging/debian/control.in. Only the mixxx
@@ -134,10 +136,12 @@ COPY . /src
 # MOLD_SUPPORT=ON explicitly, though Mixxx's CMake picks mold by itself when it
 # finds it: the choice is a cached option, so a tree configured before mold was
 # installed would keep GNU ld for good. mold linked the unstripped binary (570
-# MB with -g) in under a second, where GNU ld took five. A new tree is seeded
-# with the main checkout's cache, this setting with it: a worktree of a branch
-# older than mold (its Dockerfile installs none) fails with "Could NOT find
-# mold" until it merges main.
+# MB with -g) in under a second, where GNU ld took five. The setting stays in
+# every tree this configures, and a new worktree's tree is seeded from the main
+# checkout's: a commit from before mold built in one (an old branch's new
+# worktree, a bisect, a hotfix from an older pi/v tag) stops at "Could NOT find
+# mold". Give that commit's configure -DMOLD_SUPPORT=OFF, uncommitted, or merge
+# main into its branch; the next build of this Dockerfile turns mold back on.
 #
 # The build tree is keyed on BASE, and that is not tidiness. It holds
 # prolink-rust/release/libprolink_cxx.a -- the C++ shim the cxx crate generates,
@@ -169,11 +173,12 @@ COPY . /src
 # the dependency layers above must not rebuild per checkout.
 ARG CHECKOUT_ID=
 ARG SEED_ID=-none
+ARG CARGO_JOBS=8
 RUN --mount=type=cache,target=/build,sharing=locked,id=mixxx-build-${BASE}${CHECKOUT_ID} \
     --mount=type=cache,target=/seed,sharing=shared,readonly,id=mixxx-build-${BASE}${SEED_ID} \
     --mount=type=cache,target=/ccache,sharing=locked \
     --mount=type=cache,target=/opt/cargo/registry,sharing=locked \
-    export CCACHE_DIR=/ccache CARGO_BUILD_JOBS="${MIXXX_BUILD_JOBS}" \
+    export CCACHE_DIR=/ccache CARGO_BUILD_JOBS="${CARGO_JOBS}" \
         CMAKE_BUILD_PARALLEL_LEVEL="${MIXXX_BUILD_JOBS}" \
     && /src/tree-sync.sh /src /build /seed \
     && cmake -S /build/src -B /build/out -G Ninja \
@@ -241,7 +246,8 @@ ARG BASE
 # the Docker VM's memory and the OOM killer takes cc1plus with it. The failure
 # looks like "fatal error: Killed signal terminated program cc1plus", which does
 # not obviously say "out of memory". Raise it if the VM has plenty of RAM.
-# It caps cargo and the ExternalProject builds too, as MIXXX_BUILD_JOBS does.
+# It caps the ExternalProject builds too, as MIXXX_BUILD_JOBS does; cargo has
+# CARGO_JOBS, as there.
 ARG BUILD_JOBS=3
 # gmock is a separate Debian package from gtest, and mixxx-test links
 # GTest::gmock. Installed only in this stage so the image the deck binary is
@@ -255,11 +261,12 @@ RUN apt-get update && apt-get install -y --no-install-recommends libgmock-dev \
 # Each checkout's own test tree, kept and seeded as /build is (see there).
 ARG CHECKOUT_ID=
 ARG SEED_ID=-none
+ARG CARGO_JOBS=8
 RUN --mount=type=cache,target=/build-test,sharing=locked,id=mixxx-build-test-${BASE}${CHECKOUT_ID} \
     --mount=type=cache,target=/seed,sharing=shared,readonly,id=mixxx-build-test-${BASE}${SEED_ID} \
     --mount=type=cache,target=/ccache,sharing=locked \
     --mount=type=cache,target=/opt/cargo/registry,sharing=locked \
-    export CCACHE_DIR=/ccache CARGO_BUILD_JOBS="${BUILD_JOBS}" \
+    export CCACHE_DIR=/ccache CARGO_BUILD_JOBS="${CARGO_JOBS}" \
         CMAKE_BUILD_PARALLEL_LEVEL="${BUILD_JOBS}" \
     && /src/tree-sync.sh /src /build-test /seed \
     && cmake -S /build-test/src -B /build-test/out -G Ninja \
