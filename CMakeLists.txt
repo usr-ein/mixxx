@@ -1017,6 +1017,7 @@ add_library(mixxx-lib STATIC EXCLUDE_FROM_ALL
   src/library/deck/folderscan.cpp
   src/library/deck/mediaregistry.cpp
   src/library/deck/pdbingest.cpp
+  src/library/deck/playhistory.cpp
   src/library/deck/sessionpurge.cpp
   src/library/deck/previewwaveform.cpp
   src/library/deck/previewwaveformcache.cpp
@@ -2251,6 +2252,7 @@ if(BUILD_TESTING)
     src/test/playlisttest.cpp
     src/test/portmidicontroller_test.cpp
     src/test/portmidienumeratortest.cpp
+    src/test/playhistory_test.cpp
     src/test/previewwaveform_test.cpp
     src/test/queryutiltest.cpp
     src/test/rangelist_test.cpp
