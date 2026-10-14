@@ -701,6 +701,7 @@ void ProLinkNetworkService::syncMedia(int deviceNumber, MediaSlot slot) {
             continue;
         }
         MediaInfo info;
+        info.hasMedia = found.has_media;
         info.name = toQString(found.volume_name);
         info.trackCount = found.track_count;
         info.playlistCount = found.playlist_count;

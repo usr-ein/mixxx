@@ -65,24 +65,28 @@ class ProLinkDevice {
 
 /// What a player says is in one of its slots.
 struct MediaInfo {
+    /// Whether the player's own status says the slot holds a mounted medium.
+    ///
+    /// Occupancy is published in status packets and nowhere else, and those are
+    /// unicast only to peers that have announced themselves (F20/F21).
+    bool hasMedia = false;
     /// The volume label the DJ formatted the medium with — `Sam CDJ1000mk3`,
     /// and what the deck itself shows. UTF-16 **big**-endian on the wire, like
     /// the dbserver strings and unlike the NFS layer's UTF-16LE.
     ///
     /// **Often empty, and legitimately so**: an unlabelled stick reports no
-    /// name at all while still carrying a full library. Absence of a name is
-    /// not absence of media — that is what `isOccupied()` is for.
+    /// name at all while still carrying a full library.
     QString name;
     quint32 trackCount = 0;
     quint32 playlistCount = 0;
 
-    /// A slot with something in it. A deck answers for an empty slot too, with
-    /// everything zeroed, so this is the distinction that matters.
+    /// A slot with something in it, as its player's status says.
     ///
-    /// Occupancy is published in status packets and nowhere else, and those are
-    /// unicast only to peers that have announced themselves (F20/F21).
+    /// Never read off the description: a stick with no label and no rekordbox
+    /// library is described with no name and no tracks, exactly as an empty
+    /// slot is, and is a medium all the same.
     bool isOccupied() const {
-        return trackCount > 0 || !name.isEmpty();
+        return hasMedia;
     }
 };
 
