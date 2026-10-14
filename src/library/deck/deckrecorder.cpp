@@ -57,6 +57,56 @@ const QString kInputPcm = QStringLiteral("/proc/asound/CODEC/pcm0c");
 /// FAT's own: a megabyte, as dj-usb counts it.
 constexpr qint64 kStickSpareBytes = 1024 * 1024 + 64 * 1024;
 
+/// The block device mounted at *mountPoint* ("sda1"), from the kernel's
+/// table, or empty.
+QString deviceAt(const QString& mountPoint) {
+    QFile mounts(QStringLiteral("/proc/self/mounts"));
+    if (!mounts.open(QIODevice::ReadOnly)) {
+        return QString();
+    }
+    for (const QByteArray& line : mounts.readAll().split('\n')) {
+        const QList<QByteArray> fields = line.split(' ');
+        if (fields.size() >= 2 && QString::fromUtf8(fields.at(1)) == mountPoint &&
+                fields.at(0).startsWith("/dev/")) {
+            return QFileInfo(QString::fromUtf8(fields.at(0))).fileName();
+        }
+    }
+    return QString();
+}
+
+/// What *device* has written since it appeared, in bytes: the kernel's own
+/// count of sectors written (/sys/class/block/DEV/stat, always 512-byte
+/// sectors), what the stick has taken rather than what was handed to it.
+/// -1 when it cannot be read.
+qint64 deviceBytesWritten(const QString& device) {
+    if (device.isEmpty()) {
+        return -1;
+    }
+    QFile stat(QStringLiteral("/sys/class/block/%1/stat").arg(device));
+    if (!stat.open(QIODevice::ReadOnly)) {
+        return -1;
+    }
+    const QList<QByteArray> fields = stat.readAll().simplified().split(' ');
+    bool ok = false;
+    const qint64 sectors = fields.size() > 6 ? fields.at(6).toLongLong(&ok) : -1;
+    return ok ? sectors * 512 : -1;
+}
+
+/// The digits in an MP3's title tag ("Recorded set 12345678") written over in
+/// place: the same length, at the head of the file. Nothing when not found.
+void retitle(const QString& path, const QString& from, const QString& to) {
+    QFile file(path);
+    if (from.size() != to.size() || !file.open(QIODevice::ReadWrite)) {
+        return;
+    }
+    const QByteArray head = file.read(4096);
+    const QByteArray title = QByteArrayLiteral("Recorded set ") + from.toLatin1();
+    const qint64 at = head.indexOf(title);
+    if (at >= 0 && file.seek(at + 13)) {
+        file.write(to.toLatin1());
+    }
+}
+
 } // namespace
 
 QString DeckRecorder::defaultDirectory() {
@@ -383,17 +433,60 @@ double DeckRecorder::writeProgress() const {
     if (!m_pWriter || m_writeTotalBytes <= 0) {
         return 0.0;
     }
-    // What has reached the stick: each file under its own name once whole,
-    // under dj-usb's hidden one until then.
-    qint64 done = 0;
-    const QDir stick(m_writeMountPoint);
-    for (const QString& name : {setrecording::audioFileName(m_digits),
-                 setrecording::trackListFileName(m_digits)}) {
-        const QFileInfo whole(stick.filePath(name));
-        const QFileInfo part(stick.filePath(QStringLiteral(".%1.part").arg(name)));
-        done += whole.exists() ? whole.size() : (part.exists() ? part.size() : 0);
+    // What the stick has written since the write began, by its own count:
+    // what has reached it, not what was handed to the kernel. Its FAT and
+    // directory are in that count too, so it says 99 % until dj-usb is done.
+    const qint64 written = deviceBytesWritten(m_writeDevice);
+    qint64 done = written >= 0 && m_writeBaseline >= 0 ? written - m_writeBaseline : -1;
+    if (done < 0) {
+        // No count to read: each file under its own name once whole, under
+        // dj-usb's hidden one until then.
+        done = 0;
+        const QDir stick(m_writeMountPoint);
+        for (const QString& name : m_writeFiles) {
+            const QFileInfo whole(stick.filePath(name));
+            const QFileInfo part(stick.filePath(QStringLiteral(".%1.part").arg(name)));
+            done += whole.exists() ? whole.size() : (part.exists() ? part.size() : 0);
+        }
     }
-    return std::clamp(static_cast<double>(done) / static_cast<double>(m_writeTotalBytes), 0.0, 1.0);
+    return std::clamp(static_cast<double>(done) / static_cast<double>(m_writeTotalBytes), 0.0, 0.99);
+}
+
+DeckRecorder::OnStick DeckRecorder::onStick(const QString& mountPoint) const {
+    const QDir stick(mountPoint);
+    const QFileInfo audio(stick.filePath(setrecording::audioFileName(m_digits)));
+    if (audio.exists() && audio.size() == QFileInfo(audioPath()).size()) {
+        return OnStick::SameSet;
+    }
+    if (audio.exists() || QFileInfo::exists(stick.filePath(setrecording::trackListFileName(m_digits)))) {
+        return OnStick::OtherFile;
+    }
+    return OnStick::Absent;
+}
+
+bool DeckRecorder::renumber(const QString& mountPoint) {
+    // Digits neither this stick nor the card has a set under.
+    const QDir stick(mountPoint);
+    QString digits;
+    for (int i = 0; i < 10 && digits.isEmpty(); ++i) {
+        const QString candidate = setrecording::digitsOf(QRandomGenerator::system()->generate());
+        if (!QFileInfo::exists(stick.filePath(setrecording::audioFileName(candidate))) &&
+                !QFileInfo::exists(stick.filePath(setrecording::trackListFileName(candidate))) &&
+                !QFileInfo::exists(QDir(m_directory).filePath(setrecording::audioFileName(candidate)))) {
+            digits = candidate;
+        }
+    }
+    const QString from = audioPath();
+    const QString old = std::exchange(m_digits, digits);
+    if (digits.isEmpty() || !QFile::rename(from, audioPath())) {
+        m_digits = old;
+        return false;
+    }
+    QFile::remove(QDir(m_directory).filePath(setrecording::trackListFileName(old)));
+    retitle(audioPath(), old, digits);
+    save();
+    kLogger.info() << "renumbered" << old << "as" << digits << ": a set of that name is on" << mountPoint;
+    return true;
 }
 
 void DeckRecorder::writeTo(const QString& mountPoint) {
@@ -415,6 +508,33 @@ void DeckRecorder::writeTo(const QString& mountPoint) {
         emit notice(tr("%1: %2").arg(it->name, it->refusal));
         return;
     }
+    QStringList files = {audioPath(), trackListPath()};
+    switch (onStick(mountPoint)) {
+    case OnStick::SameSet:
+        // This very set, from a write that outlived the Mixxx that asked for
+        // it (it goes on as root) and was offered again by the one that came
+        // back: written already, with its track list, or but for it.
+        if (QFileInfo::exists(QDir(mountPoint).filePath(setrecording::trackListFileName(m_digits)))) {
+            m_written.insert(stickId(mountPoint));
+            save();
+            emit notice(tr("%1 has this set already").arg(it->name));
+            emit stateChanged();
+            return;
+        }
+        files = {trackListPath()};
+        break;
+    case OnStick::OtherFile:
+        // Another set under these digits (Sam, 3a: "a name already there
+        // gets new digits").
+        if (!renumber(mountPoint)) {
+            emit notice(tr("The set was not written: %1 has a set of that name").arg(it->name));
+            return;
+        }
+        files = {audioPath(), trackListPath()};
+        break;
+    case OnStick::Absent:
+        break;
+    }
     // The track list as the History has it now, names that came late and all.
     QSaveFile list(trackListPath());
     if (!list.open(QIODevice::WriteOnly) || list.write(trackListText().toUtf8()) < 0 ||
@@ -424,7 +544,15 @@ void DeckRecorder::writeTo(const QString& mountPoint) {
     }
     m_writeMountPoint = mountPoint;
     m_writeName = it->name;
-    m_writeTotalBytes = QFileInfo(audioPath()).size() + QFileInfo(trackListPath()).size();
+    m_writeFiles.clear();
+    m_writeTotalBytes = 0;
+    for (const QString& file : std::as_const(files)) {
+        m_writeFiles.append(QFileInfo(file).fileName());
+        m_writeTotalBytes += QFileInfo(file).size();
+    }
+    // The stick's own count of what it has written, from here: the progress.
+    m_writeDevice = deviceAt(mountPoint);
+    m_writeBaseline = deviceBytesWritten(m_writeDevice);
     m_pWriter = new QProcess(this);
     connect(m_pWriter,
             &QProcess::finished,
@@ -440,12 +568,7 @@ void DeckRecorder::writeTo(const QString& mountPoint) {
     });
     // sudo -n: a password asked for would wait for ever.
     m_pWriter->start(QStringLiteral("sudo"),
-            {QStringLiteral("-n"),
-                    kDjUsb,
-                    QStringLiteral("write"),
-                    mountPoint,
-                    audioPath(),
-                    trackListPath()});
+            QStringList{QStringLiteral("-n"), kDjUsb, QStringLiteral("write"), mountPoint} + files);
     m_writeProgress.start();
     kLogger.info() << "writing" << audioPath() << "to" << mountPoint;
     emit stateChanged();

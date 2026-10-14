@@ -149,6 +149,18 @@ class DeckRecorder : public QObject {
     void endAsked();
 
   private:
+    /// Whether this set's names are on the stick at *mountPoint* already.
+    enum class OnStick {
+        Absent,
+        /// Its MP3, the size of the recording: this very set.
+        SameSet,
+        /// Another set's, under the same digits.
+        OtherFile,
+    };
+    OnStick onStick(const QString& mountPoint) const;
+    /// New digits, free on the stick at *mountPoint* and on the card: the
+    /// recording renamed, its tag's title with it.
+    bool renumber(const QString& mountPoint);
     void onLevels(float left, float right, qint64 frames);
     void onCaptureFinished(qint64 frames, InputCapture::End end, const QString& error);
     void onWriteFinished(int exitCode, bool crashed);
@@ -199,7 +211,12 @@ class DeckRecorder : public QObject {
     QProcess* m_pWriter = nullptr;
     QString m_writeMountPoint;
     QString m_writeName;
+    /// The files being written, by name, and their bytes.
+    QStringList m_writeFiles;
     qint64 m_writeTotalBytes = 0;
+    /// The stick's block device, and what it had written when the write began.
+    QString m_writeDevice;
+    qint64 m_writeBaseline = -1;
     QTimer m_writeProgress;
 
     std::unique_ptr<ControlProxy> m_pSilencePrompt;
