@@ -36,7 +36,7 @@ FROM ${BASE} AS build
 # keyed on it, because they hold compiler output and two Debian releases must
 # not share them. See the RUN that builds mixxx.
 ARG BASE
-# Off by default: the unstripped binary is 526 MB against a 23 MB one, and a
+# Off by default: the unstripped binary is 156 MB against a 27 MB one, and a
 # routine build should not carry it. Turned on only to read a backtrace; see
 # the `debug` stage.
 ARG WITH_DEBUG=0
@@ -122,13 +122,22 @@ COPY . /src
 # GTest::gmock is a separate Debian package that only the unittest stage below
 # installs. The failure is a configure error about a target nobody asked for.
 #
+# -g1 instead of RelWithDebInfo's -g: function names and line tables, which is
+# all a backtrace needs (the debug stage below), without the types and local
+# variables that made every compile job, object, the ccache and the archive
+# several times bigger. BUILD_LOW_MEMORY is Mixxx's own switch: no -pipe, so a
+# job's cc1plus and as don't hold their memory at once. Measured with the caps
+# and mold above: a cold build 12% faster, cc1plus 281 MB on average against
+# 341, the tree 2.0 GB against 5.0, the ccache 85 MB against 409, and a one-file
+# build 8 s against 16.
+#
 # MOLD_SUPPORT=ON explicitly, though Mixxx's CMake picks mold by itself when it
 # finds it: the choice is a cached option, so a tree configured before mold was
-# installed would keep GNU ld for good. mold links the 570 MB unstripped binary
-# in under a second, where GNU ld took five. A new tree is seeded with the main
-# checkout's cache, this setting with it: a worktree of a branch older than mold
-# (its Dockerfile installs none) fails with "Could NOT find mold" until it
-# merges main.
+# installed would keep GNU ld for good. mold linked the unstripped binary (570
+# MB with -g) in under a second, where GNU ld took five. A new tree is seeded
+# with the main checkout's cache, this setting with it: a worktree of a branch
+# older than mold (its Dockerfile installs none) fails with "Could NOT find
+# mold" until it merges main.
 #
 # The build tree is keyed on BASE, and that is not tidiness. It holds
 # prolink-rust/release/libprolink_cxx.a -- the C++ shim the cxx crate generates,
@@ -169,6 +178,9 @@ RUN --mount=type=cache,target=/build,sharing=locked,id=mixxx-build-${BASE}${CHEC
     && /src/tree-sync.sh /src /build /seed \
     && cmake -S /build/src -B /build/out -G Ninja \
         -DCMAKE_BUILD_TYPE=RelWithDebInfo \
+        -DCMAKE_C_FLAGS_RELWITHDEBINFO="-O2 -g1 -DNDEBUG" \
+        -DCMAKE_CXX_FLAGS_RELWITHDEBINFO="-O2 -g1 -DNDEBUG" \
+        -DBUILD_LOW_MEMORY=ON \
         -DBUILD_TESTING=OFF \
         -DINSTALL_USER_UDEV_RULES=OFF \
         -DMOLD_SUPPORT=ON \
@@ -184,10 +196,11 @@ FROM scratch AS export
 COPY --from=build /mixxx /mixxx
 
 # The same binary with its symbols still on, for reading a backtrace off the
-# deck. It is NOT installed there -- RelWithDebInfo debug info is an order of
-# magnitude larger than the binary and the deck gains nothing from carrying it.
-# The two have identical layout, so an address from a stripped run resolves
-# against this one:
+# deck. It is NOT installed there -- its debug info is several times the size of
+# the binary and the deck gains nothing from carrying it. It is -g1 (see the
+# build's RUN): functions and line numbers, no local variables, so gdb on it
+# shows a backtrace but not the locals. The two have identical layout, so an
+# address from a stripped run resolves against this one:
 #
 #   docker build --target debug --build-arg WITH_DEBUG=1 \
 #       --output type=local,dest=dist .
@@ -251,6 +264,9 @@ RUN --mount=type=cache,target=/build-test,sharing=locked,id=mixxx-build-test-${B
     && /src/tree-sync.sh /src /build-test /seed \
     && cmake -S /build-test/src -B /build-test/out -G Ninja \
         -DCMAKE_BUILD_TYPE=RelWithDebInfo \
+        -DCMAKE_C_FLAGS_RELWITHDEBINFO="-O2 -g1 -DNDEBUG" \
+        -DCMAKE_CXX_FLAGS_RELWITHDEBINFO="-O2 -g1 -DNDEBUG" \
+        -DBUILD_LOW_MEMORY=ON \
         -DBUILD_TESTING=ON \
         -DINSTALL_USER_UDEV_RULES=OFF \
         -DMOLD_SUPPORT=ON \
