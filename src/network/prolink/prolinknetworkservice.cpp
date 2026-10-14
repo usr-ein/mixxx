@@ -232,6 +232,65 @@ void ProLinkNetworkService::shutdown() {
     }
 }
 
+QList<ProLinkPlayer> ProLinkNetworkService::players() const {
+    QList<ProLinkPlayer> players;
+    if (!m_pImpl->pSession) {
+        return players;
+    }
+    const int ours = static_cast<int>((*m_pImpl->pSession)->device_number());
+    for (const ::prolink::Player& player : (*m_pImpl->pSession)->players()) {
+        if (static_cast<int>(player.number) == ours) {
+            continue;
+        }
+        ProLinkPlayer out;
+        out.number = static_cast<int>(player.number);
+        out.hasStatus = player.has_status;
+        out.isPlaying = player.is_playing;
+        switch (player.play_state) {
+        case ::prolink::PlayState::NoTrack:
+            out.playState = ProLinkPlayer::PlayState::NoTrack;
+            break;
+        case ::prolink::PlayState::Loading:
+            out.playState = ProLinkPlayer::PlayState::Loading;
+            break;
+        case ::prolink::PlayState::Playing:
+            out.playState = ProLinkPlayer::PlayState::Playing;
+            break;
+        case ::prolink::PlayState::Looping:
+            out.playState = ProLinkPlayer::PlayState::Looping;
+            break;
+        case ::prolink::PlayState::Paused:
+            out.playState = ProLinkPlayer::PlayState::Paused;
+            break;
+        case ::prolink::PlayState::Cued:
+            out.playState = ProLinkPlayer::PlayState::Cued;
+            break;
+        case ::prolink::PlayState::CuePlay:
+            out.playState = ProLinkPlayer::PlayState::CuePlay;
+            break;
+        case ::prolink::PlayState::Searching:
+            out.playState = ProLinkPlayer::PlayState::Searching;
+            break;
+        case ::prolink::PlayState::SpunDown:
+            out.playState = ProLinkPlayer::PlayState::SpunDown;
+            break;
+        case ::prolink::PlayState::Emergency:
+            out.playState = ProLinkPlayer::PlayState::Emergency;
+            break;
+        default:
+            out.playState = ProLinkPlayer::PlayState::Other;
+            break;
+        }
+        out.trackId = player.track_id;
+        out.trackSourcePlayer = static_cast<int>(player.track_source_player);
+        out.trackSourceSlot = toMixxxSlot(player.track_source_slot);
+        out.trackIsRekordbox = player.track_is_rekordbox;
+        out.statusAgeMs = player.status_age_ms;
+        players.append(out);
+    }
+    return players;
+}
+
 int ProLinkNetworkService::numberFor(const QByteArray& mac) const {
     if (!m_pImpl->pSession) {
         return 0;

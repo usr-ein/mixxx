@@ -86,6 +86,52 @@ struct MediaInfo {
     }
 };
 
+/// What one player on the link is doing, as its status packets say: what it
+/// has loaded and whether it is playing it.
+///
+/// Read off the session's table as it stands at the time of asking, on the GUI
+/// thread; see ProLinkNetworkService::players().
+struct ProLinkPlayer {
+    /// What a platter is doing, as the status packet has it.
+    enum class PlayState {
+        NoTrack,
+        Loading,
+        Playing,
+        Looping,
+        Paused,
+        Cued,
+        /// Playing from the cue point while CUE is held.
+        CuePlay,
+        Searching,
+        SpunDown,
+        /// The medium went away mid-play and the deck plays its buffer.
+        Emergency,
+        Other,
+    };
+
+    int number = 0;
+    /// Whether anything below means anything: status is only sent to a player
+    /// that announced itself.
+    bool hasStatus = false;
+    /// The status's playing flag. Clear for a plain file even while it plays,
+    /// on an emulated NXS at least (E12): ask playState as well.
+    bool isPlaying = false;
+    PlayState playState = PlayState::NoTrack;
+    /// The loaded track's id, or 0.
+    quint32 trackId = 0;
+    /// Whose medium it came from, and which slot of it.
+    int trackSourcePlayer = 0;
+    MediaSlot trackSourceSlot = MediaSlot::Empty;
+    /// Whether the loaded track is a rekordbox-analysed one: only then is
+    /// trackId a row of that medium's export.pdb, and otherwise the player's
+    /// own numbering.
+    bool trackIsRekordbox = false;
+    /// How old the last status is, in milliseconds; negative when there is
+    /// none. A deck that has gone keeps its last status until it is forgotten,
+    /// some 30 s on.
+    double statusAgeMs = -1.0;
+};
+
 } // namespace prolink
 } // namespace mixxx
 

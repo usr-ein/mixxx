@@ -1009,6 +1009,7 @@ add_library(mixxx-lib STATIC EXCLUDE_FROM_ALL
   src/library/rekordbox/rekordboxwaveform.cpp
   src/library/deck/autoplay.cpp
   src/library/deck/deckautoplay.cpp
+  src/library/deck/deckhistory.cpp
   src/library/deck/deckloader.cpp
   src/library/deck/deckservices.cpp
   src/library/deck/deckqueries.cpp

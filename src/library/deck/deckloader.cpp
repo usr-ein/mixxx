@@ -220,6 +220,8 @@ bool DeckLoader::loadRow(const LoadableRow& row,
     }
 
     m_loadedTrackRowId = trackRowId > 0 ? trackRowId : -1;
+    m_loadedMedium = medium;
+    m_loadedRekordboxId = rekordboxId;
     m_loadedTrackLogged = false;
     watchPlayPosition();
 
@@ -390,6 +392,8 @@ void DeckLoader::onDeckEmpty() {
     // Set at load, before the deck has said yes. A file that would not decode
     // left the marker on its row, claiming a track the deck does not have.
     m_loadedTrackRowId = -1;
+    m_loadedMedium = MediumId();
+    m_loadedRekordboxId = 0;
     m_loadedTrackLogged = false;
 }
 

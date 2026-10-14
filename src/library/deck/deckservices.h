@@ -19,6 +19,7 @@ class ProLinkNetworkService;
 namespace deck {
 
 class DeckAutoplay;
+class DeckHistory;
 class DeckLoader;
 class RemoteTrackStreamer;
 class TrackCache;
@@ -71,6 +72,9 @@ class DeckServices : public QObject {
     DeckAutoplay* autoplay() const {
         return m_pAutoplay.get();
     }
+    DeckHistory* history() const {
+        return m_pHistory.get();
+    }
 
   signals:
     /// The registry's, passed on for the toast, and connected before anything
@@ -93,6 +97,7 @@ class DeckServices : public QObject {
     std::unique_ptr<mixxx::prolink::ProLinkKeySync> m_pKeySync;
     std::unique_ptr<DeckLoader> m_pLoader;
     std::unique_ptr<DeckAutoplay> m_pAutoplay;
+    std::unique_ptr<DeckHistory> m_pHistory;
 };
 
 } // namespace deck

@@ -132,6 +132,13 @@ class MediaRegistry : public QObject {
     /// Nothing is loaded here any more.
     void announceNothingLoaded();
 
+    /// The medium *player* keeps in *slot*, or an invalid id.
+    ///
+    /// Handles the case a rig makes ordinary and a lone deck never sees: a
+    /// player playing a track off a stick that is in **this** deck, over LINK.
+    /// That medium is one of ours and is not on the network at all.
+    MediumId mediumOf(int player, mixxx::prolink::MediaSlot slot) const;
+
     /// What we are offering to the players on the network, and who is reading
     /// it. Empty without Pro DJ Link.
     ///
@@ -257,12 +264,6 @@ class MediaRegistry : public QObject {
 
     /// Player number for a MAC, or 0. Linear over a handful of devices.
     int playerNumberFor(const QByteArray& mac) const;
-    /// The medium *player* keeps in *slot*, or an invalid id.
-    ///
-    /// Handles the case a rig makes ordinary and a lone deck never sees: the
-    /// master playing a track off a stick that is in **this** deck, over LINK.
-    /// That medium is one of ours and is not on the network at all.
-    MediumId mediumOf(int player, mixxx::prolink::MediaSlot slot) const;
 
     /// One pending read. A local medium names a mount to read from; a remote
     /// one arrives with the bytes already in hand, because the network layer

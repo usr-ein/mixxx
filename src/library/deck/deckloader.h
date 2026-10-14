@@ -81,6 +81,16 @@ class DeckLoader : public QObject {
         return m_loadedTrackRowId;
     }
 
+    /// The medium the track on the deck came from, and its id there: what
+    /// names it on the network and in the History. Invalid and 0 when nothing
+    /// is loaded.
+    const MediumId& loadedMedium() const {
+        return m_loadedMedium;
+    }
+    quint32 loadedRekordboxId() const {
+        return m_loadedRekordboxId;
+    }
+
     /// The deck has nothing on it any more -- ejected, or a track that would
     /// not load: forget the row it had.
     void onDeckEmpty();
@@ -146,6 +156,8 @@ class DeckLoader : public QObject {
     /// The deck_library row currently on the deck, and whether it has already
     /// been logged.
     int m_loadedTrackRowId = -1;
+    MediumId m_loadedMedium;
+    quint32 m_loadedRekordboxId = 0;
     bool m_loadedTrackLogged = false;
     std::unique_ptr<ControlProxy> m_pPlayPosition;
     /// The cached file the deck is playing, so it can be unpinned when another

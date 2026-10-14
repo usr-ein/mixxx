@@ -1,6 +1,7 @@
 #include "library/deck/deckservices.h"
 
 #include "library/deck/deckautoplay.h"
+#include "library/deck/deckhistory.h"
 #include "library/deck/deckloader.h"
 #include "library/deck/pdbingest.h"
 #include "library/deck/ramstore.h"
@@ -123,6 +124,14 @@ void DeckServices::start(Library* pLibrary, UserSettingsPointer pConfig) {
             m_pRegistry.get(),
             [this]() { return database(); },
             m_pLoader.get());
+    // What plays on the link, this deck included, for the History: it reads
+    // the network's players and this deck's loads, and names tracks from what
+    // the registry read.
+    m_pHistory = std::make_unique<DeckHistory>(deckGroup(),
+            m_pRegistry.get(),
+            m_pNetwork.get(),
+            m_pLoader.get(),
+            m_pLibrary->dbConnectionPool());
     // A medium that has gone cannot be re-read, so what is cached from it is
     // now the only copy and must not be dropped to reclaim space.
     connect(m_pRegistry.get(),
@@ -145,6 +154,9 @@ void DeckServices::start(Library* pLibrary, UserSettingsPointer pConfig) {
 }
 
 void DeckServices::stop() {
+    // The History first: it reads the registry, the network and the loader,
+    // and its last write -- what was playing, stopped -- goes before they do.
+    m_pHistory.reset();
     // The browser's members went last first, and the cache was its last.
     m_pCache.reset();
     m_pAutoplay.reset();

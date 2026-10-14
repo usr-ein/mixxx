@@ -67,6 +67,10 @@ class ProLinkNetworkService : public QObject {
         return m_serveStatus;
     }
 
+    /// What every player on the link is doing now, from the session's own
+    /// table: empty before start(). Ours is not among them.
+    QList<ProLinkPlayer> players() const;
+
   public slots:
     /// Fetch `export.pdb` from the first player with media in `slot`.
     void pullDatabase(MediaSlot slot = MediaSlot::Usb);
