@@ -13,6 +13,7 @@
 #include "util/assert.h"
 #include "widget/deck/wdeckautoplaybadge.h"
 #include "widget/deck/wdeckbrowser.h"
+#include "widget/deck/wdeckkeypicker.h"
 #include "widget/deck/wdecktoast.h"
 #include "widget/wprolinkphasemeter.h"
 #include "widget/wtempopanel.h"
@@ -22,6 +23,7 @@ const QStringList kDeckNodes = {
         QStringLiteral("DeckBrowser"),
         QStringLiteral("DeckToast"),
         QStringLiteral("DeckAutoplay"),
+        QStringLiteral("DeckKeyPicker"),
         QStringLiteral("ProLinkPhaseMeter"),
         QStringLiteral("TempoPanel"),
 };
@@ -94,6 +96,16 @@ QWidget* LegacySkinParser::parseDeckNode(const QDomElement& node) {
         // Like the toast, it takes no input, so no keyboard filter either.
         pBadge->Init();
         return pBadge;
+    }
+    if (nodeName == "DeckKeyPicker") {
+        auto* pPicker = new mixxx::deck::WDeckKeyPicker(m_pParent);
+        commonWidgetSetup(node, pPicker);
+        pPicker->setup(node, *m_pContext);
+        // The keyboard's arrows and Return reach its list as the encoder
+        // does, as they reach the browser's.
+        pPicker->installEventFilter(m_pKeyboard);
+        pPicker->Init();
+        return pPicker;
     }
     if (nodeName == "ProLinkPhaseMeter") {
         const QString group = lookupNodeGroup(node);
