@@ -21,6 +21,7 @@ namespace deck {
 class DeckAutoplay;
 class DeckHistory;
 class DeckLoader;
+class DeckRecorder;
 class RemoteTrackStreamer;
 class TrackCache;
 
@@ -75,6 +76,9 @@ class DeckServices : public QObject {
     DeckHistory* history() const {
         return m_pHistory.get();
     }
+    DeckRecorder* recorder() const {
+        return m_pRecorder.get();
+    }
 
   signals:
     /// The registry's, passed on for the toast, and connected before anything
@@ -98,6 +102,7 @@ class DeckServices : public QObject {
     std::unique_ptr<DeckLoader> m_pLoader;
     std::unique_ptr<DeckAutoplay> m_pAutoplay;
     std::unique_ptr<DeckHistory> m_pHistory;
+    std::unique_ptr<DeckRecorder> m_pRecorder;
 };
 
 } // namespace deck

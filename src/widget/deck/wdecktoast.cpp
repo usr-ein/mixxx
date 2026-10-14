@@ -6,6 +6,7 @@
 #include <QVBoxLayout>
 
 #include "library/deck/deckautoplay.h"
+#include "library/deck/deckrecorder.h"
 #include "library/deck/deckservices.h"
 #include "library/deck/trackcache.h"
 #include "track/track.h"
@@ -79,6 +80,27 @@ WDeckToast::WDeckToast(QWidget* pParent, DeckServices* pServices)
     connect(pServices->autoplay(), &DeckAutoplay::notice, this, [this](const QString& text) {
         show(text, true, QStringLiteral("#autoplay"));
     });
+    // "Record set"'s: a recording that stopped by itself, a write done or
+    // failed. Likewise one at a time. And for as long as a write runs, how
+    // far it is and not to pull the stick, wherever the DJ is (Sam: "a
+    // progress bar on screen for the copy and a message to not remove the
+    // USB"): the browser's row shows the bar, and this follows the DJ out
+    // of the browser.
+    DeckRecorder* pRecorder = pServices->recorder();
+    connect(pRecorder, &DeckRecorder::notice, this, [this](const QString& text) {
+        show(text, true, QStringLiteral("#recorder"));
+    });
+    const auto sayWriting = [this, pRecorder]() {
+        if (pRecorder->isWriting()) {
+            show(tr("Writing the set to %1: %2%. Don't remove it.")
+                            .arg(pRecorder->writingName())
+                            .arg(qRound(pRecorder->writeProgress() * 100.0)),
+                    true,
+                    QStringLiteral("#recorder"));
+        }
+    };
+    connect(pRecorder, &DeckRecorder::stateChanged, this, sayWriting);
+    connect(pRecorder, &DeckRecorder::tick, this, sayWriting);
 }
 
 void WDeckToast::setup(const QDomNode& node, const SkinContext& context) {

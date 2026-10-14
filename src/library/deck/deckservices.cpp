@@ -3,6 +3,7 @@
 #include "library/deck/deckautoplay.h"
 #include "library/deck/deckhistory.h"
 #include "library/deck/deckloader.h"
+#include "library/deck/deckrecorder.h"
 #include "library/deck/pdbingest.h"
 #include "library/deck/ramstore.h"
 #include "library/deck/remotetrackstreamer.h"
@@ -132,6 +133,9 @@ void DeckServices::start(Library* pLibrary, UserSettingsPointer pConfig) {
             m_pNetwork.get(),
             m_pLoader.get(),
             m_pLibrary->dbConnectionPool());
+    // "Record set": the DAC's input onto the card, then onto a stick, with
+    // what the History heard played while it recorded.
+    m_pRecorder = std::make_unique<DeckRecorder>(m_pHistory.get(), m_pRegistry.get());
     // A medium that has gone cannot be re-read, so what is cached from it is
     // now the only copy and must not be dropped to reclaim space.
     connect(m_pRegistry.get(),
@@ -154,7 +158,10 @@ void DeckServices::start(Library* pLibrary, UserSettingsPointer pConfig) {
 }
 
 void DeckServices::stop() {
-    // The History first: it reads the registry, the network and the loader,
+    // A recording first: it ends with its file closed whole, and it reads the
+    // History and the registry.
+    m_pRecorder.reset();
+    // The History next: it reads the registry, the network and the loader,
     // and its last write -- what was playing, stopped -- goes before they do.
     m_pHistory.reset();
     // The browser's members went last first, and the cache was its last.

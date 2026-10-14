@@ -1011,16 +1011,19 @@ add_library(mixxx-lib STATIC EXCLUDE_FROM_ALL
   src/library/deck/deckautoplay.cpp
   src/library/deck/deckhistory.cpp
   src/library/deck/deckloader.cpp
+  src/library/deck/deckrecorder.cpp
   src/library/deck/deckservices.cpp
   src/library/deck/deckqueries.cpp
   src/library/deck/decktrackmodel.cpp
   src/library/deck/folderlibrary.cpp
   src/library/deck/folderscan.cpp
   src/library/deck/historystore.cpp
+  src/library/deck/inputcapture.cpp
   src/library/deck/mediaregistry.cpp
   src/library/deck/pdbingest.cpp
   src/library/deck/playhistory.cpp
   src/library/deck/sessionpurge.cpp
+  src/library/deck/setrecording.cpp
   src/library/deck/previewwaveform.cpp
   src/library/deck/previewwaveformcache.cpp
   src/library/deck/streamingfile.cpp
@@ -2270,6 +2273,7 @@ if(BUILD_TESTING)
     src/test/seratomarkerstest.cpp
     src/test/seratomarkers2test.cpp
     src/test/seratotagstest.cpp
+    src/test/setrecording_test.cpp
     src/test/signalpathtest.cpp
     src/test/skincontext_test.cpp
     src/test/softtakeover_test.cpp
@@ -2759,6 +2763,13 @@ target_link_libraries(mixxx-lib PRIVATE FpClassify)
 # LAME
 find_package(mp3lame REQUIRED)
 target_link_libraries(mixxx-lib PRIVATE mp3lame::mp3lame)
+
+# ALSA, for "Record set": the deck's own capture of the DAC's input
+# (src/library/deck/inputcapture.cpp), beside the output PortAudio holds.
+if(UNIX AND NOT APPLE)
+  find_package(ALSA REQUIRED)
+  target_link_libraries(mixxx-lib PRIVATE ALSA::ALSA)
+endif()
 
 
 # For determining MP3 timing offset cases in Rekordbox library feature
