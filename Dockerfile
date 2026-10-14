@@ -49,6 +49,14 @@ ARG WITH_DEBUG=0
 # It only bites on a COLD build -- an incremental one compiles a handful of
 # files and never gets wide enough to matter -- which is why this went unnoticed
 # until the first build after the ccache was pruned.
+#
+# The build's own sub-builds are capped by it too, in the environment of the
+# RUN that builds mixxx: ninja counts each as one job, and each would otherwise
+# start as many processes as the VM has CPUs. cargo (lib/prolink, run by
+# cmake/modules/ProlinkRust.cmake) reads CARGO_BUILD_JOBS; the ExternalProject
+# builds of libdjinterop and libkeyfinder (`cmake --build .`) read
+# CMAKE_BUILD_PARALLEL_LEVEL. Uncapped, a cold build peaked at 25 cc1plus
+# (4 GB) in those two, and 9 rustc (2 GB) in cargo.
 ARG MIXXX_BUILD_JOBS=4
 
 # Mixxx's build dependencies, from packaging/debian/control.in. Only the mixxx
@@ -57,12 +65,13 @@ ARG MIXXX_BUILD_JOBS=4
 # production headers such as src/util/fileinfo.h include <gtest/gtest_prod.h>
 # for FRIEND_TEST, so the main build needs it too.
 #
-# Three are not in control.in: ca-certificates, because cmake fetches
+# Four are not in control.in: ca-certificates, because cmake fetches
 # libkeyfinder and libdjinterop over https while Debian's own mirrors are plain
 # http; qt6-shadertools-dev, which the Qt6 find_package needs once QML is on;
-# and libfftw3-dev, for the statically linked KeyFinder.
+# libfftw3-dev, for the statically linked KeyFinder; and mold, the linker
+# (MOLD_SUPPORT, below).
 RUN apt-get update && apt-get install -y --no-install-recommends \
-        build-essential cmake ninja-build ccache pkg-config git \
+        build-essential cmake ninja-build ccache mold pkg-config git \
         ca-certificates curl libgtest-dev \
         docbook-to-man markdown \
         libglu1-mesa-dev qt6-shadertools-dev libfftw3-dev \
@@ -113,6 +122,14 @@ COPY . /src
 # GTest::gmock is a separate Debian package that only the unittest stage below
 # installs. The failure is a configure error about a target nobody asked for.
 #
+# MOLD_SUPPORT=ON explicitly, though Mixxx's CMake picks mold by itself when it
+# finds it: the choice is a cached option, so a tree configured before mold was
+# installed would keep GNU ld for good. mold links the 570 MB unstripped binary
+# in under a second, where GNU ld took five. A new tree is seeded with the main
+# checkout's cache, this setting with it: a worktree of a branch older than mold
+# (its Dockerfile installs none) fails with "Could NOT find mold" until it
+# merges main.
+#
 # The build tree is keyed on BASE, and that is not tidiness. It holds
 # prolink-rust/release/libprolink_cxx.a -- the C++ shim the cxx crate generates,
 # compiled by the *container's* g++ and not by rustc. Shared across releases, a
@@ -147,12 +164,14 @@ RUN --mount=type=cache,target=/build,sharing=locked,id=mixxx-build-${BASE}${CHEC
     --mount=type=cache,target=/seed,sharing=shared,readonly,id=mixxx-build-${BASE}${SEED_ID} \
     --mount=type=cache,target=/ccache,sharing=locked \
     --mount=type=cache,target=/opt/cargo/registry,sharing=locked \
-    export CCACHE_DIR=/ccache \
+    export CCACHE_DIR=/ccache CARGO_BUILD_JOBS="${MIXXX_BUILD_JOBS}" \
+        CMAKE_BUILD_PARALLEL_LEVEL="${MIXXX_BUILD_JOBS}" \
     && /src/tree-sync.sh /src /build /seed \
     && cmake -S /build/src -B /build/out -G Ninja \
         -DCMAKE_BUILD_TYPE=RelWithDebInfo \
         -DBUILD_TESTING=OFF \
         -DINSTALL_USER_UDEV_RULES=OFF \
+        -DMOLD_SUPPORT=ON \
         -DCMAKE_C_COMPILER_LAUNCHER=ccache \
         -DCMAKE_CXX_COMPILER_LAUNCHER=ccache \
     && cmake --build /build/out --target mixxx --parallel "${MIXXX_BUILD_JOBS}" \
@@ -209,6 +228,7 @@ ARG BASE
 # the Docker VM's memory and the OOM killer takes cc1plus with it. The failure
 # looks like "fatal error: Killed signal terminated program cc1plus", which does
 # not obviously say "out of memory". Raise it if the VM has plenty of RAM.
+# It caps cargo and the ExternalProject builds too, as MIXXX_BUILD_JOBS does.
 ARG BUILD_JOBS=3
 # gmock is a separate Debian package from gtest, and mixxx-test links
 # GTest::gmock. Installed only in this stage so the image the deck binary is
@@ -226,12 +246,14 @@ RUN --mount=type=cache,target=/build-test,sharing=locked,id=mixxx-build-test-${B
     --mount=type=cache,target=/seed,sharing=shared,readonly,id=mixxx-build-test-${BASE}${SEED_ID} \
     --mount=type=cache,target=/ccache,sharing=locked \
     --mount=type=cache,target=/opt/cargo/registry,sharing=locked \
-    export CCACHE_DIR=/ccache \
+    export CCACHE_DIR=/ccache CARGO_BUILD_JOBS="${BUILD_JOBS}" \
+        CMAKE_BUILD_PARALLEL_LEVEL="${BUILD_JOBS}" \
     && /src/tree-sync.sh /src /build-test /seed \
     && cmake -S /build-test/src -B /build-test/out -G Ninja \
         -DCMAKE_BUILD_TYPE=RelWithDebInfo \
         -DBUILD_TESTING=ON \
         -DINSTALL_USER_UDEV_RULES=OFF \
+        -DMOLD_SUPPORT=ON \
         -DCMAKE_C_COMPILER_LAUNCHER=ccache \
         -DCMAKE_CXX_COMPILER_LAUNCHER=ccache \
     && cmake --build /build-test/out --target mixxx-test --parallel "${BUILD_JOBS}" \

@@ -24,3 +24,8 @@ cmake-build-*/
 compile_commands.json
 .vscode/
 .idea/
+
+# The binary the last build exported (--output type=local,dest=dist). In the
+# context, it changed /src after every build, so the next one ran its RUN
+# again: a relink, and a deploy that restarted Mixxx for nothing.
+dist/
