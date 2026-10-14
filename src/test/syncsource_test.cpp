@@ -210,3 +210,54 @@ TEST(MeterDeck, NeverOurselvesNorANonPlayer) {
     EXPECT_EQ(0, deck.device);
     EXPECT_LT(deck.barPhase, 0.0);
 }
+
+namespace {
+
+/// A CDJ playing a plain file, as an emulated NXS does (PLAIN-STICKS.md
+/// §7.8): play state 3 with the playing flag clear, tempo `0xffff` -- which
+/// the bridge hands on as a negative tempo -- and no beat packets at all, so
+/// no phase either.
+SyncPeer playingPlainFile(int number) {
+    SyncPeer peer;
+    peer.number = number;
+    peer.hasStatus = true;
+    peer.statusAgeMs = 50.0;
+    peer.playing = true;
+    peer.playingFlag = false;
+    peer.beatBpm = -1.0;
+    peer.beatAgeMs = -1.0;
+    peer.statusBpm = -1.0;
+    peer.barPhase = -1.0;
+    peer.barPosition = -1.0;
+    return peer;
+}
+
+} // namespace
+
+// A master with no tempo is still the master, and gives SYNC nothing to take:
+// never a tempo of zero, nor of 655.35, the 0xffff it sends.
+TEST(SyncSource, AMasterPlayingAPlainFileOffersNoTempoAndNoPhase) {
+    const SyncSource source = chooseSyncSource({master(playingPlainFile(1)), playing(2)}, kUs);
+    EXPECT_EQ(SyncSource::Kind::Master, source.kind);
+    EXPECT_EQ(1, source.device);
+    EXPECT_FALSE(source.masterStopped) << "it plays, as far as anyone can tell";
+    EXPECT_LE(source.bpm, 0.0);
+    EXPECT_FALSE(source.phaseLive);
+}
+
+// Not master, it is no deck to fall back to either: the playing deck with a
+// tempo is.
+TEST(SyncSource, APlainFileIsNoFallback) {
+    EXPECT_EQ(SyncSource::Kind::None, chooseSyncSource({playingPlainFile(1)}, kUs).kind);
+    const SyncSource source = chooseSyncSource({playingPlainFile(1), playing(2, 124.0)}, kUs);
+    EXPECT_EQ(SyncSource::Kind::Fallback, source.kind);
+    EXPECT_EQ(2, source.device);
+    EXPECT_DOUBLE_EQ(124.0, source.bpm);
+}
+
+// The phase meter draws no deck that has neither beats nor a bar position.
+TEST(MeterDeck, APlainFileIsNotDrawn) {
+    EXPECT_EQ(0, chooseMeterDeck({playingPlainFile(1)}, kUs).device);
+    EXPECT_EQ(0, chooseMeterDeck({master(playingPlainFile(1))}, kUs).device);
+    EXPECT_EQ(2, chooseMeterDeck({master(playingPlainFile(1)), playing(2)}, kUs).device);
+}
