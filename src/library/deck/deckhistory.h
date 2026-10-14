@@ -61,6 +61,8 @@ class DeckHistory : public QObject {
     /// A player whose last status is older than this has gone: a cable
     /// pulled, a deck switched off. Its track stopped when it was last heard.
     static constexpr double kStatusGoneMs = 2000.0;
+    /// How often the store's directory is looked for, while it is not there.
+    static constexpr int kReopenMs = 5000;
 
     /// *group* is this deck. The rest are used and not owned. *directory* is
     /// where the store goes; with none there, the History is this power-up's,
@@ -81,11 +83,10 @@ class DeckHistory : public QObject {
     }
 
     /// The rows of the session at *index*, as the History lists them: the
-    /// latest first (Sam). This power-up's open plays end now.
+    /// latest first (Sam). This power-up's are worked out on each call, its
+    /// open plays ending now; the power-ups before it never change, and theirs
+    /// were worked out once, when the store opened.
     QList<history::Row> rowsOf(int index) const;
-
-    /// How many different tracks the rows of the session at *index* name.
-    int trackCountOf(int index) const;
 
     /// Where the cover of *track* is on this machine, or empty.
     QString artworkPath(const HistoryTrack& track) const;
@@ -120,6 +121,9 @@ class DeckHistory : public QObject {
         mixxx::prolink::MediaSlot slot = mixxx::prolink::MediaSlot::Empty;
     };
 
+    /// Open the store on the card and put this power-up's History into it.
+    /// False, and the History stays in RAM, when it will not open.
+    bool openStore();
     void sample();
     void heartbeat();
     /// Plays started and stopped: into the session and onto the card.
@@ -132,6 +136,8 @@ class DeckHistory : public QObject {
     /// Which stick a slot holds, as a number that moves when another one is
     /// put in: see the body.
     int generationOf(const MediumId& medium);
+    /// A thumbnail's name in the store, from its track and the cover's path.
+    static QString thumbnailName(const QString& trackKey, const QString& coverPath);
     /// The session's id for *key*, adding the track to it if it is new.
     int trackIdFor(const QString& key, HistoryWrite* pWrite);
     /// Fill in what the deck can say about *pTrack* from its origin: its
@@ -157,9 +163,16 @@ class DeckHistory : public QObject {
     /// Lives on m_thread; deleted once it has stopped.
     std::unique_ptr<HistoryStore> m_pStore;
     bool m_stored = false;
-    QString m_artworkDirectory;
+    const QString m_directory;
+    const QString m_artworkDirectory;
+    /// Which power-up this is.
+    const QByteArray m_bootId;
+    /// Looks for the store's directory until it is there; see the constructor.
+    QTimer m_reopenTimer;
 
     QList<HistorySession> m_sessions;
+    /// The rows of the power-ups before this one, the last first.
+    QList<QList<history::Row>> m_pastRows;
     history::Recorder m_recorder;
     /// The plays open now, by player: their ids in the session.
     QHash<int, int> m_openPlays;

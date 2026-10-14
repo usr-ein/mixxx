@@ -111,39 +111,33 @@ DeckHistory::DeckHistory(const QString& group,
           m_pTrackLoaded(std::make_unique<ControlProxy>(
                   group, QStringLiteral("track_loaded"), this)),
           m_pStore(std::make_unique<HistoryStore>()),
+          m_directory(directory),
+          m_artworkDirectory(QDir(directory).filePath(QStringLiteral("art"))),
+          m_bootId(currentBootId()),
           m_epoch(QString::number(bootClockMs(), 36)) {
     m_thread.setObjectName(QStringLiteral("DeckHistory"));
     m_pStore->moveToThread(&m_thread);
     m_thread.start(QThread::LowPriority);
-    // Waited for, once: the sessions are what the History shows, and opening
-    // is a few small reads on a card that is not yet busy with anything else.
-    HistoryStore::Opened opened;
-    const QByteArray bootId = currentBootId();
-    const qint64 now = QDateTime::currentMSecsSinceEpoch();
-    QMetaObject::invokeMethod(
-            m_pStore.get(),
-            [this, &opened, &directory, &bootId, now]() {
-                opened = m_pStore->open(directory, bootId, now);
-            },
-            Qt::BlockingQueuedConnection);
-    m_stored = opened.ok;
-    m_sessions = opened.sessions;
-    m_artworkDirectory = QDir(directory).filePath(QStringLiteral("art"));
-    if (m_sessions.isEmpty() || m_sessions.first().bootId != bootId) {
-        // No store: this power-up's History, in RAM.
-        HistorySession session;
-        session.bootId = bootId;
-        session.openedWallMs = now;
-        m_sessions.prepend(session);
-        kLogger.warning() << "the History is not on the card:" << opened.error;
-    }
-    // Mixxx started again within the power-up: carry on its numbering.
-    for (const HistoryTrack& track : std::as_const(current().tracks)) {
-        m_nextTrackId = std::max(m_nextTrackId, track.id + 1);
-        m_trackIds.insert(track.key, track.id);
-    }
-    for (const HistoryPlay& play : std::as_const(current().plays)) {
-        m_nextPlayId = std::max(m_nextPlayId, play.id + 1);
+
+    // This power-up's History starts in RAM, and goes onto the card as soon
+    // as the store opens: now, or once its directory is there.
+    HistorySession session;
+    session.bootId = m_bootId;
+    session.openedWallMs = QDateTime::currentMSecsSinceEpoch();
+    m_sessions.append(session);
+    if (!openStore() && !QDir(directory).exists()) {
+        // Not there yet: on a release card the state partition can be mounted
+        // after Mixxx has started, and the directory is made on it once it is
+        // (trimixxx-history.service); a dev deck gets it from the system
+        // step. Looked for again until it is there: a stat every few seconds.
+        m_reopenTimer.setInterval(kReopenMs);
+        connect(&m_reopenTimer, &QTimer::timeout, this, [this]() {
+            if (QDir(m_directory).exists()) {
+                m_reopenTimer.stop();
+                openStore();
+            }
+        });
+        m_reopenTimer.start();
     }
 
     connect(m_pStore.get(),
@@ -151,8 +145,7 @@ DeckHistory::DeckHistory(const QString& group,
             this,
             &DeckHistory::artworkArrived,
             Qt::QueuedConnection);
-    // A medium read is the moment its tracks can be named; one gone, the
-    // moment its slot may next hold another stick.
+    // A medium read is the moment its tracks can be named.
     connect(m_pRegistry, &MediaRegistry::mediaChanged, this, &DeckHistory::resolvePending);
     connect(m_pRegistry,
             &MediaRegistry::artworkArrived,
@@ -178,6 +171,7 @@ DeckHistory::~DeckHistory() {
     blockSignals(true);
     m_sampleTimer.stop();
     m_heartbeatTimer.stop();
+    m_reopenTimer.stop();
     apply(m_recorder.stopAll(bootClockMs()));
     // Blocking, and queued behind every write before it: when it returns,
     // everything is on the card and the database closed, on its own thread.
@@ -191,26 +185,99 @@ DeckHistory::~DeckHistory() {
     m_thread.wait();
 }
 
+bool DeckHistory::openStore() {
+    // Waited for: the sessions are what the History shows, and opening is a
+    // few small reads.
+    HistoryStore::Opened opened;
+    const qint64 now = QDateTime::currentMSecsSinceEpoch();
+    QMetaObject::invokeMethod(
+            m_pStore.get(),
+            [this, &opened, now]() {
+                opened = m_pStore->open(m_directory, m_bootId, now);
+            },
+            Qt::BlockingQueuedConnection);
+    if (!opened.ok || opened.sessions.isEmpty() ||
+            opened.sessions.first().bootId != m_bootId) {
+        kLogger.warning() << "the History is not on the card:" << opened.error;
+        return false;
+    }
+    m_stored = true;
+
+    // What this power-up recorded in RAM before the store opened goes into
+    // its session on the card, after what that already holds: plays of a
+    // Mixxx started earlier within the power-up, or nothing at all.
+    const HistorySession recorded = m_sessions.first();
+    m_sessions = opened.sessions;
+    HistorySession& here = current();
+    int trackBase = 0;
+    int playBase = 0;
+    for (const HistoryTrack& track : std::as_const(here.tracks)) {
+        trackBase = std::max(trackBase, track.id);
+        m_trackIds.insert(track.key, track.id);
+    }
+    for (const HistoryPlay& play : std::as_const(here.plays)) {
+        playBase = std::max(playBase, play.id);
+    }
+    HistoryWrite write;
+    for (HistoryTrack track : recorded.tracks) {
+        track.id += trackBase;
+        if (QDir::isAbsolutePath(track.artwork)) {
+            // The cover where it lay, while there was no store to keep it.
+            const QString coverPath = track.artwork;
+            track.artwork = thumbnailName(track.key, coverPath);
+            requestArtwork(coverPath, track.artwork);
+        }
+        m_trackIds.insert(track.key, track.id);
+        here.tracks.append(track);
+        write.newTracks.append(track);
+    }
+    for (HistoryPlay play : recorded.plays) {
+        play.id += playBase;
+        play.play.track += trackBase;
+        here.plays.append(play);
+        write.newPlays.append(play);
+    }
+    for (auto it = m_openPlays.begin(); it != m_openPlays.end(); ++it) {
+        it.value() += playBase;
+    }
+    QSet<int> unnamed;
+    for (const int id : std::as_const(m_unnamed)) {
+        unnamed.insert(id + trackBase);
+    }
+    m_unnamed = unnamed;
+    m_nextTrackId += trackBase;
+    m_nextPlayId += playBase;
+    post(write);
+
+    // The power-ups before this one never change again: their rows are
+    // worked out once, here, rather than on every look.
+    m_pastRows.clear();
+    for (int i = 1; i < m_sessions.size(); ++i) {
+        QList<history::Row> rows = history::rowsOf(
+                history::segmentsOf(m_sessions.at(i).playsUntil({}, -1)));
+        std::reverse(rows.begin(), rows.end());
+        m_pastRows.append(rows);
+    }
+    if (!recorded.plays.isEmpty()) {
+        kLogger.info() << "the History is on the card now, with" << recorded.plays.size()
+                       << "play(s) from before it was";
+    }
+    emit changed();
+    return true;
+}
+
 QList<history::Row> DeckHistory::rowsOf(int index) const {
     if (index < 0 || index >= m_sessions.size()) {
         return {};
     }
-    const QList<int> open = index == 0 ? m_openPlays.values() : QList<int>();
+    if (index > 0) {
+        return m_pastRows.value(index - 1);
+    }
     QList<history::Row> rows = history::rowsOf(history::segmentsOf(
-            m_sessions.at(index).playsUntil(open, index == 0 ? bootClockMs() : -1)));
+            m_sessions.first().playsUntil(m_openPlays.values(), bootClockMs())));
     // The latest at the top, the oldest at the bottom (Sam).
     std::reverse(rows.begin(), rows.end());
     return rows;
-}
-
-int DeckHistory::trackCountOf(int index) const {
-    QSet<int> tracks;
-    for (const history::Row& row : rowsOf(index)) {
-        for (const int track : row.tracks) {
-            tracks.insert(track);
-        }
-    }
-    return tracks.size();
 }
 
 QString DeckHistory::artworkPath(const HistoryTrack& track) const {
@@ -463,18 +530,9 @@ bool DeckHistory::resolve(HistoryTrack* pTrack, const Origin& origin) {
         coverPath = query.value(2).toString();
     }
     if (!coverPath.isEmpty()) {
-        // Named after the track and the cover, never the cover alone: every
-        // rekordbox stick keeps its art at the same few paths.
-        const QString name = QString::fromLatin1(
-                                     QCryptographicHash::hash(
-                                             (pTrack->key + QChar('|') + coverPath).toUtf8(),
-                                             QCryptographicHash::Sha1)
-                                             .toHex()
-                                             .left(20)) +
-                QStringLiteral(".jpg");
         if (m_stored) {
-            pTrack->artwork = name;
-            requestArtwork(coverPath, name);
+            pTrack->artwork = thumbnailName(pTrack->key, coverPath);
+            requestArtwork(coverPath, pTrack->artwork);
         } else {
             // No store to keep a copy in: the cover where it is, for as long
             // as it is there.
@@ -482,6 +540,17 @@ bool DeckHistory::resolve(HistoryTrack* pTrack, const Origin& origin) {
         }
     }
     return true;
+}
+
+QString DeckHistory::thumbnailName(const QString& trackKey, const QString& coverPath) {
+    // After the track and the cover, never the cover alone: every rekordbox
+    // stick keeps its art at the same few paths.
+    return QString::fromLatin1(QCryptographicHash::hash(
+                                       (trackKey + QChar('|') + coverPath).toUtf8(),
+                                       QCryptographicHash::Sha1)
+                                       .toHex()
+                                       .left(20)) +
+            QStringLiteral(".jpg");
 }
 
 void DeckHistory::requestArtwork(const QString& coverPath, const QString& name) {

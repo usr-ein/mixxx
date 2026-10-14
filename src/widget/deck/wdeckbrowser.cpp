@@ -869,7 +869,7 @@ QList<MenuRow> WDeckBrowser::sourcesRows() const {
     history.title = tr("History");
     history.payload = QStringLiteral("#history");
     if (m_pHistory) {
-        const int tracks = m_pHistory->trackCountOf(0);
+        const int tracks = history::trackCount(m_pHistory->rowsOf(0));
         if (tracks > 0) {
             history.detail = tracks == 1 ? tr("1 track") : tr("%1 tracks").arg(tracks);
         }
@@ -1818,7 +1818,7 @@ QList<MenuRow> WDeckBrowser::historySessionRows() const {
             for (const history::Row& each : played) {
                 length += each.durationMs;
             }
-            const int tracks = m_pHistory->trackCountOf(i);
+            const int tracks = history::trackCount(played);
             row.detail = tr("%1 · %2").arg(
                     tracks == 1 ? tr("1 track") : tr("%1 tracks").arg(tracks),
                     history::durationText(length));
