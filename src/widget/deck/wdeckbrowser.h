@@ -30,6 +30,7 @@ namespace mixxx {
 namespace deck {
 
 class DeckAutoplay;
+class DeckHistory;
 class DeckListView;
 class DeckServices;
 class DeckMenuModel;
@@ -145,6 +146,10 @@ class WDeckBrowser : public QWidget, public WBaseWidget {
             Diagnostics,
             /// Autoplay's own first level: stop it, or pick a drive.
             Autoplay,
+            /// The History's first level: this power-up, the last, two ago.
+            History,
+            /// One power-up's History: what played, the latest first.
+            HistorySession,
         };
         Kind kind = Kind::Sources;
         MediumId medium;
@@ -161,15 +166,30 @@ class WDeckBrowser : public QWidget, public WBaseWidget {
         /// The genre, for an autoplay track list: what autoplay is started on.
         /// Empty is the "—" row, the tracks with no genre.
         QString genre;
+        /// For Kind::HistorySession, which: 0 is this power-up's.
+        int session = 0;
     };
 
     void pushLevel(Level level);
     void popLevel();
     void rebuildCurrentLevel();
     void showSources();
+    /// Level 0's rows: the media, then Autoplay, the History, Diagnostics and
+    /// Shut down.
+    QList<MenuRow> sourcesRows() const;
     /// One medium as a source row: its mark, name and state, and its counts.
     MenuRow sourceRow(const MediumInfo& medium) const;
     void showAutoplay(const Level& level);
+    void showHistory(const Level& level);
+    void showHistorySession(const Level& level);
+    /// The History's first level: a row per power-up it has.
+    QList<MenuRow> historySessionRows() const;
+    /// One power-up's rows, the latest first: the tracks that played together,
+    /// their covers side by side, and how long.
+    QList<MenuRow> historyRows(int session) const;
+    /// The History changed, or a second went by while a row is playing: the
+    /// History's levels and the root re-read, in place where they can be.
+    void refreshHistory();
     void showMediumMenu(const Level& level);
     void showPlaylists(const Level& level);
     void showCategory(const Level& level);
@@ -208,6 +228,7 @@ class WDeckBrowser : public QWidget, public WBaseWidget {
     MediaRegistry* const m_pRegistry;
     DeckLoader* const m_pLoader;
     DeckAutoplay* const m_pAutoplay;
+    DeckHistory* const m_pHistory;
 
     QLabel* m_pBreadcrumb;
     DeckSortChip* m_pSortChip;
@@ -275,6 +296,10 @@ class WDeckBrowser : public QWidget, public WBaseWidget {
     /// timer that coalesces those changes into one re-read of the screen.
     QString m_staleMediumKey;
     QTimer m_inPlaceRefresh;
+    /// The History's changes, coalesced; and, while one of its lists is on
+    /// screen and something plays, a second's tick, so the lengths count up.
+    QTimer m_historyRefresh;
+    QTimer m_historyTick;
     /// Rows written behind the track cache's back -- tags, a BPM -- re-read
     /// into it. It keeps a copy of every row it has shown and refreshes none
     /// of them by itself, so a re-select alone shows the old values.

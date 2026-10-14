@@ -14,6 +14,29 @@ void DeckMenuModel::setRows(QList<MenuRow> rows) {
     endResetModel();
 }
 
+bool DeckMenuModel::updateRows(const QList<MenuRow>& rows) {
+    if (rows.size() != m_rows.size()) {
+        return false;
+    }
+    for (int i = 0; i < rows.size(); ++i) {
+        const MenuRow& before = m_rows.at(i);
+        const MenuRow& after = rows.at(i);
+        // Field by field: a MenuRow has no operator==, and a payload is a
+        // QVariant that compares as it likes.
+        if (before.mark == after.mark && before.playerNumber == after.playerNumber &&
+                before.slot == after.slot && before.title == after.title &&
+                before.subtitle == after.subtitle && before.detail == after.detail &&
+                before.coverPaths == after.coverPaths &&
+                before.coversSideBySide == after.coversSideBySide &&
+                before.dimmed == after.dimmed && before.payload == after.payload) {
+            continue;
+        }
+        m_rows[i] = after;
+        emit dataChanged(index(i), index(i));
+    }
+    return true;
+}
+
 const MenuRow& DeckMenuModel::rowAt(int row) const {
     if (row < 0 || row >= m_rows.size()) {
         // A reference to a default row rather than undefined behaviour: the

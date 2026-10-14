@@ -14,10 +14,12 @@
 #include "library/basetrackcache.h"
 #include "library/dao/trackschema.h"
 #include "library/deck/deckautoplay.h"
+#include "library/deck/deckhistory.h"
 #include "library/deck/deckqueries.h"
 #include "library/deck/deckservices.h"
 #include "library/deck/decktrackmodel.h"
 #include "library/deck/pdbingest.h"
+#include "library/deck/playhistory.h"
 #include "library/queryutil.h"
 #include "library/library.h"
 #include "library/trackcollection.h"
@@ -122,7 +124,8 @@ WDeckBrowser::WDeckBrowser(QWidget* pParent,
           m_accent(deckAccent()),
           m_pRegistry(pServices->registry()),
           m_pLoader(pServices->loader()),
-          m_pAutoplay(pServices->autoplay()) {
+          m_pAutoplay(pServices->autoplay()),
+          m_pHistory(pServices->history()) {
     setAttribute(Qt::WA_StyledBackground, true);
     // A flush panel has none of the three lips below, and the lists take the
     // space instead.
@@ -363,6 +366,27 @@ WDeckBrowser::WDeckBrowser(QWidget* pParent,
             &DeckAutoplay::stateChanged,
             this,
             &WDeckBrowser::onAutoplayChanged);
+    // The History: a track starting or stopping anywhere on the link, a name
+    // arriving. Re-read once what started has played long enough to be a row
+    // of its own, which also coalesces a load's stop and start into one.
+    m_historyRefresh.setSingleShot(true);
+    m_historyRefresh.setInterval(static_cast<int>(history::RowRules().minimumMs) + 100);
+    connect(&m_historyRefresh, &QTimer::timeout, this, &WDeckBrowser::refreshHistory);
+    m_historyTick.setInterval(1000);
+    connect(&m_historyTick, &QTimer::timeout, this, [this]() {
+        if (m_pHistory && m_pHistory->isPlaying()) {
+            refreshHistory();
+        }
+    });
+    if (m_pHistory) {
+        connect(m_pHistory, &DeckHistory::changed, this, [this]() {
+            m_historyRefresh.start();
+        });
+        // A thumbnail made: drawn like any cover that has just landed.
+        connect(m_pHistory, &DeckHistory::artworkArrived, this, [this]() {
+            m_coverRedraw.start();
+        });
+    }
     // A cover asked for while a row was being drawn has landed. Both delegates
     // cached the grey placeholder they drew in its place, so the caches have to
     // go before the redraw -- otherwise the square stays grey and the fetch
@@ -606,10 +630,24 @@ void WDeckBrowser::rebuildCurrentLevel() {
     case Level::Kind::Autoplay:
         showAutoplay(level);
         break;
+    case Level::Kind::History:
+        showHistory(level);
+        break;
+    case Level::Kind::HistorySession:
+        showHistorySession(level);
+        break;
     }
     // Sampling follows visibility: a page nobody is looking at has no business
     // reading /proc once a second.
     m_pDiagnostics->setActive(level.kind == Level::Kind::Diagnostics);
+    // While something plays, this power-up's lengths count up: on its list,
+    // and on the list of power-ups.
+    if (level.kind == Level::Kind::History ||
+            (level.kind == Level::Kind::HistorySession && level.session == 0)) {
+        m_historyTick.start();
+    } else {
+        m_historyTick.stop();
+    }
     m_pLevelControl->forceSet(m_stack.size() - 1);
     m_pInTrackList->forceSet(inTrackList() ? 1.0 : 0.0);
     updateBreadcrumb();
@@ -785,6 +823,15 @@ void WDeckBrowser::showSources() {
         m_stack.append(level);
     }
 
+    const QList<MenuRow> rows = sourcesRows();
+    m_pMenuModel->setRows(rows);
+    m_pMenuDelegate->setRowHeight(kSourceRowHeight);
+    m_pMenuView->setRowHeight(kSourceRowHeight);
+    m_pStack->setCurrentWidget(m_pMenuView);
+    m_pMenuView->selectRow(qBound(0, m_stack.first().selectedRow, rows.size() - 1));
+}
+
+QList<MenuRow> WDeckBrowser::sourcesRows() const {
     QList<MenuRow> rows;
     bool anyEnterable = false;
     for (const MediumInfo& medium : m_pRegistry->media()) {
@@ -801,7 +848,7 @@ void WDeckBrowser::showSources() {
         rows.append(empty);
     }
 
-    // First of the three that are not media, nearest the media it plays from.
+    // First of the rows that are not media, nearest the media it plays from.
     // What it is playing, while it is on, is said on its row, so the home list
     // answers "is autoplay on?" without going in.
     MenuRow autoplay;
@@ -816,6 +863,19 @@ void WDeckBrowser::showSources() {
     }
     rows.append(autoplay);
 
+    // What played, beside what plays next. Its count is this power-up's.
+    MenuRow history;
+    history.mark = MenuRow::Mark::History;
+    history.title = tr("History");
+    history.payload = QStringLiteral("#history");
+    if (m_pHistory) {
+        const int tracks = m_pHistory->trackCountOf(0);
+        if (tracks > 0) {
+            history.detail = tracks == 1 ? tr("1 track") : tr("%1 tracks").arg(tracks);
+        }
+    }
+    rows.append(history);
+
     MenuRow diagnostics;
     diagnostics.mark = MenuRow::Mark::Diagnostics;
     diagnostics.title = tr("Diagnostics");
@@ -827,12 +887,7 @@ void WDeckBrowser::showSources() {
     power.title = tr("Shut down");
     power.payload = QStringLiteral("#shutdown");
     rows.append(power);
-
-    m_pMenuModel->setRows(rows);
-    m_pMenuDelegate->setRowHeight(kSourceRowHeight);
-    m_pMenuView->setRowHeight(kSourceRowHeight);
-    m_pStack->setCurrentWidget(m_pMenuView);
-    m_pMenuView->selectRow(qBound(0, m_stack.first().selectedRow, rows.size() - 1));
+    return rows;
 }
 
 MenuRow WDeckBrowser::sourceRow(const MediumInfo& medium) const {
@@ -1595,6 +1650,13 @@ void WDeckBrowser::onActivated(int row) {
             pushLevel(level);
             return;
         }
+        if (payload == QStringLiteral("#history")) {
+            Level level;
+            level.kind = Level::Kind::History;
+            level.title = menuRow.title;
+            pushLevel(level);
+            return;
+        }
         Level level;
         level.kind = Level::Kind::MediumMenu;
         level.medium = MediumId::fromKey(payload);
@@ -1702,12 +1764,188 @@ void WDeckBrowser::onActivated(int row) {
         pushLevel(level);
         break;
     }
+    case Level::Kind::History: {
+        // A power-up: what played in it.
+        Level level;
+        level.kind = Level::Kind::HistorySession;
+        level.title = menuRow.title;
+        level.session = payload.mid(8).toInt(); // "session:"
+        pushLevel(level);
+        break;
+    }
+    case Level::Kind::HistorySession:
+        // A row of what played is to be read: there is nothing below it.
     case Level::Kind::Tracks:
     case Level::Kind::Search:
     case Level::Kind::Diagnostics:
         // A track list is handled above, and Diagnostics has no menu rows.
         break;
     }
+}
+
+void WDeckBrowser::showHistory(const Level& level) {
+    const QList<MenuRow> rows = historySessionRows();
+    m_pMenuModel->setRows(rows);
+    m_pMenuDelegate->setRowHeight(kMenuRowHeight);
+    m_pMenuView->setRowHeight(kMenuRowHeight);
+    m_pStack->setCurrentWidget(m_pMenuView);
+    m_pMenuView->selectRow(qBound(0, level.selectedRow, rows.size() - 1));
+}
+
+QList<MenuRow> WDeckBrowser::historySessionRows() const {
+    const QStringList names = {
+            tr("This session"),
+            tr("Last session"),
+            tr("Two sessions ago"),
+    };
+    QList<MenuRow> rows;
+    const int sessions = m_pHistory
+            ? std::min(static_cast<int>(m_pHistory->sessions().size()),
+                      static_cast<int>(names.size()))
+            : 0;
+    for (int i = 0; i < sessions; ++i) {
+        MenuRow row;
+        row.mark = MenuRow::Mark::History;
+        row.title = names.at(i);
+        row.payload = QStringLiteral("session:%1").arg(i);
+        const QList<history::Row> played = m_pHistory->rowsOf(i);
+        if (played.isEmpty()) {
+            // Said, and not entered: a list of nothing is a dead end.
+            row.detail = tr("nothing played");
+            row.dimmed = true;
+        } else {
+            qint64 length = 0;
+            for (const history::Row& each : played) {
+                length += each.durationMs;
+            }
+            const int tracks = m_pHistory->trackCountOf(i);
+            row.detail = tr("%1 · %2").arg(
+                    tracks == 1 ? tr("1 track") : tr("%1 tracks").arg(tracks),
+                    history::durationText(length));
+        }
+        rows.append(row);
+    }
+    if (m_pHistory && !m_pHistory->isStored()) {
+        // The card would not take it: this power-up's, until it is switched
+        // off. Said, because a History that silently forgets is worse than
+        // none.
+        MenuRow notice;
+        notice.title = tr("Not saved on the card: gone at power-off");
+        notice.dimmed = true;
+        rows.append(notice);
+    }
+    return rows;
+}
+
+void WDeckBrowser::showHistorySession(const Level& level) {
+    QList<MenuRow> rows = historyRows(level.session);
+    if (rows.isEmpty()) {
+        MenuRow empty;
+        empty.title = tr("Nothing played");
+        empty.dimmed = true;
+        rows.append(empty);
+    }
+    m_pMenuModel->setRows(rows);
+    m_pMenuDelegate->setRowHeight(kPlaylistRowHeight);
+    m_pMenuView->setRowHeight(kPlaylistRowHeight);
+    m_pStack->setCurrentWidget(m_pMenuView);
+    // On the top row the first time: the latest, which is what a DJ coming
+    // here mid-set is asking about.
+    m_pMenuView->selectRow(qBound(0, level.selectedRow, rows.size() - 1));
+}
+
+QList<MenuRow> WDeckBrowser::historyRows(int session) const {
+    QList<MenuRow> rows;
+    if (!m_pHistory || session < 0 || session >= m_pHistory->sessions().size()) {
+        return rows;
+    }
+    const HistorySession& kept = m_pHistory->sessions().at(session);
+    // Where a track came from: the stick's own name, which is what "from
+    // which USB" is asking; a player and its slot for a stick with none.
+    const auto source = [this](const HistoryTrack& track) {
+        const QString slot = track.sourceSlot == QStringLiteral("sd")
+                ? tr("SD")
+                : track.sourceSlot == QStringLiteral("cd") ? tr("CD") : tr("USB");
+        if (!track.sourceName.isEmpty()) {
+            return track.sourceName;
+        }
+        if (track.sourcePlayer > 0) {
+            return tr("player %1 · %2").arg(track.sourcePlayer).arg(slot);
+        }
+        return slot;
+    };
+    for (const history::Row& played : m_pHistory->rowsOf(session)) {
+        QStringList titles;
+        QStringList lines;
+        QStringList covers;
+        for (const int id : played.tracks) {
+            const HistoryTrack* pTrack = kept.track(id);
+            if (!pTrack) {
+                titles.append(tr("Unknown track"));
+                lines.append(QString());
+                covers.append(QString());
+                continue;
+            }
+            titles.append(pTrack->title.isEmpty() ? tr("Unknown track") : pTrack->title);
+            lines.append(pTrack->artist.isEmpty()
+                            ? source(*pTrack)
+                            : tr("%1 · %2").arg(pTrack->artist, source(*pTrack)));
+            covers.append(m_pHistory->artworkPath(*pTrack));
+        }
+        MenuRow row;
+        row.title = titles.join(QStringLiteral(" | "));
+        row.subtitle = lines.join(QStringLiteral(" | "));
+        row.detail = history::durationText(played.durationMs);
+        row.coverPaths = covers.mid(0, 4);
+        row.coversSideBySide = true;
+        rows.append(row);
+    }
+    return rows;
+}
+
+void WDeckBrowser::refreshHistory() {
+    if (m_stack.isEmpty() || !m_pHistory) {
+        return;
+    }
+    Level& level = m_stack.last();
+    QList<MenuRow> rows;
+    switch (level.kind) {
+    case Level::Kind::Sources:
+        rows = sourcesRows();
+        break;
+    case Level::Kind::History:
+        rows = historySessionRows();
+        break;
+    case Level::Kind::HistorySession:
+        rows = historyRows(level.session);
+        if (rows.isEmpty()) {
+            return;
+        }
+        break;
+    default:
+        return;
+    }
+    // The same rows with new values -- a length counting up, a name arrived
+    // -- are redrawn where they are, under a selection that stays put.
+    if (m_pMenuModel->updateRows(rows)) {
+        return;
+    }
+    // A row more: one started or stopped. Rebuilt, with the selection on the
+    // row it was on -- or on the latest, at the top, if it was there. Not
+    // while the encoder turns: a rebuild under a moving selection can swallow
+    // a detent.
+    if (m_lastSelectionMove.isValid() && m_lastSelectionMove.elapsed() < kRefreshQuietMs) {
+        m_historyRefresh.start();
+        return;
+    }
+    const int selected = m_pMenuView->selectedRow();
+    const int before = m_pMenuModel->rowCount();
+    if (level.kind == Level::Kind::HistorySession && selected > 0) {
+        level.selectedRow = selected + static_cast<int>(rows.size()) - before;
+    } else {
+        level.selectedRow = selected;
+    }
+    rebuildCurrentLevel();
 }
 
 } // namespace deck

@@ -3,6 +3,7 @@
 #include <QFileInfo>
 #include <QPainter>
 #include <QStringList>
+#include <algorithm>
 
 #include "library/coverartutils.h"
 #include "library/dao/trackschema.h"
@@ -65,6 +66,8 @@ void paintSelectionOutline(QPainter* pPainter, const QRect& rect, const QColor& 
 
 constexpr int kPadding = 16;
 constexpr int kCoverMargin = 8;
+/// Between two covers side by side.
+constexpr int kCoverGap = 6;
 
 /// Load a cover, and ask *pRegistry* for it if it is not there.
 ///
@@ -184,6 +187,15 @@ void paintMark(QPainter* pPainter,
         pPainter->drawPolygon(play);
         break;
     }
+    case Mark::History: {
+        // A clock face: what played, and when.
+        const QRect face = box.adjusted(size / 6, size / 6, -size / 6, -size / 6);
+        pPainter->drawEllipse(face);
+        const QPoint c = face.center();
+        pPainter->drawLine(c, c + QPoint(0, -size / 4));
+        pPainter->drawLine(c, c + QPoint(size / 5, 0));
+        break;
+    }
     case Mark::Stop: {
         // Solid, unlike every other mark: it is the one that ends something.
         pPainter->setBrush(colour);
@@ -295,7 +307,22 @@ void MenuRowDelegate::paint(QPainter* pPainter,
     QRect content = option.rect.adjusted(kPadding, 0, -kPadding, 0);
 
     // Cover, where there is one, at the left.
-    if (!row.coverPaths.isEmpty()) {
+    if (!row.coverPaths.isEmpty() && row.coversSideBySide) {
+        // A square each, left to right in the order of the titles, and the
+        // placeholder for a track without one: as many squares as tracks, so
+        // the covers count what the title line names.
+        const int coverSize = option.rect.height() - 2 * kCoverMargin;
+        const int count = std::min<int>(static_cast<int>(row.coverPaths.size()), 4);
+        for (int i = 0; i < count; ++i) {
+            const QPixmap cover = coverFor(QStringList{row.coverPaths.at(i)}, coverSize);
+            if (!cover.isNull()) {
+                pPainter->drawPixmap(content.left() + i * (coverSize + kCoverGap),
+                        content.top() + kCoverMargin,
+                        cover);
+            }
+        }
+        content.setLeft(content.left() + count * coverSize + (count - 1) * kCoverGap + kPadding);
+    } else if (!row.coverPaths.isEmpty()) {
         const int coverSize = option.rect.height() - 2 * kCoverMargin;
         const QPixmap cover = coverFor(row.coverPaths, coverSize);
         if (!cover.isNull()) {
@@ -355,12 +382,37 @@ void MenuRowDelegate::paint(QPainter* pPainter,
         // The player's number leads the name, as it does on a CDJ's own screen.
         title = QStringLiteral("%1  %2").arg(row.playerNumber).arg(title);
     }
-    const QRect titleRect = content.adjusted(0, 0, -detailWidth, 0);
     const QFontMetrics titleMetrics(titleFont);
     pPainter->setPen(textColour);
-    pPainter->drawText(titleRect,
-            Qt::AlignLeft | Qt::AlignVCenter,
-            titleMetrics.elidedText(title, Qt::ElideRight, titleRect.width()));
+    if (row.subtitle.isEmpty()) {
+        const QRect titleRect = content.adjusted(0, 0, -detailWidth, 0);
+        pPainter->drawText(titleRect,
+                Qt::AlignLeft | Qt::AlignVCenter,
+                titleMetrics.elidedText(title, Qt::ElideRight, titleRect.width()));
+    } else {
+        // Two lines, meeting at the middle of the row: the title above it,
+        // the smaller line below.
+        const int middle = content.top() + content.height() / 2;
+        const QRect titleRect(content.left(),
+                content.top(),
+                content.width() - detailWidth,
+                middle - content.top() + 2);
+        pPainter->drawText(titleRect,
+                Qt::AlignLeft | Qt::AlignBottom,
+                titleMetrics.elidedText(title, Qt::ElideRight, titleRect.width()));
+        QFont subtitleFont = option.font;
+        subtitleFont.setPixelSize(17);
+        const QFontMetrics subtitleMetrics(subtitleFont);
+        pPainter->setFont(subtitleFont);
+        pPainter->setPen(detailColour);
+        const QRect subtitleRect(content.left(),
+                middle + 4,
+                content.width() - detailWidth,
+                content.bottom() - middle - 4);
+        pPainter->drawText(subtitleRect,
+                Qt::AlignLeft | Qt::AlignTop,
+                subtitleMetrics.elidedText(row.subtitle, Qt::ElideRight, subtitleRect.width()));
+    }
 
     if (!selected) {
         pPainter->setPen(kSeparator);

@@ -28,6 +28,7 @@ struct MenuRow {
         Power,
         Autoplay,
         Stop,
+        History,
     };
 
     Mark mark = Mark::None;
@@ -37,11 +38,17 @@ struct MenuRow {
     /// beside the mark. 0 for anything that is not a local medium.
     int slot = 0;
     QString title;
+    /// A second line under the title, smaller, or nothing: the title alone is
+    /// centred in the row.
+    QString subtitle;
     /// Right-aligned: counts, durations, or a failure.
     QString detail;
     /// Up to four covers, stitched 2x2 for a playlist; the first alone fills
     /// the square for an album or a label.
     QStringList coverPaths;
+    /// The covers as squares side by side instead, one per path, up to four:
+    /// the tracks that played together in a History row, each its own.
+    bool coversSideBySide = false;
     /// Drawn dimmed, and not enterable: a medium still being read, a category
     /// with nothing in it.
     bool dimmed = false;
@@ -61,6 +68,10 @@ class DeckMenuModel : public QAbstractListModel {
     explicit DeckMenuModel(QObject* pParent = nullptr);
 
     void setRows(QList<MenuRow> rows);
+    /// The same number of rows with new contents, in place: the view keeps
+    /// its selection and its scroll, and only what changed is redrawn. False,
+    /// and nothing changed, when the number differs -- that is setRows().
+    bool updateRows(const QList<MenuRow>& rows);
     const MenuRow& rowAt(int row) const;
     bool isEmpty() const {
         return m_rows.isEmpty();
