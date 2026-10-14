@@ -103,6 +103,22 @@ QList<Row> rowsOf(const QList<Segment>& segments, const RowRules& rules = RowRul
 /// How many different tracks *rows* name.
 int trackCount(const QList<Row>& rows);
 
+/// A track of what played during a recording ("Record set").
+struct ListedTrack {
+    int track = 0;
+    /// When it was first listed, from the recording's start.
+    qint64 atMs = 0;
+};
+
+/// What played between *fromMs* and *toMs*, a recording's start and end, as
+/// its track list: each track once, in the order the History's rows first
+/// name it, at the start of that row. The plays are cut to the recording
+/// first: what played only before or after it is not in, and what was already
+/// playing when it started is there from 0. A row too short to list (a CUE
+/// tapped on another deck) names nothing, as in the History.
+QList<ListedTrack> tracksBetween(
+        const QList<Play>& plays, qint64 fromMs, qint64 toMs, const RowRules& rules = RowRules());
+
 /// A length as the History shows it: `10s`, `1m20s`, `2m`, `1h05m`.
 QString durationText(qint64 ms);
 

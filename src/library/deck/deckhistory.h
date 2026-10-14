@@ -82,6 +82,17 @@ class DeckHistory : public QObject {
         return m_sessions;
     }
 
+    /// The History's clock: milliseconds of the boot's, which no NTP moves.
+    /// What its plays are timed by, and what a recording's track list is cut
+    /// against (DeckRecorder).
+    static qint64 clockMs();
+    /// Which power-up this is: `/proc/sys/kernel/random/boot_id`.
+    static QByteArray bootId();
+
+    /// This power-up's plays, those still open ending now: what a recording's
+    /// track list is cut from (DeckRecorder).
+    QList<history::Play> playsNow() const;
+
     /// The rows of the session at *index*, as the History lists them: the
     /// latest first (Sam). This power-up's are worked out on each call, its
     /// open plays ending now; the power-ups before it never change, and theirs

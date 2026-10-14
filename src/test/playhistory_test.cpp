@@ -10,6 +10,7 @@ namespace {
 
 using mixxx::deck::history::durationText;
 using mixxx::deck::history::kThisDeck;
+using mixxx::deck::history::ListedTrack;
 using mixxx::deck::history::Play;
 using mixxx::deck::history::Recorder;
 using mixxx::deck::history::Row;
@@ -18,6 +19,7 @@ using mixxx::deck::history::rowsOf;
 using mixxx::deck::history::Sample;
 using mixxx::deck::history::Segment;
 using mixxx::deck::history::segmentsOf;
+using mixxx::deck::history::tracksBetween;
 
 constexpr qint64 kSecond = 1000;
 
@@ -538,6 +540,75 @@ TEST(PlayHistoryRecorderTest, SamsExampleSampledGivesHisList) {
                       QStringLiteral("3 (2m)"),
               }),
             listed(plays));
+}
+
+// ---------------------------------------------------------------------------
+// A recording's track list: what played between its start and its end.
+// ---------------------------------------------------------------------------
+
+/// "1@10s", so an expectation reads as the track list does.
+QStringList listedAt(const QList<ListedTrack>& tracks) {
+    QStringList out;
+    for (const ListedTrack& t : tracks) {
+        out.append(QStringLiteral("%1@%2").arg(t.track).arg(durationText(t.atMs)));
+    }
+    return out;
+}
+
+const QList<Play> kSamsExample = {
+        play(1, 1, 0, 30),
+        play(2, 2, 10, 160),
+        play(3, 3, 70, 80),
+        play(3, 3, 160, 280),
+};
+
+/// Recorded from the first note to the last: each track once, where it came
+/// in -- track 3's second play is the same track.
+TEST(PlayHistoryTrackListTest, TheWholeOfSamsExample) {
+    EXPECT_EQ(QStringList({QStringLiteral("1@0s"), QStringLiteral("2@10s"), QStringLiteral("3@1m10s")}),
+            listedAt(tracksBetween(kSamsExample, 0, 280 * kSecond)));
+}
+
+/// Started mid-set: what was playing then is there from 0, in the order it
+/// started; times count from the recording's start.
+TEST(PlayHistoryTrackListTest, StartedMidSetCountsFromItsStart) {
+    EXPECT_EQ(QStringList({QStringLiteral("1@0s"), QStringLiteral("2@0s"), QStringLiteral("3@55s")}),
+            listedAt(tracksBetween(kSamsExample, 15 * kSecond, 200 * kSecond)));
+}
+
+/// What played only before or only after the recording is not in it.
+TEST(PlayHistoryTrackListTest, OnlyWhatPlayedWhileRecording) {
+    EXPECT_EQ(QStringList({QStringLiteral("2@0s")}),
+            listedAt(tracksBetween(kSamsExample, 100 * kSecond, 150 * kSecond)));
+}
+
+/// A CUE tapped on another deck is no track of the set; the same track played
+/// properly later is, from then.
+TEST(PlayHistoryTrackListTest, ABlipIsNotListed) {
+    const QList<Play> plays = {
+            play(1, 1, 0, 100),
+            play(2, 2, 40, 41),
+            play(2, 2, 90, 200),
+    };
+    EXPECT_EQ(QStringList({QStringLiteral("1@0s"), QStringLiteral("2@1m30s")}),
+            listedAt(tracksBetween(plays, 0, 200 * kSecond)));
+}
+
+/// A track played twice in a set is listed once, the first time.
+TEST(PlayHistoryTrackListTest, AReplayIsListedOnce) {
+    const QList<Play> plays = {
+            play(1, 1, 0, 60),
+            play(2, 2, 50, 120),
+            play(1, 1, 110, 180),
+    };
+    EXPECT_EQ(QStringList({QStringLiteral("1@0s"), QStringLiteral("2@50s")}),
+            listedAt(tracksBetween(plays, 0, 180 * kSecond)));
+}
+
+/// Nothing played, or a recording that never lasted: an empty list.
+TEST(PlayHistoryTrackListTest, NothingPlayedIsAnEmptyList) {
+    EXPECT_TRUE(tracksBetween({}, 0, 60 * kSecond).isEmpty());
+    EXPECT_TRUE(tracksBetween(kSamsExample, 50 * kSecond, 50 * kSecond).isEmpty());
 }
 
 } // namespace

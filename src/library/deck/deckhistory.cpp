@@ -270,6 +270,21 @@ bool DeckHistory::openStore() {
     return true;
 }
 
+qint64 DeckHistory::clockMs() {
+    return bootClockMs();
+}
+
+QByteArray DeckHistory::bootId() {
+    return currentBootId();
+}
+
+QList<history::Play> DeckHistory::playsNow() const {
+    if (m_sessions.isEmpty()) {
+        return {};
+    }
+    return m_sessions.first().playsUntil(m_openPlays.values(), bootClockMs());
+}
+
 QList<history::Row> DeckHistory::rowsOf(int index) const {
     if (index < 0 || index >= m_sessions.size()) {
         return {};

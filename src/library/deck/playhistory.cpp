@@ -145,6 +145,29 @@ int trackCount(const QList<Row>& rows) {
     return static_cast<int>(tracks.size());
 }
 
+QList<ListedTrack> tracksBetween(
+        const QList<Play>& plays, qint64 fromMs, qint64 toMs, const RowRules& rules) {
+    QList<Play> inside;
+    for (Play play : plays) {
+        play.startMs = std::max(play.startMs, fromMs);
+        play.endMs = std::min(play.endMs, toMs);
+        if (play.endMs > play.startMs) {
+            inside.append(play);
+        }
+    }
+    QList<ListedTrack> listed;
+    QSet<int> named;
+    for (const Row& row : rowsOf(segmentsOf(inside), rules)) {
+        for (const int track : row.tracks) {
+            if (!named.contains(track)) {
+                named.insert(track);
+                listed.append(ListedTrack{track, row.startMs - fromMs});
+            }
+        }
+    }
+    return listed;
+}
+
 QString durationText(qint64 ms) {
     // To the nearest second: 9.6 s played reads as 10s.
     const qint64 seconds = (std::max<qint64>(ms, 0) + 500) / 1000;
