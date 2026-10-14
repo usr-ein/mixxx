@@ -120,9 +120,9 @@ class HistoryStore : public QObject {
     /// with their thumbnails. The boot it has seen -- Mixxx started again within
     /// one power-up -- carries on its session.
     ///
-    /// A power-up in which nothing played is no session to keep: the next boot
-    /// takes its place rather than the oldest's, so a deck switched on and off
-    /// twice after a gig still has the gig.
+    /// A power-up the History lists nothing for is no session to keep: the
+    /// next boot takes its place rather than the oldest's, so a deck switched
+    /// on and off twice after a gig still has the gig.
     Opened open(const QString& directory, const QByteArray& bootId, qint64 nowWallMs);
 
     /// Write *write* to the session *sessionId*. Nothing without an open store.

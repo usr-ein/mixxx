@@ -24,9 +24,6 @@ constexpr int kSchemaVersion = 1;
 /// The write-ahead log's size before it is checkpointed and begun again, in
 /// pages: a heartbeat is one page, so five minutes of play.
 constexpr int kLogPages = 64;
-/// A power-up in which less than this played, all plays added up, played
-/// nothing: the History would list no row for it (history::RowRules).
-const qint64 kNothingPlayedMs = mixxx::deck::history::RowRules().minimumMs;
 
 bool exec(QSqlQuery& query) {
     if (query.exec()) {
@@ -238,14 +235,38 @@ bool HistoryStore::rotate(const QByteArray& bootId, qint64 nowWallMs) {
         return m_database.commit();
     }
 
-    // The power-up before, if nothing played in it, makes way for this one
-    // rather than for the oldest.
-    query.prepare(QStringLiteral(
-            "DELETE FROM sessions WHERE id = (SELECT MAX(id) FROM sessions) "
-            "AND (SELECT COALESCE(SUM(end_ms - start_ms), 0) FROM plays "
-            "     WHERE plays.session_id = sessions.id) < :nothing"));
-    query.bindValue(QStringLiteral(":nothing"), kNothingPlayedMs);
-    bool ok = exec(query);
+    // The power-up before, if the History lists nothing for it, makes way for
+    // this one rather than for the oldest: decided by the list's own rule, so
+    // that a power-up shown as "nothing played" is one that pushes nothing
+    // out.
+    bool ok = true;
+    query.prepare(QStringLiteral("SELECT MAX(id) FROM sessions"));
+    if (!exec(query)) {
+        m_database.rollback();
+        return false;
+    }
+    if (query.next() && !query.value(0).isNull()) {
+        const int last = query.value(0).toInt();
+        QList<history::Play> plays;
+        QSqlQuery read(m_database);
+        read.prepare(QStringLiteral(
+                "SELECT track_id, player, start_ms, end_ms FROM plays WHERE session_id = :session"));
+        read.bindValue(QStringLiteral(":session"), last);
+        ok = exec(read);
+        while (ok && read.next()) {
+            history::Play play;
+            play.track = read.value(0).toInt();
+            play.player = read.value(1).toInt();
+            play.startMs = read.value(2).toLongLong();
+            play.endMs = read.value(3).toLongLong();
+            plays.append(play);
+        }
+        if (ok && history::rowsOf(history::segmentsOf(plays)).isEmpty()) {
+            query.prepare(QStringLiteral("DELETE FROM sessions WHERE id = :session"));
+            query.bindValue(QStringLiteral(":session"), last);
+            ok = exec(query);
+        }
+    }
 
     query.prepare(QStringLiteral(
             "INSERT INTO sessions (boot_id, opened_wall_ms) VALUES (:boot, :now)"));

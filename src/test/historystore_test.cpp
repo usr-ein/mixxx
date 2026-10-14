@@ -127,6 +127,37 @@ TEST_F(HistoryStoreTest, APowerUpThatPlayedNothingMakesWayForTheNext) {
             bootsOf(opened));
 }
 
+/// Nothing listed is nothing played, whatever the plays add up to: two
+/// tracks of a second and a half each are two rows too short to show, and
+/// the power-up they were in makes way like an empty one.
+TEST_F(HistoryStoreTest, APowerUpListedAsNothingMakesWayToo) {
+    playedIn("boot-1", QStringLiteral("the gig"), 3600);
+    {
+        HistoryStore store;
+        const HistoryStore::Opened opened = store.open(directory(), "boot-2", 0);
+        ASSERT_TRUE(opened.ok);
+        HistoryWrite write;
+        for (int i = 1; i <= 2; ++i) {
+            HistoryTrack track;
+            track.id = i;
+            track.key = QString::number(i);
+            write.newTracks.append(track);
+            HistoryPlay play;
+            play.id = i;
+            play.play.player = i;
+            play.play.track = i;
+            play.play.startMs = i * 10 * kSecond;
+            play.play.endMs = i * 10 * kSecond + 1500;
+            write.newPlays.append(play);
+        }
+        store.write(opened.sessions.first().id, write);
+        store.close();
+    }
+    const HistoryStore::Opened opened = boot("boot-3");
+    EXPECT_EQ(QStringList({QStringLiteral("boot-3"), QStringLiteral("boot-1")}),
+            bootsOf(opened));
+}
+
 /// A CUE tapped is not a power-up that played.
 TEST_F(HistoryStoreTest, ASecondOfPlayIsNothingPlayed) {
     playedIn("boot-1", QStringLiteral("the gig"), 3600);
