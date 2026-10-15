@@ -108,7 +108,12 @@ RUN curl --proto '=https' --tlsv1.2 -sSf https://sh.rustup.rs \
 COPY lib/prolink/rust-toolchain.toml /opt/rust-toolchain/rust-toolchain.toml
 RUN cd /opt/rust-toolchain && rustup toolchain install
 
-COPY . /src
+# The sources are bind-mounted at /src by each RUN that reads them, rather
+# than copied in: `COPY . /src` made a 0.56 GB layer of every state of the
+# sources a build ever saw, one per build, kept in Docker's build cache until
+# a prune. The mount is keyed on the same content, so a checkout with nothing
+# changed still finds the build done, and it leaves no layer behind. It is
+# read-only: the build writes to its tree, tree-sync.sh's copy of /src.
 
 # The build tree and the ccache are cache mounts, so editing a couple of files
 # and re-running only recompiles those files instead of all ~1500 of them --
@@ -174,7 +179,8 @@ COPY . /src
 ARG CHECKOUT_ID=
 ARG SEED_ID=-none
 ARG CARGO_JOBS=8
-RUN --mount=type=cache,target=/build,sharing=locked,id=mixxx-build-${BASE}${CHECKOUT_ID} \
+RUN --mount=type=bind,target=/src \
+    --mount=type=cache,target=/build,sharing=locked,id=mixxx-build-${BASE}${CHECKOUT_ID} \
     --mount=type=cache,target=/seed,sharing=shared,readonly,id=mixxx-build-${BASE}${SEED_ID} \
     --mount=type=cache,target=/ccache,sharing=locked \
     --mount=type=cache,target=/opt/cargo/registry,sharing=locked \
@@ -262,7 +268,8 @@ RUN apt-get update && apt-get install -y --no-install-recommends libgmock-dev \
 ARG CHECKOUT_ID=
 ARG SEED_ID=-none
 ARG CARGO_JOBS=8
-RUN --mount=type=cache,target=/build-test,sharing=locked,id=mixxx-build-test-${BASE}${CHECKOUT_ID} \
+RUN --mount=type=bind,target=/src \
+    --mount=type=cache,target=/build-test,sharing=locked,id=mixxx-build-test-${BASE}${CHECKOUT_ID} \
     --mount=type=cache,target=/seed,sharing=shared,readonly,id=mixxx-build-test-${BASE}${SEED_ID} \
     --mount=type=cache,target=/ccache,sharing=locked \
     --mount=type=cache,target=/opt/cargo/registry,sharing=locked \
@@ -291,7 +298,10 @@ RUN --mount=type=cache,target=/build-test,sharing=locked,id=mixxx-build-test-${B
 # devices, and because a failure here means something different: the protocol
 # is wrong, rather than Mixxx's use of it.
 FROM build AS prolink-tests
-RUN --mount=type=cache,target=/opt/cargo/registry,sharing=locked \
+# rw: cargo writes its target/ beside the sources. What it writes there is
+# dropped when the RUN ends; nothing reaches the checkout.
+RUN --mount=type=bind,target=/src,rw \
+    --mount=type=cache,target=/opt/cargo/registry,sharing=locked \
     cd /src/lib/prolink \
     && cargo test --workspace --locked \
     && cargo clippy --workspace --all-targets --locked -- -D warnings \
