@@ -58,6 +58,10 @@ struct ServeStatus {
     int deviceNumber = 0;
     QHostAddress address;
     QString interfaceName;
+    /// The interface the session was asked to be on (`[ProLink] Interface`,
+    /// eth0 on a deck), or empty when it chooses. Until that one has an
+    /// address the session waits for it, inactive, and is nowhere else.
+    QString wantedInterface;
 
     /// Zero when the listener could not be bound. The portmapper is the one
     /// that matters: without it a deck never discovers our mount ports and

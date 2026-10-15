@@ -108,7 +108,12 @@ void DeckServices::start(Library* pLibrary, UserSettingsPointer pConfig) {
             [pKeySync = m_pKeySync.get()](bool otherIsMaster, int masterKeyId) {
                 pKeySync->setLink(otherIsMaster, KeyUtils::keyFromNumericValue(masterKeyId));
             });
-    m_pNetwork->start();
+    // A deck names its Ethernet port, the one the CDJs are on (mixxx.cfg,
+    // [ProLink] Interface eth0): with no cable in, it is a player nowhere,
+    // rather than one on its Wi-Fi, serving its sticks to whoever is there.
+    // Empty, a desktop's, lets the session choose.
+    m_pNetwork->start(pConfig->getValueString(
+            ConfigKey(QStringLiteral("[ProLink]"), QStringLiteral("Interface"))));
     m_pLoader = std::make_unique<DeckLoader>(deckGroup(),
             m_pLibrary,
             m_pRegistry.get(),

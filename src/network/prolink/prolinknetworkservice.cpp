@@ -33,6 +33,7 @@ bool sameServeStatus(const mixxx::prolink::ServeStatus& left,
         const mixxx::prolink::ServeStatus& right) {
     if (left.active != right.active || left.deviceNumber != right.deviceNumber ||
             left.address != right.address || left.interfaceName != right.interfaceName ||
+            left.wantedInterface != right.wantedInterface ||
             left.portmapPort != right.portmapPort || left.mountdPort != right.mountdPort ||
             left.nfsdPort != right.nfsdPort || left.dbserverPort != right.dbserverPort ||
             left.media.size() != right.media.size() ||
@@ -153,7 +154,7 @@ ProLinkNetworkService::~ProLinkNetworkService() {
     shutdown();
 }
 
-void ProLinkNetworkService::start() {
+void ProLinkNetworkService::start(const QString& interfaceName) {
     if (m_pImpl->pSession) {
         return;
     }
@@ -187,6 +188,7 @@ void ProLinkNetworkService::start() {
         // tempo master are published. Without it we would see beats and
         // nothing else.
         config.announce = true;
+        config.interface = ::rust::String(interfaceName.toStdString());
         m_pImpl->pSession = std::make_unique<::rust::Box<::prolink::Session>>(
                 ::prolink::open(config));
     } catch (const std::exception& error) {
@@ -196,6 +198,7 @@ void ProLinkNetworkService::start() {
         return;
     }
     m_pSync->setSession(&**m_pImpl->pSession);
+    m_wantedInterface = interfaceName;
 
     s_pListening = this;
     m_listening = true;
@@ -206,7 +209,10 @@ void ProLinkNetworkService::start() {
     // for the duration. poll() announces the number when it arrives.
     m_announcedNumber = 0;
     m_announceDetail = tr("joining the network...");
-    kLogger.info() << "started;" << m_announceDetail;
+    kLogger.info() << "started;" << m_announceDetail
+                   << (interfaceName.isEmpty()
+                                      ? QStringLiteral("(on whichever interface faces the players)")
+                                      : QStringLiteral("(on %1 only)").arg(interfaceName));
 
     emit announceChanged(m_announcedNumber, m_announceDetail);
 
@@ -731,6 +737,7 @@ void ProLinkNetworkService::syncServeStatus() {
     status.deviceNumber = static_cast<int>(fresh.device_number);
     status.address = QHostAddress(toQString(fresh.address));
     status.interfaceName = toQString(fresh.interface);
+    status.wantedInterface = m_wantedInterface;
     status.portmapPort = fresh.portmap_port;
     status.mountdPort = fresh.mount_port;
     status.nfsdPort = fresh.nfs_port;

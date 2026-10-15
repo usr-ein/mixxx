@@ -54,7 +54,12 @@ class ProLinkNetworkService : public QObject {
     ~ProLinkNetworkService() override;
 
     /// Start listening. Safe to call twice.
-    void start();
+    ///
+    /// *interfaceName* is the interface to be a player on, waited for until it
+    /// has an address: a deck names its Ethernet port, so that with no cable
+    /// in it is a player nowhere rather than on its Wi-Fi. Empty lets the
+    /// session choose: link-local first, then any private address.
+    void start(const QString& interfaceName = QString());
 
     /// Stop, releasing the device number.
     void shutdown();
@@ -304,6 +309,8 @@ class ProLinkNetworkService : public QObject {
     int m_publishedNumber = 0;
     QString m_announceDetail;
     QString m_lastError;
+    /// What start() was given; see ServeStatus::wantedInterface.
+    QString m_wantedInterface;
     ServeStatus m_serveStatus;
 };
 

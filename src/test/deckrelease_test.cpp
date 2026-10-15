@@ -7,6 +7,7 @@
 #include <QFileInfo>
 #include <QTemporaryDir>
 
+#include "network/prolink/prolinkservestatus.h"
 #include "widget/deck/wdeckdiagnostics.h"
 
 using mixxx::deck::DeckRelease;
@@ -513,6 +514,30 @@ TEST(WDeckDiagnosticsTest, Uptime) {
     EXPECT_EQ(QStringLiteral("2 h 05 min"), WDeckDiagnostics::uptimeText(2 * 3600 + 5 * 60 + 59));
     EXPECT_EQ(QStringLiteral("1 d 0 h"), WDeckDiagnostics::uptimeText(86400));
     EXPECT_EQ(QStringLiteral("3 d 4 h"), WDeckDiagnostics::uptimeText(3 * 86400 + 4 * 3600 + 5));
+}
+
+TEST(WDeckDiagnosticsTest, ProLinkOnTheInterfaceAskedFor) {
+    // A deck asks for eth0. With no cable in it has no address, and the deck
+    // is a player nowhere: not on its Wi-Fi either.
+    mixxx::prolink::ServeStatus serve;
+    serve.wantedInterface = QStringLiteral("eth0");
+    EXPECT_EQ(QStringLiteral("waiting for eth0"), WDeckDiagnostics::proLinkText(serve, false));
+    // The cable in: a few seconds claiming a number, then a player there.
+    EXPECT_EQ(QStringLiteral("joining the network..."), WDeckDiagnostics::proLinkText(serve, true));
+    serve.active = true;
+    serve.deviceNumber = 3;
+    serve.interfaceName = QStringLiteral("eth0");
+    EXPECT_EQ(QStringLiteral("player 3 on eth0"), WDeckDiagnostics::proLinkText(serve, true));
+}
+
+TEST(WDeckDiagnosticsTest, ProLinkOnWhicheverInterface) {
+    // A desktop asks for none, so there is nothing in particular to wait for.
+    mixxx::prolink::ServeStatus serve;
+    EXPECT_EQ(QStringLiteral("joining the network..."), WDeckDiagnostics::proLinkText(serve, false));
+    serve.active = true;
+    serve.deviceNumber = 2;
+    serve.interfaceName = QStringLiteral("en9");
+    EXPECT_EQ(QStringLiteral("player 2 on en9"), WDeckDiagnostics::proLinkText(serve, false));
 }
 
 } // namespace

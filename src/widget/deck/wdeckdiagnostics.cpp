@@ -445,6 +445,17 @@ QString WDeckDiagnostics::html() const {
     } else {
         out += row(tr("Wi-Fi"), QStringLiteral("%1 &middot; %2").arg(ssid, wifiAddress));
     }
+
+    // Where the deck is a player. A deck names its Ethernet port ([ProLink]
+    // Interface in mixxx.cfg) and waits for it with no cable in, rather than
+    // being a player on the Wi-Fi.
+    if (m_pRegistry) {
+        const mixxx::prolink::ServeStatus serve = m_pRegistry->serveStatus();
+        const bool wantedHasAddress = !serve.wantedInterface.isEmpty() &&
+                !ipv4Of(QNetworkInterface::interfaceFromName(serve.wantedInterface))
+                         .isEmpty();
+        out += row(tr("Pro DJ Link"), proLinkText(serve, wantedHasAddress).toHtmlEscaped());
+    }
     out += QStringLiteral("</table>");
 
     // ---- system ------------------------------------------------------------
@@ -619,6 +630,18 @@ QString WDeckDiagnostics::html() const {
     out += QStringLiteral("</table>");
 
     return out;
+}
+
+QString WDeckDiagnostics::proLinkText(
+        const mixxx::prolink::ServeStatus& serve, bool wantedHasAddress) {
+    if (serve.active) {
+        return tr("player %1 on %2").arg(serve.deviceNumber).arg(serve.interfaceName);
+    }
+    if (!serve.wantedInterface.isEmpty() && !wantedHasAddress) {
+        return tr("waiting for %1").arg(serve.wantedInterface);
+    }
+    // Bound, or about to be, and claiming a number: a few seconds.
+    return tr("joining the network...");
 }
 
 QString WDeckDiagnostics::uptimeText(qint64 seconds) {

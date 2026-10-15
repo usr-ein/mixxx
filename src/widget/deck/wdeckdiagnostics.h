@@ -13,6 +13,12 @@
 class ControlProxy;
 
 namespace mixxx {
+namespace prolink {
+struct ServeStatus;
+} // namespace prolink
+} // namespace mixxx
+
+namespace mixxx {
 namespace deck {
 
 class DeckLevels;
@@ -71,6 +77,11 @@ class WDeckDiagnostics : public QTextBrowser, public DeckPage {
     /// How long the deck has been up, to the minute past the first: "40 s",
     /// "12 min", "2 h 05 min", "3 d 4 h".
     static QString uptimeText(qint64 seconds);
+
+    /// Where the deck is a player on Pro DJ Link: "player 3 on eth0", or
+    /// "waiting for eth0" while the interface it was asked to be on has no
+    /// address (*wantedHasAddress*), as with no cable in.
+    static QString proLinkText(const mixxx::prolink::ServeStatus& serve, bool wantedHasAddress);
 
   protected:
     /// Adjusting stops when the page goes, BACK held to the deck included:
