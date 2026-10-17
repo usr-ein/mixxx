@@ -1,5 +1,6 @@
 #include "library/deck/deckservices.h"
 
+#include "library/deck/bluetoothreceiver.h"
 #include "library/deck/deckautoplay.h"
 #include "library/deck/deckhistory.h"
 #include "library/deck/deckloader.h"
@@ -27,7 +28,8 @@ DeckServices* s_pInstance = nullptr;
 } // namespace
 
 DeckServices::DeckServices()
-        : m_pControls(std::make_unique<mixxx::prolink::ProLinkControls>()) {
+        : m_pControls(std::make_unique<mixxx::prolink::ProLinkControls>()),
+          m_pBluetooth(std::make_unique<BluetoothReceiver>(deckGroup())) {
     DEBUG_ASSERT(s_pInstance == nullptr);
     s_pInstance = this;
 }
@@ -162,7 +164,14 @@ void DeckServices::start(Library* pLibrary, UserSettingsPointer pConfig) {
             });
 }
 
+void DeckServices::setSoundManager(SoundManager* pSoundManager) {
+    m_pBluetooth->setSoundManager(pSoundManager);
+}
+
 void DeckServices::stop() {
+    // The radio down first, if its menu was open: the sound manager it was
+    // handed goes before this object does.
+    m_pBluetooth->shutdown();
     // A recording first: it ends with its file closed whole, and it reads the
     // History and the registry.
     m_pRecorder.reset();

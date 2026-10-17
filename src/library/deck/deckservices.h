@@ -9,6 +9,7 @@
 #include "preferences/usersettings.h"
 
 class Library;
+class SoundManager;
 
 namespace mixxx {
 namespace prolink {
@@ -18,6 +19,7 @@ class ProLinkNetworkService;
 } // namespace prolink
 namespace deck {
 
+class BluetoothReceiver;
 class DeckAutoplay;
 class DeckHistory;
 class DeckLoader;
@@ -60,6 +62,10 @@ class DeckServices : public QObject {
     /// controls stay until this object goes.
     void stop();
 
+    /// The sound manager the Bluetooth receiver lets go of while its menu is
+    /// open: CoreServices makes it after this, and hands it over.
+    void setSoundManager(SoundManager* pSoundManager);
+
     /// Null until start(), and again after stop().
     MediaRegistry* registry() const {
         return m_pRegistry.get();
@@ -79,6 +85,12 @@ class DeckServices : public QObject {
     DeckRecorder* recorder() const {
         return m_pRecorder.get();
     }
+    /// From construction to destruction, unlike the others: its [Bluetooth]
+    /// controls are there before any mapping or skin, and it takes down a
+    /// radio a crash left up before Mixxx opens the sound card.
+    BluetoothReceiver* bluetooth() const {
+        return m_pBluetooth.get();
+    }
 
   signals:
     /// The registry's, passed on for the toast, and connected before anything
@@ -93,6 +105,7 @@ class DeckServices : public QObject {
     QSqlDatabase database() const;
 
     std::unique_ptr<mixxx::prolink::ProLinkControls> m_pControls;
+    std::unique_ptr<BluetoothReceiver> m_pBluetooth;
     Library* m_pLibrary = nullptr;
     std::unique_ptr<TrackCache> m_pCache;
     std::unique_ptr<mixxx::prolink::ProLinkNetworkService> m_pNetwork;

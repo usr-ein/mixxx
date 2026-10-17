@@ -30,6 +30,7 @@ class QStackedWidget;
 namespace mixxx {
 namespace deck {
 
+class BluetoothReceiver;
 class DeckAutoplay;
 class DeckHistory;
 class DeckListView;
@@ -43,6 +44,7 @@ class WDeckSortMenu;
 class WDeckKeyboard;
 class WDeckInfoPanel;
 class WDeckDiagnostics;
+class WDeckBluetooth;
 class DeckPage;
 class TrackRowDelegate;
 
@@ -155,6 +157,8 @@ class WDeckBrowser : public QWidget, public WBaseWidget {
             /// "Write the set to": a recording's sticks, the deck's own, and
             /// Discard.
             RecordedSet,
+            /// "Bluetooth receiver": the deck playing a phone, while it is up.
+            Bluetooth,
         };
         Kind kind = Kind::Sources;
         MediumId medium;
@@ -179,8 +183,8 @@ class WDeckBrowser : public QWidget, public WBaseWidget {
     void popLevel();
     void rebuildCurrentLevel();
     void showSources();
-    /// Level 0's rows: the media, then Autoplay, the History, Diagnostics and
-    /// Shut down.
+    /// Level 0's rows: the media, then Autoplay, the History, Record set,
+    /// Bluetooth receiver, Diagnostics and Shut down.
     QList<MenuRow> sourcesRows() const;
     /// One medium as a source row: its mark, name and state, and its counts.
     MenuRow sourceRow(const MediumInfo& medium) const;
@@ -250,6 +254,7 @@ class WDeckBrowser : public QWidget, public WBaseWidget {
     DeckAutoplay* const m_pAutoplay;
     DeckHistory* const m_pHistory;
     DeckRecorder* const m_pRecorder;
+    BluetoothReceiver* const m_pBluetoothReceiver;
     /// "End recording"'s two bars, moved on as the input's levels come, on a
     /// clock of their own.
     setrecording::LevelMeter m_meterLeft;
@@ -293,6 +298,8 @@ class WDeckBrowser : public QWidget, public WBaseWidget {
     QWidget* m_pTracksPage;
     WDeckInfoPanel* m_pInfoPanel;
     WDeckDiagnostics* m_pDiagnostics;
+    /// Null on a build with no Bluetooth receiver.
+    WDeckBluetooth* m_pBluetooth = nullptr;
     bool m_infoLayout = false;
     /// Preview waveforms for the info panel, read off the GUI thread.
     std::unique_ptr<PreviewWaveformCache> m_pPreviews;

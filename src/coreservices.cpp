@@ -508,6 +508,7 @@ void CoreServices::initialize(QApplication* pApp) {
     // needs to be called after m_pPlayerManager registers sound IO for each EngineChannel.
     m_pSoundManager = std::make_shared<SoundManager>(pConfig, m_pEngine.get());
     m_pEngine->registerNonEngineChannelSoundIO(m_pSoundManager.get());
+    m_pDeckServices->setSoundManager(m_pSoundManager.get());
 
     m_pRecordingManager = std::make_shared<RecordingManager>(pConfig, m_pEngine.get());
 

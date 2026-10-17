@@ -16,6 +16,7 @@
 #include "library/deck/deckautoplay.h"
 #include "library/deck/deckhistory.h"
 #include "library/deck/deckqueries.h"
+#include "library/deck/bluetoothreceiver.h"
 #include "library/deck/deckrecorder.h"
 #include "library/deck/deckservices.h"
 #include "library/deck/decktrackmodel.h"
@@ -34,6 +35,7 @@
 #include "widget/deck/decklistview.h"
 #include "widget/deck/deckmenumodel.h"
 #include "widget/deck/deckpage.h"
+#include "widget/deck/wdeckbluetooth.h"
 #include "widget/deck/wdeckdiagnostics.h"
 #include "widget/deck/wdeckinfopanel.h"
 #include "widget/deck/wdecksearch.h"
@@ -130,7 +132,8 @@ WDeckBrowser::WDeckBrowser(QWidget* pParent,
           m_pLoader(pServices->loader()),
           m_pAutoplay(pServices->autoplay()),
           m_pHistory(pServices->history()),
-          m_pRecorder(pServices->recorder()) {
+          m_pRecorder(pServices->recorder()),
+          m_pBluetoothReceiver(pServices->bluetooth()) {
     setAttribute(Qt::WA_StyledBackground, true);
     // A flush panel has none of the three lips below, and the lists take the
     // space instead.
@@ -322,6 +325,17 @@ WDeckBrowser::WDeckBrowser(QWidget* pParent,
     m_pDiagnostics = new WDeckDiagnostics(
             m_pConfig->getSettingsPath(), m_pRegistry, pServices->cache(), m_pStack);
     m_pStack->addWidget(m_pDiagnostics);
+
+    if (m_pBluetoothReceiver) {
+        m_pBluetooth = new WDeckBluetooth(m_pBluetoothReceiver, m_pStack);
+        m_pStack->addWidget(m_pBluetooth);
+        // The home list says who plays, while it does.
+        connect(m_pBluetoothReceiver, &BluetoothReceiver::changed, this, [this]() {
+            if (!m_stack.isEmpty() && m_stack.last().kind == Level::Kind::Sources) {
+                m_pMenuModel->updateRows(sourcesRows());
+            }
+        });
+    }
 
     connect(m_pKeyboard, &WDeckKeyboard::keyPressed, this, [this](const QString& c) {
         m_searchText += c;
@@ -685,6 +699,12 @@ void WDeckBrowser::rebuildCurrentLevel() {
         m_pStack->setCurrentWidget(m_pDiagnostics);
         m_pDiagnostics->setFocus();
         break;
+    case Level::Kind::Bluetooth:
+        // Shown is on: the page opens the receiver as it shows, and closes it
+        // as it is hidden, by whatever hides it.
+        m_pStack->setCurrentWidget(m_pBluetooth);
+        m_pBluetooth->setFocus();
+        break;
     case Level::Kind::Autoplay:
         showAutoplay(level);
         break;
@@ -863,7 +883,7 @@ void WDeckBrowser::refreshInPlace() {
     const QString mediumKey = std::exchange(m_staleMediumKey, QString());
     const Level& level = m_stack.last();
     if (level.kind == Level::Kind::Sources || level.kind == Level::Kind::Diagnostics ||
-            level.medium.key() != mediumKey) {
+            level.kind == Level::Kind::Bluetooth || level.medium.key() != mediumKey) {
         return;
     }
     if (inTrackList()) {
@@ -948,6 +968,16 @@ QList<MenuRow> WDeckBrowser::sourcesRows() const {
 
     // What plays, recorded: beside what played.
     rows.append(recordRow());
+
+    // A phone, played through the deck: the other way in for sound.
+    if (m_pBluetoothReceiver) {
+        MenuRow bluetooth;
+        bluetooth.mark = MenuRow::Mark::Bluetooth;
+        bluetooth.title = tr("Bluetooth receiver");
+        bluetooth.payload = QStringLiteral("#bluetooth");
+        bluetooth.detail = m_pBluetoothReceiver->facts().phoneName;
+        rows.append(bluetooth);
+    }
 
     MenuRow diagnostics;
     diagnostics.mark = MenuRow::Mark::Diagnostics;
@@ -1723,6 +1753,13 @@ void WDeckBrowser::onActivated(int row) {
             pushLevel(level);
             return;
         }
+        if (payload == QStringLiteral("#bluetooth") && m_pBluetooth) {
+            Level level;
+            level.kind = Level::Kind::Bluetooth;
+            level.title = menuRow.title;
+            pushLevel(level);
+            return;
+        }
         if (payload == QStringLiteral("#autoplay")) {
             Level level;
             level.kind = Level::Kind::Autoplay;
@@ -1901,7 +1938,9 @@ void WDeckBrowser::onActivated(int row) {
     case Level::Kind::Tracks:
     case Level::Kind::Search:
     case Level::Kind::Diagnostics:
-        // A track list is handled above, and Diagnostics has no menu rows.
+    case Level::Kind::Bluetooth:
+        // A track list is handled above, and Diagnostics and the Bluetooth
+        // receiver have no menu rows.
         break;
     }
 }
