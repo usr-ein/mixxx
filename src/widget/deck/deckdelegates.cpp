@@ -13,6 +13,7 @@
 #include "widget/deck/deckaccent.h"
 #include "widget/deck/decklistview.h"
 #include "widget/deck/deckmenumodel.h"
+#include "widget/deck/deckrune.h"
 
 namespace {
 // The palette. Deliberately the skin's, spelled out here rather than pulled
@@ -300,6 +301,9 @@ void paintMark(QPainter* pPainter,
         pPainter->drawLine(cross.topRight(), cross.bottomLeft());
         break;
     }
+    case Mark::Bluetooth:
+        mixxx::deck::paintBluetoothRune(pPainter, QRectF(box), colour, 2);
+        break;
     case Mark::None:
         break;
     }

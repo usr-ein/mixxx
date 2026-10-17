@@ -5,6 +5,7 @@
 #include <QMouseEvent>
 #include <QVBoxLayout>
 
+#include "library/deck/bluetoothreceiver.h"
 #include "library/deck/deckautoplay.h"
 #include "library/deck/deckrecorder.h"
 #include "library/deck/deckservices.h"
@@ -101,6 +102,13 @@ WDeckToast::WDeckToast(QWidget* pParent, DeckServices* pServices)
     };
     connect(pRecorder, &DeckRecorder::stateChanged, this, sayWriting);
     connect(pRecorder, &DeckRecorder::tick, this, sayWriting);
+    // The Bluetooth receiver's: a phone in or paired, the radio failing, and
+    // a sound card slow to come back, which is a deck with no sound.
+    if (BluetoothReceiver* pBluetooth = pServices->bluetooth()) {
+        connect(pBluetooth, &BluetoothReceiver::notice, this, [this](const QString& text) {
+            show(text, true, QStringLiteral("#bluetooth"));
+        });
+    }
 }
 
 void WDeckToast::setup(const QDomNode& node, const SkinContext& context) {

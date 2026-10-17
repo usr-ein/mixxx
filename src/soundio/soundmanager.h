@@ -56,6 +56,11 @@ class SoundManager : public QObject {
     // establishes the proper connections between them and the mixing engine.
     SoundDeviceStatus setupDevices();
 
+    // TriMixxx: closes every device and leaves them closed, the configuration
+    // untouched, until setupDevices() opens them again -- the deck's
+    // Bluetooth receiver lets another player have the card meanwhile.
+    void releaseDevices();
+
     // Playermanager will notify us when the number of decks changes.
     void setConfiguredDeckCount(int count);
     int getConfiguredDeckCount() const;

@@ -1008,6 +1008,9 @@ add_library(mixxx-lib STATIC EXCLUDE_FROM_ALL
   src/library/rekordbox/rekordboxpdb.cpp
   src/library/rekordbox/rekordboxwaveform.cpp
   src/library/deck/autoplay.cpp
+  src/library/deck/bluetoothagent.cpp
+  src/library/deck/bluetoothreceiver.cpp
+  src/library/deck/bluetoothstate.cpp
   src/library/deck/deckautoplay.cpp
   src/library/deck/deckhistory.cpp
   src/library/deck/deckloader.cpp
@@ -1022,6 +1025,7 @@ add_library(mixxx-lib STATIC EXCLUDE_FROM_ALL
   src/library/deck/mediaregistry.cpp
   src/library/deck/pdbingest.cpp
   src/library/deck/playhistory.cpp
+  src/library/deck/screenpower.cpp
   src/library/deck/sessionpurge.cpp
   src/library/deck/setrecording.cpp
   src/library/deck/previewwaveform.cpp
@@ -1382,6 +1386,7 @@ add_library(mixxx-lib STATIC EXCLUDE_FROM_ALL
   src/widget/deck/menubarreveal.cpp
   src/widget/deck/wdeckautoplaybadge.cpp
   src/widget/deck/wdeckbrowser.cpp
+  src/widget/deck/wdeckbluetooth.cpp
   src/widget/deck/wdeckdiagnostics.cpp
   src/widget/deck/wdeckinfopanel.cpp
   src/widget/deck/wdeckkeypicker.cpp
@@ -2189,6 +2194,7 @@ if(BUILD_TESTING)
     src/test/beatstranslatetest.cpp
     src/test/bpmtest.cpp
     src/test/bpmcontrol_test.cpp
+    src/test/bluetoothstate_test.cpp
     src/test/broadcastprofile_test.cpp
     src/test/broadcastsettings_test.cpp
     src/test/cache_test.cpp

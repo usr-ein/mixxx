@@ -35,6 +35,8 @@ struct MenuRow {
         Recording,
         /// Discard, and nothing else: it deletes.
         Discard,
+        /// "Bluetooth receiver": the rune.
+        Bluetooth,
     };
 
     /// A bar across the row under its title.
