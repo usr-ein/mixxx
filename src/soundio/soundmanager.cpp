@@ -201,6 +201,10 @@ void SoundManager::closeDevices(bool sleepAfterClosing) {
     m_pControlObjectSoundStatusCO->set(SOUNDMANAGER_DISCONNECTED);
 }
 
+void SoundManager::releaseDevices() {
+    closeDevices(false);
+}
+
 void SoundManager::clearDeviceList(bool sleepAfterClosing) {
     //qDebug() << "SoundManager::clearDeviceList()";
 
