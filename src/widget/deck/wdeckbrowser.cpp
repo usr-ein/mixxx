@@ -993,13 +993,13 @@ QList<MenuRow> WDeckBrowser::sourcesRows() const {
     // What plays, recorded: beside what played.
     rows.append(recordRow());
 
-    // A phone, played through the deck: the other way in for sound.
+    // A device, played through the deck: the other way in for sound.
     if (m_pBluetoothReceiver) {
         MenuRow bluetooth;
         bluetooth.mark = MenuRow::Mark::Bluetooth;
         bluetooth.title = tr("Bluetooth receiver");
         bluetooth.payload = QStringLiteral("#bluetooth");
-        bluetooth.detail = m_pBluetoothReceiver->facts().phoneName;
+        bluetooth.detail = m_pBluetoothReceiver->facts().connectedName;
         if (m_pPlay && m_pPlay->get() > 0.0) {
             // Opening it stops the deck, and a wrong row mid-set would be
             // silence: refused while the deck plays (the review's pick).

@@ -29,9 +29,9 @@ TEST(BluetoothStateTest, TheRadioFirst) {
     // one, or one wired to nothing).
     facts.radio = Radio::Up;
     EXPECT_EQ(Status::NoAdapter, status(facts));
-    // A phone or a code means nothing while the radio is not up.
+    // A device or a code means nothing while the radio is not up.
     facts.radio = Radio::Starting;
-    facts.phoneName = QStringLiteral("Sam's phone");
+    facts.connectedName = QStringLiteral("Sam's phone");
     facts.hasPasskey = true;
     EXPECT_EQ(Status::Starting, status(facts));
 }
@@ -48,15 +48,15 @@ TEST(BluetoothStateTest, ACodeOutranksEverything) {
     facts.discoverable = true;
     facts.hasPasskey = true;
     EXPECT_EQ(Status::Confirming, status(facts));
-    // A second phone pairing while one plays: the question comes first.
-    facts.phoneName = QStringLiteral("Sam's phone");
+    // A second device pairing while one plays: the question comes first.
+    facts.connectedName = QStringLiteral("Sam's phone");
     facts.streaming = true;
     EXPECT_EQ(Status::Confirming, status(facts));
 }
 
 TEST(BluetoothStateTest, PlayingIsWhatIsHeard) {
     Facts facts = up();
-    facts.phoneName = QStringLiteral("Sam's phone");
+    facts.connectedName = QStringLiteral("Sam's phone");
     EXPECT_EQ(Status::Connected, status(facts));
     // A player saying it plays, with no audio yet, is still only connected.
     facts.playerStatus = QStringLiteral("playing");
@@ -70,35 +70,69 @@ TEST(BluetoothStateTest, PlayingIsWhatIsHeard) {
 
 TEST(BluetoothStateTest, StatusTextNamesThePhoneAndTheDeck) {
     Facts facts = up();
-    EXPECT_EQ(QStringLiteral("Waiting for a phone · Pair to add one"),
+    EXPECT_EQ(QStringLiteral("Waiting for a device · + to pair one"),
             statusText(facts, QStringLiteral("trimixxx2")));
     Device pixel;
     pixel.name = QStringLiteral("Pixel 9");
     facts.devices = {pixel};
-    EXPECT_EQ(QStringLiteral("Pick a phone to play from"),
+    EXPECT_EQ(QStringLiteral("Pick a device to play from"),
             statusText(facts, QStringLiteral("trimixxx2")));
     facts.connectingName = QStringLiteral("Pixel 9");
     EXPECT_EQ(QStringLiteral("Connecting to Pixel 9…"),
             statusText(facts, QStringLiteral("trimixxx2")));
     facts.connectingName.clear();
     facts.discoverable = true;
-    EXPECT_EQ(QStringLiteral("Visible as trimixxx2: pair from the phone"),
+    EXPECT_EQ(QStringLiteral("Visible as trimixxx2: pair from the device"),
             statusText(facts, QStringLiteral("trimixxx2")));
     facts.hasPasskey = true;
     facts.pairingName = QStringLiteral("Pixel 9");
     EXPECT_EQ(QStringLiteral("Pair with Pixel 9? Same code on both: Confirm"),
             statusText(facts, QStringLiteral("trimixxx2")));
     facts.hasPasskey = false;
-    facts.phoneName = QStringLiteral("Pixel 9");
+    facts.connectedName = QStringLiteral("Pixel 9");
     facts.streaming = true;
     EXPECT_EQ(QStringLiteral("Playing from Pixel 9"), statusText(facts, QString()));
-    // A phone with no name is still something to read.
-    facts.phoneName.clear();
-    facts.phoneName = QString();
+    // A device with no name is still something to read: "device", never
+    // "phone", as it can be a Mac (Sam).
+    facts.connectedName.clear();
     facts.hasPasskey = true;
     facts.pairingName.clear();
-    EXPECT_EQ(QStringLiteral("Pair with the phone? Same code on both: Confirm"),
+    EXPECT_EQ(QStringLiteral("Pair with the device? Same code on both: Confirm"),
             statusText(facts, QString()));
+    facts.hasPasskey = false;
+    facts.connectedName = QStringLiteral("MBP NJ");
+    facts.streaming = false;
+    EXPECT_EQ(QStringLiteral("Connected to MBP NJ"), statusText(facts, QString()));
+}
+
+TEST(BluetoothStateTest, NoPhoneInWhatTheDjReads) {
+    // Every status line, with and without names: none says "phone".
+    Facts facts = up();
+    QStringList lines;
+    const auto read = [&]() { lines << statusText(facts, QStringLiteral("trimixxx2")); };
+    read();
+    Device mac;
+    mac.name = QStringLiteral("MBP NJ");
+    facts.devices = {mac};
+    read();
+    facts.connectingName = QStringLiteral("MBP NJ");
+    read();
+    facts.connectingName.clear();
+    facts.discoverable = true;
+    read();
+    facts.hasPasskey = true;
+    read();
+    facts.pairingName = QStringLiteral("MBP NJ");
+    read();
+    facts.hasPasskey = false;
+    facts.connectedName = QStringLiteral("MBP NJ");
+    read();
+    facts.streaming = true;
+    read();
+    for (const QString& line : std::as_const(lines)) {
+        EXPECT_FALSE(line.contains(QStringLiteral("phone"), Qt::CaseInsensitive))
+                << line.toStdString();
+    }
 }
 
 TEST(BluetoothStateTest, ConnectingUntilThePickedOneIsIn) {
@@ -108,7 +142,7 @@ TEST(BluetoothStateTest, ConnectingUntilThePickedOneIsIn) {
     // Picked and asked outranks the Pair window: the DJ chose.
     facts.discoverable = true;
     EXPECT_EQ(Status::Connecting, status(facts));
-    facts.phoneName = QStringLiteral("Pixel 9");
+    facts.connectedName = QStringLiteral("Pixel 9");
     EXPECT_EQ(Status::Connected, status(facts));
 }
 
@@ -123,14 +157,31 @@ TEST(BluetoothStateTest, OnlyThePickedDeviceIsLetIn) {
     EXPECT_FALSE(mayConnect(pixel, QString(), true, false));
     EXPECT_TRUE(mayConnect(pixel, pixel, true, false));
     // Another paired device trying to take over is refused, Pair window or
-    // not: pairing is for phones new to the deck.
+    // not: pairing is for devices new to the deck.
     EXPECT_FALSE(mayConnect(iphone, pixel, true, false));
     EXPECT_FALSE(mayConnect(iphone, pixel, true, true));
-    // A phone new to the deck, in the Pair window only.
+    // A device new to the deck, in the Pair window only.
     EXPECT_TRUE(mayConnect(iphone, pixel, false, true));
     EXPECT_FALSE(mayConnect(iphone, pixel, false, false));
     // No path is no device.
     EXPECT_FALSE(mayConnect(QString(), QString(), true, false));
+}
+
+TEST(BluetoothStateTest, TheStarredDeviceIsPickedWhenNothingIs) {
+    Device pixel;
+    pixel.path = QStringLiteral("/org/bluez/hci0/dev_AA");
+    Device iphone;
+    iphone.path = QStringLiteral("/org/bluez/hci0/dev_BB");
+    // Nothing starred: nothing is picked by the deck, on opening or after.
+    EXPECT_EQ(QString(), autoPick({pixel, iphone}, QString()));
+    // Starred, and nothing picked (the menu just opened): it is.
+    iphone.starred = true;
+    EXPECT_EQ(iphone.path, autoPick({pixel, iphone}, QString()));
+    // The DJ's own pick stands, the starred one's included.
+    EXPECT_EQ(QString(), autoPick({pixel, iphone}, pixel.path));
+    EXPECT_EQ(QString(), autoPick({pixel, iphone}, iphone.path));
+    // No devices, no pick.
+    EXPECT_EQ(QString(), autoPick({}, QString()));
 }
 
 TEST(BluetoothStateTest, DevicesByName) {
@@ -172,7 +223,7 @@ TEST(BluetoothStateTest, Times) {
 
 TEST(BluetoothStateTest, PasskeysInTwoGroupsOfThree) {
     EXPECT_EQ(QStringLiteral("123 456"), formatPasskey(123456));
-    // Leading zeros are digits the phone shows too.
+    // Leading zeros are digits the device shows too.
     EXPECT_EQ(QStringLiteral("000 042"), formatPasskey(42));
     EXPECT_EQ(QStringLiteral("999 999"), formatPasskey(999999));
 }
@@ -211,6 +262,57 @@ TEST(BluetoothStateTest, NoDurationNoCeiling) {
     facts.positionStampMs = 0;
     facts.playerStatus = QStringLiteral("playing");
     EXPECT_EQ(70000, positionNow(facts, 60000));
+}
+
+TEST(BluetoothStateTest, ABackwardJumpIsFollowed) {
+    // The device seeks back to the start: its position replaces the deck's,
+    // however far the deck had counted.
+    Facts facts;
+    facts.track.durationMs = 200000;
+    facts.playerStatus = QStringLiteral("playing");
+    setPosition(&facts, 90000, 1000);
+    EXPECT_EQ(100000, positionNow(facts, 11000));
+    setPosition(&facts, 0, 11000);
+    EXPECT_EQ(0, positionNow(facts, 11000));
+    EXPECT_EQ(2500, positionNow(facts, 13500));
+    // And forwards, past where it had counted to.
+    setPosition(&facts, 150000, 13500);
+    EXPECT_EQ(150000, positionNow(facts, 13500));
+}
+
+TEST(BluetoothStateTest, AStatusChangeKeepsThePositionReached) {
+    Facts facts;
+    facts.track.durationMs = 200000;
+    facts.playerStatus = QStringLiteral("playing");
+    setPosition(&facts, 10000, 0);
+    // Paused 5 s later: it stays where it got to.
+    setStatus(&facts, QStringLiteral("paused"), 5000);
+    EXPECT_EQ(QStringLiteral("paused"), facts.playerStatus);
+    EXPECT_EQ(15000, positionNow(facts, 5000));
+    EXPECT_EQ(15000, positionNow(facts, 60000));
+    // Playing again a minute on: from there, not from a minute later.
+    setStatus(&facts, QStringLiteral("playing"), 60000);
+    EXPECT_EQ(15000, positionNow(facts, 60000));
+    EXPECT_EQ(17000, positionNow(facts, 62000));
+}
+
+// ---------------------------------------------------------------------------
+// The deck's controls, for the device (Sam)
+// ---------------------------------------------------------------------------
+
+TEST(BluetoothStateTest, PlayPausesWhatPlaysAndPlaysTheRest) {
+    EXPECT_EQ(QStringLiteral("Pause"), playPauseMethod(QStringLiteral("playing")));
+    // Seeking as it plays is playing.
+    EXPECT_EQ(QStringLiteral("Pause"), playPauseMethod(QStringLiteral("forward-seek")));
+    EXPECT_EQ(QStringLiteral("Pause"), playPauseMethod(QStringLiteral("reverse-seek")));
+    EXPECT_EQ(QStringLiteral("Play"), playPauseMethod(QStringLiteral("paused")));
+    EXPECT_EQ(QStringLiteral("Play"), playPauseMethod(QStringLiteral("stopped")));
+    EXPECT_EQ(QStringLiteral("Play"), playPauseMethod(QStringLiteral("error")));
+    // A device that has said nothing yet: play is what is asked of it.
+    EXPECT_EQ(QStringLiteral("Play"), playPauseMethod(QString()));
+    EXPECT_TRUE(isPlaying(QStringLiteral("playing")));
+    EXPECT_FALSE(isPlaying(QStringLiteral("paused")));
+    EXPECT_FALSE(isPlaying(QString()));
 }
 
 // ---------------------------------------------------------------------------

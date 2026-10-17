@@ -5,6 +5,7 @@
 #include <QMouseEvent>
 #include <QPainter>
 #include <QPainterPath>
+#include <QtMath>
 
 #include "control/controlobject.h"
 #include "control/controlproxy.h"
@@ -41,6 +42,16 @@ constexpr int kListTop = 56;
 constexpr int kRowHeight = 60;
 constexpr int kRowGap = 8;
 constexpr int kStatusRoom = 40;
+/// A row's star and bin: squares as high as the row, after it.
+constexpr int kIconGap = 8;
+/// + in the list's corner, beside the headline.
+constexpr int kPairWidth = 60;
+constexpr int kPairHeight = 48;
+/// The device's buttons under the time: previous, play-pause, next.
+constexpr int kTransportWidth = 96;
+constexpr int kTransportGap = 24;
+/// The marks drawn in buttons, as the deck's other marks are: strokes.
+constexpr qreal kMarkPen = 2.5;
 
 QFont sized(const QFont& base, int pixels, bool bold = false) {
     QFont font(base);
@@ -60,6 +71,109 @@ void drawLine(QPainter* pPainter,
     pPainter->setFont(font);
     pPainter->setPen(colour);
     pPainter->drawText(x, baseline, QFontMetrics(font).elidedText(text, Qt::ElideRight, width));
+}
+
+/// A button's ground: the accent when focused, else dark with a rim.
+void paintGround(QPainter* pPainter, const QRect& rect, bool focused, const QColor& accent) {
+    QPainterPath path;
+    path.addRoundedRect(QRectF(rect).adjusted(0.5, 0.5, -0.5, -0.5), 8, 8);
+    pPainter->fillPath(path, focused ? accent : kButton);
+    if (!focused) {
+        pPainter->setBrush(Qt::NoBrush);
+        pPainter->setPen(QPen(kButtonBorder, 1));
+        pPainter->drawPath(path);
+    }
+}
+
+/// ▶, about *centre*.
+void paintPlayMark(QPainter* pPainter, const QPointF& centre, qreal size, const QColor& colour) {
+    QPainterPath triangle;
+    triangle.moveTo(centre + QPointF(-size * 0.35, -size * 0.45));
+    triangle.lineTo(centre + QPointF(size * 0.5, 0));
+    triangle.lineTo(centre + QPointF(-size * 0.35, size * 0.45));
+    triangle.closeSubpath();
+    pPainter->fillPath(triangle, colour);
+}
+
+/// ❚❚, about *centre*.
+void paintPauseMark(QPainter* pPainter, const QPointF& centre, qreal size, const QColor& colour) {
+    const qreal bar = size * 0.28;
+    const qreal height = size * 0.9;
+    pPainter->fillRect(QRectF(centre.x() - size * 0.38, centre.y() - height / 2, bar, height),
+            colour);
+    pPainter->fillRect(QRectF(centre.x() + size * 0.1, centre.y() - height / 2, bar, height),
+            colour);
+}
+
+/// ⏭ (forward) or ⏮: a triangle, and a bar at its point.
+void paintSkipMark(QPainter* pPainter,
+        const QPointF& centre,
+        qreal size,
+        const QColor& colour,
+        bool forward) {
+    const qreal side = forward ? 1.0 : -1.0;
+    QPainterPath triangle;
+    triangle.moveTo(centre + QPointF(-side * size * 0.45, -size * 0.45));
+    triangle.lineTo(centre + QPointF(side * size * 0.3, 0));
+    triangle.lineTo(centre + QPointF(-side * size * 0.45, size * 0.45));
+    triangle.closeSubpath();
+    pPainter->fillPath(triangle, colour);
+    const qreal bar = size * 0.16;
+    const qreal x = forward ? centre.x() + size * 0.3 : centre.x() - size * 0.3 - bar;
+    pPainter->fillRect(QRectF(x, centre.y() - size * 0.45, bar, size * 0.9), colour);
+}
+
+/// A five-pointed star: filled for the starred device, an outline otherwise.
+void paintStarMark(QPainter* pPainter,
+        const QPointF& centre,
+        qreal size,
+        const QColor& colour,
+        bool filled) {
+    QPolygonF star;
+    for (int i = 0; i < 10; ++i) {
+        const qreal radius = (i % 2 == 0 ? 0.5 : 0.21) * size;
+        const qreal angle = qDegreesToRadians(-90.0 + 36.0 * i);
+        star << centre + QPointF(radius * qCos(angle), radius * qSin(angle));
+    }
+    QPen pen(colour, kMarkPen);
+    pen.setJoinStyle(Qt::RoundJoin);
+    pPainter->setPen(pen);
+    pPainter->setBrush(filled ? QBrush(colour) : Qt::NoBrush);
+    pPainter->drawPolygon(star);
+}
+
+/// A bin: its lid with a handle, and its body with two ribs.
+void paintBinMark(QPainter* pPainter, const QPointF& centre, qreal size, const QColor& colour) {
+    QPen pen(colour, kMarkPen);
+    pen.setCapStyle(Qt::RoundCap);
+    pen.setJoinStyle(Qt::RoundJoin);
+    pPainter->setPen(pen);
+    pPainter->setBrush(Qt::NoBrush);
+    const qreal top = centre.y() - size * 0.42;
+    const qreal lid = top + size * 0.14;
+    const qreal bottom = centre.y() + size * 0.45;
+    pPainter->drawLine(QPointF(centre.x() - size * 0.42, lid), QPointF(centre.x() + size * 0.42, lid));
+    pPainter->drawPolyline(QPolygonF{QPointF(centre.x() - size * 0.12, lid),
+            QPointF(centre.x() - size * 0.12, top),
+            QPointF(centre.x() + size * 0.12, top),
+            QPointF(centre.x() + size * 0.12, lid)});
+    pPainter->drawPolygon(QPolygonF{QPointF(centre.x() - size * 0.32, lid),
+            QPointF(centre.x() - size * 0.25, bottom),
+            QPointF(centre.x() + size * 0.25, bottom),
+            QPointF(centre.x() + size * 0.32, lid)});
+    pPainter->drawLine(QPointF(centre.x() - size * 0.08, lid + size * 0.16),
+            QPointF(centre.x() - size * 0.08, bottom - size * 0.14));
+    pPainter->drawLine(QPointF(centre.x() + size * 0.08, lid + size * 0.16),
+            QPointF(centre.x() + size * 0.08, bottom - size * 0.14));
+}
+
+/// +.
+void paintPlusMark(QPainter* pPainter, const QPointF& centre, qreal size, const QColor& colour) {
+    QPen pen(colour, kMarkPen + 0.5);
+    pen.setCapStyle(Qt::RoundCap);
+    pPainter->setPen(pen);
+    pPainter->drawLine(centre + QPointF(-size / 2, 0), centre + QPointF(size / 2, 0));
+    pPainter->drawLine(centre + QPointF(0, -size / 2), centre + QPointF(0, size / 2));
 }
 
 /// Black over the whole window while the screen is off: it is what is seen on
@@ -146,7 +260,6 @@ WDeckBluetooth::~WDeckBluetooth() {
 void WDeckBluetooth::showEvent(QShowEvent* pEvent) {
     QWidget::showEvent(pEvent);
     m_devicesAsked = false;
-    m_forgetting = false;
     m_forgetPath.clear();
     m_pressRow = -1;
     focusFirst();
@@ -206,35 +319,43 @@ void WDeckBluetooth::onChanged() {
         m_cover = coverPath.isEmpty() ? QPixmap() : QPixmap(coverPath);
     }
     const bluetooth::Facts& facts = m_pReceiver->facts();
-    if (facts.phoneName != m_phoneName) {
-        m_phoneName = facts.phoneName;
+    if (facts.connectedName != m_connectedName) {
+        m_connectedName = facts.connectedName;
         // The one picked came in, or went: what it plays, or the list.
-        if (!m_forgetting) {
+        if (m_forgetPath.isEmpty()) {
             m_devicesAsked = false;
-            focusFirst();
         }
     }
-    if (m_forgetting) {
-        bool there = m_forgetPath.isEmpty();
+    if (!m_forgetPath.isEmpty()) {
+        bool there = false;
         for (const bluetooth::Device& device : facts.devices) {
             there = there || device.path == m_forgetPath;
         }
-        if (!there || facts.devices.isEmpty()) {
+        if (!there) {
             // Gone meanwhile (forgotten, or the radio went): nothing to ask.
-            m_forgetting = false;
             m_forgetPath.clear();
-            focusFirst();
         }
     }
-    // A button keeps the focus as rows come and go; the first item stays the
-    // first, so the first device listed takes it from Pair.
-    const int rows = rowCount();
-    if (m_focus >= m_rowsSeen && !(m_focus == 0 && m_rowsSeen == 0)) {
-        m_focus += rows - m_rowsSeen;
+    // A new view starts where it starts; the same one keeps the focus where it
+    // was, on the same row as rows come and go, or as near as there is.
+    const View now = view();
+    const int rows = static_cast<int>(facts.devices.size());
+    if (now != m_viewSeen) {
+        focusFirst();
+    } else if (rows != m_rowsSeen) {
+        const QList<Press> list = presses();
+        const Press was = m_focusPress;
+        if (!list.contains(was)) {
+            if (was.row >= rows && rows > 0) {
+                m_focusPress = Press{was.item, rows - 1};
+            } else {
+                focusFirst();
+            }
+        }
     }
+    m_viewSeen = now;
     m_rowsSeen = rows;
-    m_focus = qBound(0, m_focus, itemCount() - 1);
-    if (facts.playerStatus == QStringLiteral("playing") && isVisible()) {
+    if (bluetooth::isPlaying(facts.playerStatus) && isVisible()) {
         m_tick.start();
     } else {
         m_tick.stop();
@@ -250,51 +371,59 @@ WDeckBluetooth::View WDeckBluetooth::view() const {
     if (!m_forgetPath.isEmpty()) {
         return View::ForgetConfirm;
     }
-    if (m_forgetting) {
-        return View::ForgetWhich;
-    }
-    if (!facts.phoneName.isEmpty() && !m_devicesAsked) {
+    if (!facts.connectedName.isEmpty() && !m_devicesAsked) {
         return View::Track;
     }
     return View::Devices;
 }
 
-int WDeckBluetooth::rowCount() const {
-    const View now = view();
-    return now == View::Devices || now == View::ForgetWhich
-            ? static_cast<int>(m_pReceiver->facts().devices.size())
-            : 0;
-}
-
-QList<WDeckBluetooth::Button> WDeckBluetooth::buttons() const {
+QList<WDeckBluetooth::Press> WDeckBluetooth::presses() const {
     switch (view()) {
     case View::Code:
-        return {Button::Confirm, Button::Cancel};
+        return {{Item::Confirm}, {Item::Cancel}};
     case View::Track:
-        return {Button::Pair, Button::Devices, Button::ScreenOff};
-    case View::Devices:
-        if (m_pReceiver->facts().devices.isEmpty()) {
-            return {Button::Pair, Button::ScreenOff};
+        return {{Item::Previous},
+                {Item::PlayPause},
+                {Item::Next},
+                {Item::Devices},
+                {Item::ScreenOff}};
+    case View::Devices: {
+        // + first, as it is above the rows: the encoder starts on the first
+        // row, and one turn back reaches it.
+        QList<Press> list{{Item::Pair}};
+        const int rows = static_cast<int>(m_pReceiver->facts().devices.size());
+        for (int row = 0; row < rows; ++row) {
+            list << Press{Item::Row, row} << Press{Item::Star, row} << Press{Item::Bin, row};
         }
-        return {Button::Pair, Button::Forget, Button::ScreenOff};
-    case View::ForgetWhich:
-        return {Button::Cancel};
+        list << Press{Item::ScreenOff};
+        return list;
+    }
     case View::ForgetConfirm:
-        return {Button::ForgetIt, Button::Keep};
+        return {{Item::ForgetIt}, {Item::Keep}};
     }
     return {};
 }
 
-int WDeckBluetooth::itemCount() const {
-    return rowCount() + static_cast<int>(buttons().size());
-}
-
 void WDeckBluetooth::focusFirst() {
-    m_focus = 0;
-    m_rowsSeen = rowCount();
+    switch (view()) {
+    case View::Code:
+        m_focusPress = Press{Item::Confirm};
+        break;
+    case View::Track:
+        m_focusPress = Press{Item::PlayPause};
+        break;
+    case View::Devices:
+        m_focusPress = m_pReceiver->facts().devices.isEmpty() ? Press{Item::Pair}
+                                                              : Press{Item::Row, 0};
+        break;
+    case View::ForgetConfirm:
+        // On Keep: forgetting is the deliberate choice, one more move away.
+        m_focusPress = Press{Item::Keep};
+        break;
+    }
 }
 
-QRect WDeckBluetooth::buttonRect(int index) const {
+QRect WDeckBluetooth::footRect(int index) const {
     return QRect(kMargin + index * (kButtonWidth + kButtonGap),
             height() - kBottom - kButtonHeight,
             kButtonWidth,
@@ -314,21 +443,84 @@ int WDeckBluetooth::visibleRows() const {
 
 int WDeckBluetooth::firstVisibleRow() const {
     // Scrolled just enough for the focused row; from the top otherwise.
-    return m_focus < rowCount() ? qMax(0, m_focus - visibleRows() + 1) : 0;
+    return m_focusPress.row >= 0 ? qMax(0, m_focusPress.row - visibleRows() + 1) : 0;
 }
 
 QRect WDeckBluetooth::rowRect(int row) const {
     const QRect area = column();
     const int index = row - firstVisibleRow();
+    if (index < 0 || index >= visibleRows()) {
+        return QRect();
+    }
     return QRect(area.left(),
             area.top() + kListTop + index * (kRowHeight + kRowGap),
-            area.width(),
+            area.width() - 2 * (kRowHeight + kIconGap),
             kRowHeight);
 }
 
+QRect WDeckBluetooth::rectOf(const Press& press) const {
+    const QRect area = column();
+    // The time's baseline, half way down the column, and the device's
+    // buttons under it.
+    const int transportTop = area.top() + area.height() / 2 + 28;
+    const int transportLeft = area.left() +
+            (area.width() - 3 * kTransportWidth - 2 * kTransportGap) / 2;
+    switch (press.item) {
+    case Item::Row:
+        return rowRect(press.row);
+    case Item::Star:
+    case Item::Bin: {
+        const QRect row = rowRect(press.row);
+        if (row.isNull()) {
+            return QRect();
+        }
+        const int step = press.item == Item::Star ? 0 : 1;
+        return QRect(row.right() + 1 + kIconGap + step * (kRowHeight + kIconGap),
+                row.top(),
+                kRowHeight,
+                kRowHeight);
+    }
+    case Item::Pair:
+        return QRect(area.right() + 1 - kPairWidth, area.top(), kPairWidth, kPairHeight);
+    case Item::Previous:
+    case Item::PlayPause:
+    case Item::Next: {
+        const int index = press.item == Item::Previous ? 0 : press.item == Item::PlayPause ? 1 : 2;
+        return QRect(transportLeft + index * (kTransportWidth + kTransportGap),
+                transportTop,
+                kTransportWidth,
+                kButtonHeight);
+    }
+    default:
+        break;
+    }
+    // At the foot, in the order listed.
+    int index = 0;
+    for (const Press& listed : presses()) {
+        if (listed.item == press.item) {
+            return footRect(index);
+        }
+        switch (listed.item) {
+        case Item::Devices:
+        case Item::ScreenOff:
+        case Item::Confirm:
+        case Item::Cancel:
+        case Item::ForgetIt:
+        case Item::Keep:
+            ++index;
+            break;
+        default:
+            break;
+        }
+    }
+    return QRect();
+}
+
 int WDeckBluetooth::rowAt(const QPoint& point) const {
-    const int last = qMin(rowCount(), firstVisibleRow() + visibleRows());
-    for (int row = firstVisibleRow(); row < last; ++row) {
+    const int rows = view() == View::Devices
+            ? static_cast<int>(m_pReceiver->facts().devices.size())
+            : 0;
+    for (int row = 0; row < rows; ++row) {
         if (rowRect(row).contains(point)) {
             return row;
         }
@@ -336,97 +528,97 @@ int WDeckBluetooth::rowAt(const QPoint& point) const {
     return -1;
 }
 
-QString WDeckBluetooth::buttonText(Button button) const {
-    switch (button) {
-    case Button::Pair:
-        return m_pReceiver->facts().discoverable ? tr("Pairing…") : tr("Pair");
-    case Button::Devices:
+QString WDeckBluetooth::footText(Item item) const {
+    switch (item) {
+    case Item::Devices:
         return tr("Devices");
-    case Button::Forget:
-        return tr("Forget");
-    case Button::ScreenOff:
+    case Item::ScreenOff:
         return tr("Screen off");
-    case Button::Confirm:
+    case Item::Confirm:
         return tr("Confirm");
-    case Button::Cancel:
+    case Item::Cancel:
         return tr("Cancel");
-    case Button::ForgetIt:
+    case Item::ForgetIt:
         return tr("Forget");
-    case Button::Keep:
+    case Item::Keep:
         return tr("Keep");
+    default:
+        return QString();
     }
-    return QString();
 }
 
-void WDeckBluetooth::press(Button button) {
+void WDeckBluetooth::press(const Press& press) {
     const bluetooth::Facts& facts = m_pReceiver->facts();
-    switch (button) {
-    case Button::Pair:
+    const QString path = facts.devices.value(press.row).path;
+    switch (press.item) {
+    case Item::Row: {
+        if (press.row < 0 || press.row >= facts.devices.size()) {
+            break;
+        }
+        const bluetooth::Device& device = facts.devices.at(press.row);
+        if (device.picked && device.connected) {
+            // The one playing already: back to what it plays.
+            m_devicesAsked = false;
+            focusFirst();
+            break;
+        }
+        m_pReceiver->pick(device.path);
+        break;
+    }
+    case Item::Star:
+        if (!path.isEmpty()) {
+            m_pReceiver->star(path);
+        }
+        break;
+    case Item::Bin:
+        askToForget(press.row);
+        break;
+    case Item::Pair:
         m_pReceiver->pair();
         break;
-    case Button::Devices:
+    case Item::Previous:
+        m_pReceiver->previous();
+        break;
+    case Item::PlayPause:
+        m_pReceiver->playPause();
+        break;
+    case Item::Next:
+        m_pReceiver->next();
+        break;
+    case Item::Devices:
         m_devicesAsked = true;
-        focusFirst();
         // From the one playing.
+        focusFirst();
         for (int i = 0; i < facts.devices.size(); ++i) {
             if (facts.devices.at(i).picked) {
-                m_focus = i;
+                m_focusPress = Press{Item::Row, i};
             }
         }
+        m_viewSeen = view();
         break;
-    case Button::Forget:
-        m_forgetting = true;
-        focusFirst();
-        break;
-    case Button::ScreenOff:
+    case Item::ScreenOff:
         m_pReceiver->screenOffControl()->set(1.0);
         break;
-    case Button::Confirm:
+    case Item::Confirm:
         m_pReceiver->answerPairing(true);
         break;
-    case Button::Cancel:
-        if (view() == View::ForgetWhich) {
-            m_forgetting = false;
-            focusFirst();
-        } else {
-            m_pReceiver->answerPairing(false);
-        }
+    case Item::Cancel:
+        m_pReceiver->answerPairing(false);
         break;
-    case Button::ForgetIt:
+    case Item::ForgetIt:
         m_pReceiver->forget(m_forgetPath);
         m_forgetPath.clear();
         m_forgetName.clear();
-        m_forgetting = false;
         focusFirst();
+        m_viewSeen = view();
         break;
-    case Button::Keep:
+    case Item::Keep:
         m_forgetPath.clear();
         m_forgetName.clear();
-        m_forgetting = false;
         focusFirst();
+        m_viewSeen = view();
         break;
     }
-    update();
-}
-
-void WDeckBluetooth::activateRow(int row) {
-    const QList<bluetooth::Device>& devices = m_pReceiver->facts().devices;
-    if (row < 0 || row >= devices.size()) {
-        return;
-    }
-    if (view() == View::ForgetWhich) {
-        askToForget(row);
-        return;
-    }
-    const bluetooth::Device& device = devices.at(row);
-    if (device.picked && device.connected) {
-        // The one playing already: back to what it plays.
-        m_devicesAsked = false;
-        focusFirst();
-        update();
-        return;
-    }
-    m_pReceiver->pick(device.path);
     update();
 }
 
@@ -435,30 +627,30 @@ void WDeckBluetooth::askToForget(int row) {
     if (row < 0 || row >= devices.size()) {
         return;
     }
-    m_forgetting = true;
     m_forgetPath = devices.at(row).path;
     m_forgetName = devices.at(row).name;
-    // On Keep: forgetting is the deliberate choice, one more move away.
-    m_focus = 1;
-    m_rowsSeen = 0;
+    focusFirst();
+    m_viewSeen = view();
     update();
 }
 
 bool WDeckBluetooth::handleMove(int steps) {
     // Never wraps, as the deck's lists: the ends are where they look.
-    m_focus = qBound(0, m_focus + steps, itemCount() - 1);
+    const QList<Press> list = presses();
+    if (list.isEmpty()) {
+        return true;
+    }
+    const int at = qMax(0, static_cast<int>(list.indexOf(m_focusPress)));
+    m_focusPress = list.at(qBound(0, at + steps, static_cast<int>(list.size()) - 1));
     update();
     return true;
 }
 
 bool WDeckBluetooth::handleSelect() {
-    const int rows = rowCount();
-    if (m_focus < rows) {
-        activateRow(m_focus);
-        return true;
+    const QList<Press> list = presses();
+    if (list.contains(m_focusPress)) {
+        press(m_focusPress);
     }
-    const QList<Button> row = buttons();
-    press(row.value(m_focus - rows, row.first()));
     return true;
 }
 
@@ -470,18 +662,14 @@ bool WDeckBluetooth::handleBack() {
     }
     switch (view()) {
     case View::ForgetConfirm:
-        press(Button::Keep);
-        return true;
-    case View::ForgetWhich:
-        m_forgetting = false;
-        focusFirst();
-        update();
+        press(Press{Item::Keep});
         return true;
     case View::Devices:
-        if (m_devicesAsked && !m_pReceiver->facts().phoneName.isEmpty()) {
+        if (m_devicesAsked && !m_pReceiver->facts().connectedName.isEmpty()) {
             // The list over what plays: back to it.
             m_devicesAsked = false;
             focusFirst();
+            m_viewSeen = view();
             update();
             return true;
         }
@@ -493,25 +681,26 @@ bool WDeckBluetooth::handleBack() {
 
 void WDeckBluetooth::mousePressEvent(QMouseEvent* pEvent) {
     const QPoint point = pEvent->position().toPoint();
-    const QList<Button> row = buttons();
-    for (int i = 0; i < row.size(); ++i) {
-        if (buttonRect(i).contains(point)) {
-            m_focus = rowCount() + i;
-            press(row.at(i));
-            return;
-        }
-    }
     // A row acts on release: held past the long press, it is forgotten
     // instead (asked first).
     const int pressed = rowAt(point);
     if (pressed >= 0) {
         m_pressRow = pressed;
         m_pressConsumed = false;
-        m_focus = pressed;
+        m_focusPress = Press{Item::Row, pressed};
         m_longPressTimer.start();
         update();
         pEvent->accept();
         return;
+    }
+    // Everything else on the press, as the deck's buttons.
+    for (const Press& listed : presses()) {
+        if (listed.item != Item::Row && rectOf(listed).contains(point)) {
+            m_focusPress = listed;
+            press(listed);
+            pEvent->accept();
+            return;
+        }
     }
     QWidget::mousePressEvent(pEvent);
 }
@@ -524,7 +713,7 @@ void WDeckBluetooth::mouseReleaseEvent(QMouseEvent* pEvent) {
     m_pressConsumed = false;
     if (pressed >= 0) {
         if (!consumed && rowAt(pEvent->position().toPoint()) == pressed) {
-            activateRow(pressed);
+            press(Press{Item::Row, pressed});
         }
         pEvent->accept();
         return;
@@ -548,14 +737,13 @@ void WDeckBluetooth::paintEvent(QPaintEvent* pEvent) {
         paintTrack(&painter, area);
         break;
     case View::Devices:
-    case View::ForgetWhich:
         paintDevices(&painter, area);
         break;
     case View::ForgetConfirm:
         paintForgetConfirm(&painter, area);
         break;
     }
-    paintButtons(&painter);
+    paintPresses(&painter);
 }
 
 void WDeckBluetooth::paintCover(QPainter* pPainter, const QRect& rect) const {
@@ -568,7 +756,7 @@ void WDeckBluetooth::paintCover(QPainter* pPainter, const QRect& rect) const {
                 scaled);
         return;
     }
-    // No cover from the phone: the rune, which is what this page is.
+    // No cover from the device: the rune, which is what this page is.
     QPainterPath backdrop;
     backdrop.addRoundedRect(rect, 12, 12);
     pPainter->fillPath(backdrop, kCoverBackdrop);
@@ -583,7 +771,6 @@ void WDeckBluetooth::paintCover(QPainter* pPainter, const QRect& rect) const {
 
 void WDeckBluetooth::paintTrack(QPainter* pPainter, const QRect& rect) const {
     const bluetooth::Facts& facts = m_pReceiver->facts();
-    const bluetooth::Status status = bluetooth::status(facts);
     const bool hasTrack = !facts.track.title.isEmpty();
     int y = rect.top();
 
@@ -613,21 +800,27 @@ void WDeckBluetooth::paintTrack(QPainter* pPainter, const QRect& rect) const {
                 rect.width(),
                 facts.track.album);
     } else {
-        // Nothing to show yet: what the receiver is doing is the headline.
+        // Nothing to show yet: the device is the headline.
         y += 34;
-        const QString headline = status == bluetooth::Status::Playing ||
-                        status == bluetooth::Status::Connected
-                ? facts.phoneName
-                : tr("Bluetooth receiver");
-        drawLine(pPainter, sized(font(), 32, true), kTitle, rect.left(), y, rect.width(), headline);
+        drawLine(pPainter,
+                sized(font(), 32, true),
+                kTitle,
+                rect.left(),
+                y,
+                rect.width(),
+                facts.connectedName);
         y += 40;
-        const QString hint = status == bluetooth::Status::Connected
-                ? tr("Play something on the phone.")
-                : QString();
-        drawLine(pPainter, sized(font(), 20), kArtist, rect.left(), y, rect.width(), hint);
+        drawLine(pPainter,
+                sized(font(), 20),
+                kArtist,
+                rect.left(),
+                y,
+                rect.width(),
+                tr("Play something on the device."));
     }
 
-    // Where in the track: a bar, the time either side.
+    // Where in the track: a bar, the time either side, half way down; the
+    // device's buttons under it (paintPresses()).
     if (hasTrack) {
         const qint64 position = bluetooth::positionNow(facts, m_pReceiver->nowMs());
         const QFont timeFont = sized(font(), 20);
@@ -635,7 +828,7 @@ void WDeckBluetooth::paintTrack(QPainter* pPainter, const QRect& rect) const {
         const QString elapsed = bluetooth::formatTime(position);
         const QString total = bluetooth::formatTime(
                 facts.track.durationMs > 0 ? facts.track.durationMs : -1);
-        const int baseline = rect.top() + rect.height() * 2 / 3;
+        const int baseline = rect.top() + rect.height() / 2;
         const int timeWidth = metrics.horizontalAdvance(QStringLiteral("00:00:00"));
         pPainter->setFont(timeFont);
         pPainter->setPen(kTitle);
@@ -658,14 +851,11 @@ void WDeckBluetooth::paintTrack(QPainter* pPainter, const QRect& rect) const {
 void WDeckBluetooth::paintDevices(QPainter* pPainter, const QRect& rect) const {
     const bluetooth::Facts& facts = m_pReceiver->facts();
     const bluetooth::Status status = bluetooth::status(facts);
-    const bool forgetting = view() == View::ForgetWhich;
     QString headline;
-    if (forgetting) {
-        headline = tr("Forget which phone?");
-    } else if (!facts.devices.isEmpty()) {
-        headline = tr("Pick a phone");
+    if (!facts.devices.isEmpty()) {
+        headline = tr("Pick a device");
     } else if (status == bluetooth::Status::Waiting) {
-        headline = tr("No phone paired yet");
+        headline = tr("No device paired yet");
     } else {
         headline = tr("Bluetooth receiver");
     }
@@ -674,15 +864,15 @@ void WDeckBluetooth::paintDevices(QPainter* pPainter, const QRect& rect) const {
             kTitle,
             rect.left(),
             rect.top() + 34,
-            rect.width(),
+            rect.width() - kPairWidth - kIconGap,
             headline);
 
     if (facts.devices.isEmpty()) {
         QString hint;
         if (status == bluetooth::Status::Pairing) {
-            hint = tr("On the phone: Bluetooth, then %1.").arg(m_pReceiver->deckName());
+            hint = tr("On the device: Bluetooth, then %1.").arg(m_pReceiver->deckName());
         } else if (status == bluetooth::Status::Waiting) {
-            hint = tr("Press Pair, then choose %1 on the phone.").arg(m_pReceiver->deckName());
+            hint = tr("Press +, then choose %1 on the device.").arg(m_pReceiver->deckName());
         }
         drawLine(pPainter,
                 sized(font(), 20),
@@ -691,55 +881,6 @@ void WDeckBluetooth::paintDevices(QPainter* pPainter, const QRect& rect) const {
                 rect.top() + 74,
                 rect.width(),
                 hint);
-        paintStatus(pPainter, rect);
-        return;
-    }
-
-    const QFont nameFont = sized(font(), 22, true);
-    const QFont detailFont = sized(font(), 20);
-    const int last = qMin(static_cast<int>(facts.devices.size()),
-            firstVisibleRow() + visibleRows());
-    for (int i = firstVisibleRow(); i < last; ++i) {
-        const bluetooth::Device& device = facts.devices.at(i);
-        const QRect row = rowRect(i);
-        const bool focused = i == m_focus;
-        QPainterPath path;
-        path.addRoundedRect(QRectF(row).adjusted(0.5, 0.5, -0.5, -0.5), 8, 8);
-        pPainter->fillPath(path, focused ? m_accent : kButton);
-        if (!focused) {
-            pPainter->setBrush(Qt::NoBrush);
-            pPainter->setPen(QPen(kButtonBorder, 1));
-            pPainter->drawPath(path);
-        }
-        // What the one picked is doing, at the row's end.
-        QString detail;
-        if (!forgetting && device.picked) {
-            if (device.connected) {
-                detail = facts.streaming ? tr("Playing") : tr("Connected");
-            } else if (!facts.connectingName.isEmpty()) {
-                detail = tr("Connecting…");
-            }
-        }
-        const int detailWidth = detail.isEmpty()
-                ? 0
-                : QFontMetrics(detailFont).horizontalAdvance(detail) + 20;
-        const int baseline = row.top() + row.height() / 2 + 8;
-        drawLine(pPainter,
-                nameFont,
-                focused ? QColor(Qt::black) : kTitle,
-                row.left() + 20,
-                baseline,
-                row.width() - 40 - detailWidth,
-                device.name);
-        if (!detail.isEmpty()) {
-            drawLine(pPainter,
-                    detailFont,
-                    focused ? QColor(Qt::black) : m_accent,
-                    row.right() - detailWidth,
-                    baseline,
-                    detailWidth,
-                    detail);
-        }
     }
     paintStatus(pPainter, rect);
 }
@@ -785,7 +926,7 @@ void WDeckBluetooth::paintCode(QPainter* pPainter, const QRect& rect) const {
             y,
             rect.width(),
             tr("Pair with %1?")
-                    .arg(facts.pairingName.isEmpty() ? tr("a phone")
+                    .arg(facts.pairingName.isEmpty() ? tr("a device")
                                                      : facts.pairingName));
     y += 40;
     drawLine(pPainter,
@@ -794,7 +935,7 @@ void WDeckBluetooth::paintCode(QPainter* pPainter, const QRect& rect) const {
             rect.left(),
             y,
             rect.width(),
-            tr("Confirm if the phone shows the same code."));
+            tr("Confirm if the device shows the same code."));
     const QFont codeFont = sized(font(), 88, true);
     pPainter->setFont(codeFont);
     pPainter->setPen(m_accent);
@@ -803,24 +944,106 @@ void WDeckBluetooth::paintCode(QPainter* pPainter, const QRect& rect) const {
             bluetooth::formatPasskey(facts.passkey));
 }
 
-void WDeckBluetooth::paintButtons(QPainter* pPainter) const {
-    const QList<Button> row = buttons();
-    const int rows = rowCount();
-    const QFont font = sized(this->font(), 22, true);
-    pPainter->setFont(font);
-    for (int i = 0; i < row.size(); ++i) {
-        const QRect rect = buttonRect(i);
-        const bool focused = rows + i == m_focus;
-        QPainterPath path;
-        path.addRoundedRect(QRectF(rect).adjusted(0.5, 0.5, -0.5, -0.5), 8, 8);
-        pPainter->fillPath(path, focused ? m_accent : kButton);
-        if (!focused) {
-            pPainter->setBrush(Qt::NoBrush);
-            pPainter->setPen(QPen(kButtonBorder, 1));
-            pPainter->drawPath(path);
+void WDeckBluetooth::paintPresses(QPainter* pPainter) const {
+    const bluetooth::Facts& facts = m_pReceiver->facts();
+    const QFont footFont = sized(font(), 22, true);
+    const QFont nameFont = sized(font(), 22, true);
+    const QFont detailFont = sized(font(), 20);
+    for (const Press& listed : presses()) {
+        const QRect rect = rectOf(listed);
+        if (rect.isNull()) {
+            continue; // a row scrolled out of view, and its star and bin
         }
-        pPainter->setPen(focused ? QColor(Qt::black) : kTitle);
-        pPainter->drawText(rect, Qt::AlignCenter, buttonText(row.at(i)));
+        const bool focused = listed == m_focusPress;
+        const QColor mark = focused ? QColor(Qt::black) : kTitle;
+        const QPointF centre = QRectF(rect).center();
+        const bluetooth::Device device = facts.devices.value(listed.row);
+        switch (listed.item) {
+        case Item::Row: {
+            paintGround(pPainter, rect, focused, m_accent);
+            // What the one picked is doing, at the row's end.
+            QString detail;
+            if (device.picked) {
+                if (device.connected) {
+                    detail = facts.streaming ? tr("Playing") : tr("Connected");
+                } else if (!facts.connectingName.isEmpty()) {
+                    detail = tr("Connecting…");
+                }
+            }
+            const int detailWidth = detail.isEmpty()
+                    ? 0
+                    : QFontMetrics(detailFont).horizontalAdvance(detail) + 20;
+            const int baseline = rect.top() + rect.height() / 2 + 8;
+            drawLine(pPainter,
+                    nameFont,
+                    mark,
+                    rect.left() + 20,
+                    baseline,
+                    rect.width() - 40 - detailWidth,
+                    device.name);
+            if (!detail.isEmpty()) {
+                drawLine(pPainter,
+                        detailFont,
+                        focused ? QColor(Qt::black) : m_accent,
+                        rect.right() - detailWidth,
+                        baseline,
+                        detailWidth,
+                        detail);
+            }
+            break;
+        }
+        case Item::Star:
+            paintGround(pPainter, rect, focused, m_accent);
+            // The starred one in the accent, the others a quiet outline.
+            paintStarMark(pPainter,
+                    centre,
+                    rect.height() * 0.5,
+                    focused ? QColor(Qt::black) : (device.starred ? m_accent : kArtist),
+                    device.starred);
+            break;
+        case Item::Bin:
+            paintGround(pPainter, rect, focused, m_accent);
+            paintBinMark(pPainter, centre, rect.height() * 0.42, focused ? mark : kArtist);
+            break;
+        case Item::Pair:
+            paintGround(pPainter, rect, focused, m_accent);
+            if (facts.discoverable && !focused) {
+                // Visible to devices: the + in the deck's colour, ringed.
+                QPainterPath path;
+                path.addRoundedRect(QRectF(rect).adjusted(1, 1, -1, -1), 8, 8);
+                pPainter->setBrush(Qt::NoBrush);
+                pPainter->setPen(QPen(m_accent, 2));
+                pPainter->drawPath(path);
+            }
+            paintPlusMark(pPainter,
+                    centre,
+                    rect.height() * 0.42,
+                    focused ? mark : (facts.discoverable ? m_accent : kTitle));
+            break;
+        case Item::Previous:
+            paintGround(pPainter, rect, focused, m_accent);
+            paintSkipMark(pPainter, centre, rect.height() * 0.36, mark, false);
+            break;
+        case Item::PlayPause:
+            paintGround(pPainter, rect, focused, m_accent);
+            // What a press does next: pause while it plays.
+            if (bluetooth::isPlaying(facts.playerStatus)) {
+                paintPauseMark(pPainter, centre, rect.height() * 0.4, mark);
+            } else {
+                paintPlayMark(pPainter, centre, rect.height() * 0.4, mark);
+            }
+            break;
+        case Item::Next:
+            paintGround(pPainter, rect, focused, m_accent);
+            paintSkipMark(pPainter, centre, rect.height() * 0.36, mark, true);
+            break;
+        default:
+            paintGround(pPainter, rect, focused, m_accent);
+            pPainter->setFont(footFont);
+            pPainter->setPen(mark);
+            pPainter->drawText(rect, Qt::AlignCenter, footText(listed.item));
+            break;
+        }
     }
 }
 

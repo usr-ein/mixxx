@@ -9,19 +9,20 @@ namespace deck {
 
 /// The Bluetooth receiver's rules, apart from Bluetooth: what it says it is
 /// doing, how its times and its pairing code read, and when its screen goes
-/// off. Pure, so that they are tested without a radio, a phone or a bus
+/// off. Pure, so that they are tested without a radio, a device or a bus
 /// (BluetoothReceiver gathers the facts; WDeckBluetooth shows them).
 namespace bluetooth {
 
-/// What the phone says it is playing: AVRCP, as BlueZ's MediaPlayer1 has it.
+/// What the device says it is playing: AVRCP, as BlueZ's MediaPlayer1 has it.
 struct Track {
     QString title;
     QString artist;
     QString album;
-    /// 0 when the phone gives none.
+    /// 0 when the device gives none.
     qint64 durationMs = 0;
-    /// The cover's handle for AVRCP's imaging (BIP), when the phone offers
-    /// one: what obexd fetches the picture by.
+    /// The cover's handle for AVRCP's imaging (BIP), when the device offers
+    /// one: what obexd fetches the picture by. A device gives one only while
+    /// a cover session to it is open.
     QString imageHandle;
 };
 
@@ -33,6 +34,9 @@ struct Device {
     bool connected = false;
     /// The one the DJ picked: the only one let in.
     bool picked = false;
+    /// The DJ's starred device, one at most: the deck connects it by itself
+    /// when the menu opens (Sam).
+    bool starred = false;
 };
 
 /// Everything the receiver knows, as plain facts.
@@ -48,26 +52,26 @@ struct Facts {
     Radio radio = Radio::Off;
     /// A controller is there (BlueZ has an adapter).
     bool adapter = false;
-    /// The Pair window is open: the deck is visible to phones looking.
+    /// The Pair window is open: the deck is visible to devices looking.
     bool discoverable = false;
-    /// A phone asks to pair and its code waits for Confirm on the deck.
+    /// A device asks to pair and its code waits for Confirm on the deck.
     bool hasPasskey = false;
     quint32 passkey = 0;
-    /// The phone asking.
+    /// The device asking.
     QString pairingName;
     /// The paired devices, by name: the DJ picks the one that plays (Sam: "I
     /// don't want it jumping clients without being told").
     QList<Device> devices;
     /// The device picked, while the deck asks it to connect.
     QString connectingName;
-    /// The phone connected, if any: the picked one, never another.
-    QString phoneName;
+    /// The device connected, if any: the picked one, never another.
+    QString connectedName;
     /// Its audio is streaming (the A2DP transport is active).
     bool streaming = false;
     /// MediaPlayer1.Status: "playing", "paused", "stopped", "forward-seek"...
     QString playerStatus;
     Track track;
-    /// MediaPlayer1.Position when the phone last said it, and when that was
+    /// MediaPlayer1.Position when the device last said it, and when that was
     /// on a monotonic clock: in between, a playing track moves on by itself
     /// (positionNow()), as BlueZ only signals a position that jumps.
     qint64 positionMs = 0;
@@ -97,24 +101,48 @@ enum class Status {
 Status status(const Facts& facts);
 
 /// The line under the track: what the receiver is doing, in words. *deckName*
-/// is what phones list the deck as.
+/// is what devices list the deck as.
 QString statusText(const Facts& facts, const QString& deckName);
 
 /// m:ss below an hour, h:mm:ss above, and "-:--" for a time not known.
 QString formatTime(qint64 ms);
 
-/// The six digits a phone shows to confirm, as "123 456".
+/// The six digits a device shows to confirm, as "123 456".
 QString formatPasskey(quint32 passkey);
 
-/// Where the track is now: the position the phone last gave, moved on by the
+/// Where the track is now: the position the device last gave, moved on by the
 /// time since if it is playing, never past the end.
 qint64 positionNow(const Facts& facts, qint64 nowMs);
 
-/// Whether BlueZ may let *device* in: the device picked, and a phone new to
+/// The device gave its position, *positionMs*, at *nowMs*: it replaces the
+/// deck's, backwards as much as forwards (a seek back to the start).
+void setPosition(Facts* pFacts, qint64 positionMs, qint64 nowMs);
+
+/// The device's status changed at *nowMs*: the position reached so far is
+/// kept, and counted on from there while it plays.
+void setStatus(Facts* pFacts, const QString& status, qint64 nowMs);
+
+/// Whether the device's player is going: playing, or seeking as it plays.
+bool isPlaying(const QString& playerStatus);
+
+/// What PLAY asks of the device's player (Sam: "the play btn to play pause
+/// the track"): MediaPlayer1's Pause while it is going, else Play.
+QString playPauseMethod(const QString& playerStatus);
+
+/// Whether BlueZ may let *device* in: the device picked, and a device new to
 /// the deck in the Pair window, which becomes the one picked once paired.
 /// Any other paired device trying to connect or take over is refused until
 /// the DJ picks it (Sam).
 bool mayConnect(const QString& device, const QString& picked, bool paired, bool discoverable);
+
+/// The device the deck picks by itself: the starred one, while nothing is
+/// picked (Sam: "Autoconnect should happen when the bluetooth menu is
+/// opened"). None while the DJ's own pick stands, or with nothing starred.
+QString autoPick(const QList<Device>& devices, const QString& picked);
+
+/// How long the deck waits between two tries of the starred device while it
+/// is not in: each try pages it for up to BlueZ's page timeout (5.12 s).
+constexpr int kAutoConnectRetryMs = 10 * 1000;
 
 /// The paired devices in the order listed: by name, case aside.
 QList<Device> sortedDevices(QList<Device> devices);

@@ -57,9 +57,13 @@ const QString kObexTransfer = QStringLiteral("org.bluez.obex.Transfer1");
 constexpr int kReacquireRetryMs = 1000;
 /// Tries before the toast says it is not getting better.
 constexpr int kReacquireQuietTries = 3;
-/// How long after a refused cover session to look for another client's: one
-/// still connecting when we looked is up by then.
-constexpr int kCoverSessionLookAgainMs = 2000;
+/// How long after a cover session that failed to look again: obexd, started by
+/// the first call, answers before its client is there, and another client's
+/// session still connecting when we looked is up by then.
+constexpr int kCoverSessionRetryMs = 2000;
+/// Tries per device before the rune stays: one that offers covers and serves
+/// none is not asked for ever.
+constexpr int kCoverSessionTries = 5;
 
 /// A unit's cgroup is there exactly while it runs: a look at whether a crash
 /// left the radio up, without a process or a bus.
@@ -99,7 +103,7 @@ QString objectPathOf(const QVariant& value) {
     return value.value<QDBusObjectPath>().path();
 }
 
-/// What the phone calls itself: its alias, else its name, else its address.
+/// What the device calls itself: its alias, else its name, else its address.
 QString deviceName(const QVariantMap& device) {
     for (const char* key : {"Alias", "Name", "Address"}) {
         const QString name = device.value(QString::fromLatin1(key)).toString();
@@ -118,14 +122,51 @@ BluetoothReceiver::BluetoothReceiver(const QString& deckGroup, QObject* pParent)
           m_pScreenOff(std::make_unique<ControlObject>(
                   ConfigKey(kGroup, QStringLiteral("screen_off")))),
           // Every set is news, the same value again included: the mapping
-          // sets it to 1 at each control it hears.
+          // sets it to 1 at each control it hears, and so the device's
+          // controls below at each press.
           m_pWake(std::make_unique<ControlObject>(
-                  ConfigKey(kGroup, QStringLiteral("wake")), false)) {
+                  ConfigKey(kGroup, QStringLiteral("wake")), false)),
+          m_pPlayPause(std::make_unique<ControlObject>(
+                  ConfigKey(kGroup, QStringLiteral("play_pause")), false)),
+          m_pPrevious(std::make_unique<ControlObject>(
+                  ConfigKey(kGroup, QStringLiteral("previous")), false)),
+          m_pNext(std::make_unique<ControlObject>(
+                  ConfigKey(kGroup, QStringLiteral("next")), false)),
+          m_pPlaying(std::make_unique<ControlObject>(
+                  ConfigKey(kGroup, QStringLiteral("playing")))) {
     qDBusRegisterMetaType<BluezInterfaces>();
     qDBusRegisterMetaType<BluezObjects>();
     m_clock.start();
     m_reacquireRetry.setSingleShot(true);
     connect(&m_reacquireRetry, &QTimer::timeout, this, &BluetoothReceiver::reacquireSound);
+
+    // The deck's PLAY, loop halve and loop double, in the menu (the
+    // mapping); the page calls the same.
+    m_pPlaying->setReadOnly();
+    connect(m_pPlayPause.get(), &ControlObject::valueChanged, this, [this](double value) {
+        if (value > 0.0) {
+            playPause();
+        }
+    });
+    connect(m_pPrevious.get(), &ControlObject::valueChanged, this, [this](double value) {
+        if (value > 0.0) {
+            previous();
+        }
+    });
+    connect(m_pNext.get(), &ControlObject::valueChanged, this, [this](double value) {
+        if (value > 0.0) {
+            next();
+        }
+    });
+    m_autoConnectRetry.setSingleShot(true);
+    m_autoConnectRetry.setInterval(bluetooth::kAutoConnectRetryMs);
+    connect(&m_autoConnectRetry, &QTimer::timeout, this, [this]() {
+        if (m_wanted && m_autoPicked && m_connectedPath.isEmpty() &&
+                m_connectingPath.isEmpty() && !m_pickedPath.isEmpty()) {
+            connectPicked();
+            recompute();
+        }
+    });
 
     // A screen a crash left off is lit again, and what a crash left up goes
     // down, before Mixxx opens the sound card
@@ -161,7 +202,7 @@ BluetoothReceiver::BluetoothReceiver(const QString& deckGroup, QObject* pParent)
             &BluetoothAgent::passkeyShown,
             this,
             [this](const QString& device, quint32 passkey) {
-                // The phone types it: shown as the same question, answered
+                // The device types it: shown as the same question, answered
                 // there.
                 m_pairingPath = device;
                 m_facts.hasPasskey = true;
@@ -196,6 +237,23 @@ BluetoothReceiver::BluetoothReceiver(const QString& deckGroup, QObject* pParent)
             &QDBusServiceWatcher::serviceUnregistered,
             this,
             &BluetoothReceiver::onBluezUnregistered);
+    // A cover session that ends (the device's link, or the client that opened
+    // it, gone) is opened again: without one the device sends no cover. The
+    // transfers' progress on every path, so that none is missed for being
+    // quicker than a match made once its path is known.
+    QDBusConnection obex = QDBusConnection::sessionBus();
+    obex.connect(kObex,
+            QStringLiteral("/"),
+            kObjectManager,
+            QStringLiteral("InterfacesRemoved"),
+            this,
+            SLOT(onObexInterfacesRemoved(QDBusMessage)));
+    obex.connect(kObex,
+            QString(),
+            kProperties,
+            QStringLiteral("PropertiesChanged"),
+            this,
+            SLOT(onObexPropertiesChanged(QDBusMessage)));
 }
 
 BluetoothReceiver::~BluetoothReceiver() {
@@ -242,8 +300,11 @@ void BluetoothReceiver::setActive(bool active) {
         m_pAgent->refusePending();
         m_pScreenOff->set(0.0);
     }
-    // Nothing connects until the DJ picks it, on every opening (Sam).
+    // Nothing connects until the DJ picks it, on every opening (Sam), but for
+    // the starred device, which the deck picks once BlueZ is read.
     m_pickedPath.clear();
+    m_autoPicked = false;
+    m_autoConnectRetry.stop();
     m_connectingPath.clear();
     m_pairingPath.clear();
     m_refused.clear();
@@ -290,6 +351,18 @@ void BluetoothReceiver::runHelper(Helper action) {
             this,
             [this, action](int exitCode, QProcess::ExitStatus status) {
                 const QString said = QString::fromUtf8(m_pHelper->readAllStandardError()).trimmed();
+                if (action == Helper::Up) {
+                    // `up` says which device is starred: "starred ADDRESS".
+                    m_starredAddress.clear();
+                    const QStringList lines = QString::fromUtf8(
+                            m_pHelper->readAllStandardOutput())
+                                                      .split(QChar('\n'));
+                    for (const QString& line : lines) {
+                        if (line.startsWith(QStringLiteral("starred "))) {
+                            m_starredAddress = line.mid(8).trimmed();
+                        }
+                    }
+                }
                 onHelperFinished(action, status == QProcess::CrashExit ? -1 : exitCode, said);
             });
     connect(m_pHelper,
@@ -328,6 +401,7 @@ void BluetoothReceiver::onHelperFinished(Helper action, int exitCode, const QStr
     } else {
         m_facts = bluetooth::Facts();
         clearCover();
+        m_pPlaying->forceSet(0.0);
         emit changed();
     }
     advance();
@@ -419,6 +493,14 @@ void BluetoothReceiver::pick(const QString& path) {
         return;
     }
     kLogger.info() << "picked" << deviceName(device);
+    // The DJ's pick stands over the star's until the menu closes.
+    m_autoPicked = false;
+    m_autoConnectRetry.stop();
+    take(path);
+    recompute();
+}
+
+void BluetoothReceiver::take(const QString& path) {
     m_pickedPath = path;
     m_refused.remove(path);
     // Trusted is what lets a device in without the agent being asked: the
@@ -435,35 +517,47 @@ void BluetoothReceiver::pick(const QString& path) {
             callDevice(it.key(), QStringLiteral("Disconnect"));
         }
     }
-    if (!device.value(QStringLiteral("Connected")).toBool()) {
-        m_connectingPath = path;
-        QDBusMessage call = QDBusMessage::createMethodCall(
-                kBluez, path, kDevice, QStringLiteral("Connect"));
-        // A phone out of range or with its radio off fails after a while:
-        // said, and it stays picked, so it may still come in by itself.
-        auto* pWatcher = new QDBusPendingCallWatcher(
-                QDBusConnection::systemBus().asyncCall(call, 30000), this);
-        connect(pWatcher,
-                &QDBusPendingCallWatcher::finished,
-                this,
-                [this, path](QDBusPendingCallWatcher* pCall) {
-                    pCall->deleteLater();
-                    QDBusPendingReply<> reply = *pCall;
-                    if (path != m_connectingPath) {
-                        return;
-                    }
-                    m_connectingPath.clear();
-                    if (reply.isError()) {
-                        const QString name = deviceName(
-                                m_objects.value(path).value(kDevice));
-                        kLogger.info() << name << "did not connect:"
-                                       << reply.error().message();
+    // Asked once: a pick of the one being asked already waits for that answer.
+    if (!m_objects.value(path).value(kDevice).value(QStringLiteral("Connected")).toBool() &&
+            m_connectingPath != path) {
+        connectPicked();
+    }
+}
+
+void BluetoothReceiver::connectPicked() {
+    const QString path = m_pickedPath;
+    m_connectingPath = path;
+    QDBusMessage call = QDBusMessage::createMethodCall(
+            kBluez, path, kDevice, QStringLiteral("Connect"));
+    // A device out of range or with its radio off fails after a while (BlueZ
+    // pages it for 5 s): said, and it stays picked, so it may still come in by
+    // itself. The starred one picked by the deck is asked again instead, in
+    // silence: away is what it is most of the time.
+    auto* pWatcher = new QDBusPendingCallWatcher(
+            QDBusConnection::systemBus().asyncCall(call, 30000), this);
+    connect(pWatcher,
+            &QDBusPendingCallWatcher::finished,
+            this,
+            [this, path](QDBusPendingCallWatcher* pCall) {
+                pCall->deleteLater();
+                QDBusPendingReply<> reply = *pCall;
+                if (path != m_connectingPath) {
+                    return;
+                }
+                m_connectingPath.clear();
+                if (reply.isError()) {
+                    const QString name = deviceName(
+                            m_objects.value(path).value(kDevice));
+                    kLogger.info() << name << "did not connect:"
+                                   << reply.error().message();
+                    if (m_autoPicked && path == m_pickedPath) {
+                        m_autoConnectRetry.start();
+                    } else {
                         emit notice(tr("%1 did not answer").arg(name));
                     }
-                    recompute();
-                });
-    }
-    recompute();
+                }
+                recompute();
+            });
 }
 
 void BluetoothReceiver::forget(const QString& path) {
@@ -475,7 +569,16 @@ void BluetoothReceiver::forget(const QString& path) {
     kLogger.info() << "forgetting" << name;
     if (path == m_pickedPath) {
         m_pickedPath.clear();
+        m_autoPicked = false;
+        m_autoConnectRetry.stop();
         m_connectingPath.clear();
+    }
+    // A star goes with the device: it would come back unstarred.
+    if (device.value(QStringLiteral("Address"))
+                    .toString()
+                    .compare(m_starredAddress, Qt::CaseInsensitive) == 0) {
+        m_starredAddress.clear();
+        runStar(QStringLiteral("none"));
     }
     // BlueZ disconnects it and deletes what it kept of it, its keys
     // included (on p8, on a release card): it pairs again to come back.
@@ -501,6 +604,96 @@ void BluetoothReceiver::forget(const QString& path) {
     recompute();
 }
 
+void BluetoothReceiver::star(const QString& path) {
+    const QVariantMap device = m_objects.value(path).value(kDevice);
+    if (device.isEmpty() || !device.value(QStringLiteral("Paired")).toBool()) {
+        return;
+    }
+    const QString address = device.value(QStringLiteral("Address")).toString();
+    const bool unstar = address.compare(m_starredAddress, Qt::CaseInsensitive) == 0;
+    kLogger.info() << (unstar ? "unstarred" : "starred") << deviceName(device);
+    m_starredAddress = unstar ? QString() : address;
+    if (m_autoPicked) {
+        // The deck's own pick was the star's, which moved.
+        m_autoPicked = false;
+        if (!m_objects.value(m_pickedPath)
+                        .value(kDevice)
+                        .value(QStringLiteral("Connected"))
+                        .toBool()) {
+            // Still being looked for: no longer.
+            m_pickedPath.clear();
+            m_autoConnectRetry.stop();
+            m_connectingPath.clear();
+            trustOnly(QString());
+        } // in and playing: it stays, as if the DJ had picked it
+    }
+    runStar(unstar ? QStringLiteral("none") : address);
+    // Nothing picked: the one just starred is (in recompute()).
+    recompute();
+}
+
+void BluetoothReceiver::runStar(const QString& address) {
+    // Written by the helper, as root, beside the pairings on p8: only when
+    // the DJ changes it. Not waited for; the star stands in the meantime.
+    auto* pStar = new QProcess(this);
+    connect(pStar,
+            &QProcess::finished,
+            this,
+            [this, pStar](int exitCode, QProcess::ExitStatus status) {
+                pStar->deleteLater();
+                if (status != QProcess::NormalExit || exitCode != 0) {
+                    kLogger.warning() << "the star could not be kept:"
+                                      << QString::fromUtf8(pStar->readAllStandardError())
+                                                 .trimmed();
+                    emit notice(tr("The star could not be kept"));
+                }
+            });
+    connect(pStar, &QProcess::errorOccurred, this, [this, pStar](QProcess::ProcessError error) {
+        if (error == QProcess::FailedToStart) {
+            pStar->deleteLater();
+            kLogger.warning() << "the star could not be kept:" << pStar->errorString();
+            emit notice(tr("The star could not be kept"));
+        }
+    });
+    pStar->start(QStringLiteral("sudo"),
+            QStringList{QStringLiteral("-n"), kHelper, QStringLiteral("star"), address});
+}
+
+void BluetoothReceiver::playPause() {
+    callPlayer(bluetooth::playPauseMethod(m_facts.playerStatus));
+}
+
+void BluetoothReceiver::previous() {
+    callPlayer(QStringLiteral("Previous"));
+}
+
+void BluetoothReceiver::next() {
+    callPlayer(QStringLiteral("Next"));
+}
+
+void BluetoothReceiver::callPlayer(const QString& method) {
+    if (!m_wanted || m_playerPath.isEmpty()) {
+        kLogger.info() << method << "asked with no device player";
+        return;
+    }
+    kLogger.info() << "asked the device:" << method;
+    // AVRCP's own key press: the device answers with its status and track,
+    // which come back as BlueZ's PropertiesChanged.
+    QDBusMessage call = QDBusMessage::createMethodCall(kBluez, m_playerPath, kPlayer, method);
+    auto* pWatcher = new QDBusPendingCallWatcher(
+            QDBusConnection::systemBus().asyncCall(call), this);
+    connect(pWatcher,
+            &QDBusPendingCallWatcher::finished,
+            this,
+            [method](QDBusPendingCallWatcher* pCall) {
+                pCall->deleteLater();
+                QDBusPendingReply<> reply = *pCall;
+                if (reply.isError()) {
+                    kLogger.info() << method << "refused:" << reply.error().message();
+                }
+            });
+}
+
 void BluetoothReceiver::trustOnly(const QString& path) {
     for (auto it = m_objects.cbegin(); it != m_objects.cend(); ++it) {
         const QVariantMap device = it.value().value(kDevice);
@@ -516,6 +709,22 @@ void BluetoothReceiver::trustOnly(const QString& path) {
         call << kDevice << QStringLiteral("Trusted") << QVariant::fromValue(QDBusVariant(trusted));
         QDBusConnection::systemBus().asyncCall(call);
     }
+}
+
+QString BluetoothReceiver::starredPath() const {
+    if (m_starredAddress.isEmpty()) {
+        return QString();
+    }
+    for (auto it = m_objects.cbegin(); it != m_objects.cend(); ++it) {
+        const QVariantMap device = it.value().value(kDevice);
+        if (device.value(QStringLiteral("Paired")).toBool() &&
+                device.value(QStringLiteral("Address"))
+                                .toString()
+                                .compare(m_starredAddress, Qt::CaseInsensitive) == 0) {
+            return it.key();
+        }
+    }
+    return QString();
 }
 
 void BluetoothReceiver::callDevice(const QString& path, const QString& method) {
@@ -572,9 +781,11 @@ void BluetoothReceiver::disconnectBluez() {
     if (!m_bluezConnected) {
         return;
     }
-    // Left untrusted, so that the next opening starts with nothing let in
-    // even in the moment before this Mixxx has read BlueZ's objects.
-    trustOnly(QString());
+    // Left untrusted but for the starred device, so that the next opening
+    // starts with nothing else let in, even in the moment before this Mixxx
+    // has read BlueZ's objects; and BlueZ writes nothing for it on p8 at each
+    // opening and closing.
+    trustOnly(starredPath());
     m_pAgent->refusePending();
     QDBusMessage unregister = QDBusMessage::createMethodCall(kBluez,
             QStringLiteral("/org/bluez"),
@@ -636,9 +847,10 @@ void BluetoothReceiver::readManagedObjects() {
                                 interface.value());
                     }
                 }
-                // Nothing trusted, nothing picked: no paired device comes in by
-                // itself, a crash's leftover pick included.
-                trustOnly(m_pickedPath);
+                // Nothing trusted but the starred device, nothing picked: no
+                // other paired device comes in by itself, a crash's leftover
+                // pick included. recompute() picks the starred one.
+                trustOnly(m_pickedPath.isEmpty() ? starredPath() : m_pickedPath);
                 recompute();
             });
 }
@@ -716,17 +928,17 @@ void BluetoothReceiver::store(
         const QString& path, const QString& interface, const QVariantMap& properties) {
     QVariantMap& stored = m_objects[path][interface];
     const QVariantMap changes = plainMap(properties);
-    if (interface == kPlayer) {
+    if (interface == kPlayer && path == m_playerPath) {
         // The track moves on by itself between the positions BlueZ reports:
-        // each one restarts the clock, and so does a change of status, at
-        // the position it had reached.
+        // each one restarts the clock, wherever it goes, and so does a change
+        // of status, at the position it had reached.
         const qint64 now = m_clock.elapsed();
         if (changes.contains(QStringLiteral("Position"))) {
-            m_facts.positionMs = changes.value(QStringLiteral("Position")).toLongLong();
-            m_facts.positionStampMs = now;
-        } else if (changes.contains(QStringLiteral("Status")) && path == m_playerPath) {
-            m_facts.positionMs = bluetooth::positionNow(m_facts, now);
-            m_facts.positionStampMs = now;
+            bluetooth::setPosition(&m_facts,
+                    changes.value(QStringLiteral("Position")).toLongLong(),
+                    now);
+        } else if (changes.contains(QStringLiteral("Status"))) {
+            bluetooth::setStatus(&m_facts, changes.value(QStringLiteral("Status")).toString(), now);
         }
     }
     for (auto it = changes.cbegin(); it != changes.cend(); ++it) {
@@ -747,16 +959,18 @@ void BluetoothReceiver::recompute() {
             listed.path = it.key();
             listed.name = deviceName(device);
             listed.connected = device.value(QStringLiteral("Connected")).toBool();
-            listed.picked = it.key() == m_pickedPath;
+            listed.starred = !m_starredAddress.isEmpty() &&
+                    device.value(QStringLiteral("Address"))
+                                    .toString()
+                                    .compare(m_starredAddress, Qt::CaseInsensitive) == 0;
             devices.append(listed);
         }
     }
-    m_facts.devices = bluetooth::sortedDevices(devices);
     const QVariantMap adapter = m_objects.value(m_adapterPath).value(kAdapter);
     m_facts.adapter = !m_adapterPath.isEmpty();
     m_facts.discoverable = adapter.value(QStringLiteral("Discoverable")).toBool();
 
-    // A phone just paired becomes the one picked, and plays (Sam).
+    // A device just paired becomes the one picked, and plays (Sam).
     QString justPaired;
     if (!m_pairingPath.isEmpty()) {
         const QVariantMap paired = m_objects.value(m_pairingPath).value(kDevice);
@@ -765,11 +979,29 @@ void BluetoothReceiver::recompute() {
             emit notice(tr("Paired with %1").arg(deviceName(paired)));
             justPaired = m_pairingPath;
             m_pickedPath = justPaired;
+            m_autoPicked = false;
+            m_autoConnectRetry.stop();
             m_pairingPath.clear();
-            // Visible no longer than it takes: the phone is in.
+            // Visible no longer than it takes: the device is in.
             setAdapterProperty(QStringLiteral("Discoverable"), false);
         }
     }
+
+    // Nothing picked: the starred device is, by the deck (Sam), before
+    // anything connected is refused for not being the one picked.
+    const QString starred = m_wanted && m_bluezConnected
+            ? bluetooth::autoPick(devices, m_pickedPath)
+            : QString();
+    if (!starred.isEmpty()) {
+        kLogger.info() << "picked the starred"
+                       << deviceName(m_objects.value(starred).value(kDevice));
+        m_autoPicked = true;
+        take(starred);
+    }
+    for (bluetooth::Device& listed : devices) {
+        listed.picked = listed.path == m_pickedPath;
+    }
+    m_facts.devices = bluetooth::sortedDevices(devices);
 
     // A paired device in without being picked, in the moment before this
     // Mixxx untrusted it say, goes again: one source, the one picked.
@@ -784,47 +1016,68 @@ void BluetoothReceiver::recompute() {
         }
     }
 
-    // The phone: the device picked, once it is in; never another.
+    // The device connected: the one picked, once it is in; never another.
     const QVariantMap picked = m_objects.value(m_pickedPath).value(kDevice);
-    const QString phonePath =
+    const QString connectedPath =
             picked.value(QStringLiteral("Connected")).toBool() ? m_pickedPath : QString();
-    const QString phoneName = phonePath.isEmpty() ? QString() : deviceName(picked);
-    if (!phonePath.isEmpty() && phonePath == m_connectingPath) {
-        m_connectingPath.clear();
-    }
-    m_facts.connectingName = m_connectingPath.isEmpty()
-            ? QString()
-            : deviceName(m_objects.value(m_connectingPath).value(kDevice));
-    if (phonePath != m_phonePath) {
-        if (!phonePath.isEmpty()) {
-            emit notice(tr("%1 connected").arg(phoneName));
+    const QString connectedName = connectedPath.isEmpty() ? QString() : deviceName(picked);
+    if (!connectedPath.isEmpty()) {
+        if (connectedPath == m_connectingPath) {
+            m_connectingPath.clear();
         }
-        m_phonePath = phonePath;
-        // A cover session is the phone's: another phone needs its own.
-        m_obexSession.clear();
+        m_autoConnectRetry.stop();
+    } else if (m_autoPicked && !m_pickedPath.isEmpty() && m_connectingPath.isEmpty() &&
+            !m_autoConnectRetry.isActive()) {
+        // The starred device went (out of range, its radio off): looked for
+        // again while the menu is open.
+        m_autoConnectRetry.start();
     }
-    m_facts.phoneName = phoneName;
+    // The starred device is "Connecting…" for as long as the deck looks for
+    // it, between its tries too.
+    const QString connecting = !m_connectingPath.isEmpty()
+            ? m_connectingPath
+            : (m_autoPicked && connectedPath.isEmpty() ? m_pickedPath : QString());
+    m_facts.connectingName = connecting.isEmpty()
+            ? QString()
+            : deviceName(m_objects.value(connecting).value(kDevice));
+    if (connectedPath != m_connectedPath) {
+        if (!connectedPath.isEmpty()) {
+            emit notice(tr("%1 connected").arg(connectedName));
+        }
+        m_connectedPath = connectedPath;
+        // A cover session is the device's: another device needs its own.
+        m_obexSession.clear();
+        m_coverSessionTries = 0;
+    }
+    m_facts.connectedName = connectedName;
 
-    // Its player and its audio: the ones whose Device is the phone.
+    // Its player and its audio: the ones whose Device is the one connected.
+    const QString playerWas = m_playerPath;
     m_playerPath.clear();
     m_facts.streaming = false;
     for (auto it = m_objects.cbegin(); it != m_objects.cend(); ++it) {
-        if (m_phonePath.isEmpty()) {
+        if (m_connectedPath.isEmpty()) {
             break;
         }
         const QVariantMap player = it.value().value(kPlayer);
         if (m_playerPath.isEmpty() && !player.isEmpty() &&
-                objectPathOf(player.value(QStringLiteral("Device"))) == m_phonePath) {
+                objectPathOf(player.value(QStringLiteral("Device"))) == m_connectedPath) {
             m_playerPath = it.key();
         }
         const QVariantMap transport = it.value().value(kTransport);
         if (!transport.isEmpty() &&
-                objectPathOf(transport.value(QStringLiteral("Device"))) == m_phonePath &&
+                objectPathOf(transport.value(QStringLiteral("Device"))) == m_connectedPath &&
                 transport.value(QStringLiteral("State")).toString() == QStringLiteral("active")) {
             m_facts.streaming = true;
         }
     }
     const QVariantMap player = m_objects.value(m_playerPath).value(kPlayer);
+    if (m_playerPath != playerWas) {
+        // A new player (a device in, or anew): where it said it was.
+        bluetooth::setPosition(&m_facts,
+                player.value(QStringLiteral("Position")).toLongLong(),
+                m_clock.elapsed());
+    }
     m_facts.playerStatus = player.value(QStringLiteral("Status")).toString();
     const QVariantMap track = mapOf(player.value(QStringLiteral("Track")));
     m_facts.track.title = track.value(QStringLiteral("Title")).toString();
@@ -832,10 +1085,11 @@ void BluetoothReceiver::recompute() {
     m_facts.track.album = track.value(QStringLiteral("Album")).toString();
     m_facts.track.durationMs = track.value(QStringLiteral("Duration")).toLongLong();
     m_facts.track.imageHandle = track.value(QStringLiteral("ImgHandle")).toString();
-    if (m_playerPath.isEmpty()) {
-        m_facts.positionMs = 0;
-    }
+    m_pPlaying->forceSet(bluetooth::isPlaying(m_facts.playerStatus) ? 1.0 : 0.0);
 
+    // The cover session as soon as the device says where (it gives no handle
+    // until one is open), and the cover once a track has a handle.
+    ensureCoverSession();
     if (m_facts.track.imageHandle != m_coverHandle) {
         fetchCover();
     }
@@ -868,18 +1122,16 @@ void BluetoothReceiver::clearCover() {
 void BluetoothReceiver::fetchCover() {
     clearCover();
     m_coverHandle = m_facts.track.imageHandle;
-    // A cover only when the phone offers one: a handle for this track, and
-    // the port its imaging server listens on. Without either, the view draws
-    // the rune.
-    if (m_coverHandle.isEmpty() || coverPort() == 0 || phoneAddress().isEmpty() ||
-            !QDBusConnection::sessionBus().isConnected()) {
+    // A cover only for a track with a handle: none offered (no cover, or the
+    // session not open yet), and the view draws the rune.
+    if (m_coverHandle.isEmpty()) {
         return;
     }
-    if (!m_obexSession.isEmpty()) {
-        requestThumbnail();
+    if (m_obexSession.isEmpty()) {
+        ensureCoverSession(); // which asks for it once the session is there
         return;
     }
-    findCoverSession(true);
+    requestThumbnail();
 }
 
 quint16 BluetoothReceiver::coverPort() const {
@@ -887,13 +1139,27 @@ quint16 BluetoothReceiver::coverPort() const {
     return static_cast<quint16>(player.value(QStringLiteral("ObexPort")).toUInt());
 }
 
-QString BluetoothReceiver::phoneAddress() const {
-    return m_objects.value(m_phonePath).value(kDevice).value(QStringLiteral("Address")).toString();
+QString BluetoothReceiver::connectedAddress() const {
+    return m_objects.value(m_connectedPath)
+            .value(kDevice)
+            .value(QStringLiteral("Address"))
+            .toString();
 }
 
-void BluetoothReceiver::findCoverSession(bool orOpen) {
-    // The phone may have a cover session open already: Pi OS's mpris-proxy
-    // opens one for every phone that offers covers, and a phone can take a
+void BluetoothReceiver::ensureCoverSession() {
+    // A device that offers covers says where it serves them (its player's
+    // ObexPort), and gives a track's handle only while a cover session to it
+    // is open (AVRCP 1.6): the session is opened as soon as the port is
+    // known, not when a handle comes, which would be never.
+    const QString device = m_connectedPath;
+    if (!m_obexSession.isEmpty() || m_coverSessionFor == device || coverPort() == 0 ||
+            connectedAddress().isEmpty() || m_coverSessionTries >= kCoverSessionTries ||
+            !QDBusConnection::sessionBus().isConnected()) {
+        return;
+    }
+    m_coverSessionFor = device;
+    // The device may have a cover session open already: Pi OS's mpris-proxy
+    // opens one for every device that offers covers, and a device can take a
     // single one (Android's serves one client at all), which would refuse
     // ours. obexd lets any client use a session, so that one is taken, and
     // one is opened only when there is none.
@@ -901,73 +1167,90 @@ void BluetoothReceiver::findCoverSession(bool orOpen) {
             kObex, QStringLiteral("/"), kObjectManager, QStringLiteral("GetManagedObjects"));
     auto* pWatcher = new QDBusPendingCallWatcher(
             QDBusConnection::sessionBus().asyncCall(call), this);
-    const QString handle = m_coverHandle;
-    const QString phone = m_phonePath;
     connect(pWatcher,
             &QDBusPendingCallWatcher::finished,
             this,
-            [this, handle, phone, orOpen](QDBusPendingCallWatcher* pCall) {
+            [this, device](QDBusPendingCallWatcher* pCall) {
                 pCall->deleteLater();
-                if (handle != m_coverHandle || phone != m_phonePath) {
-                    return; // the track or the phone moved on meanwhile
+                if (device != m_connectedPath) {
+                    if (m_coverSessionFor == device) {
+                        m_coverSessionFor.clear();
+                    }
+                    return; // another device meanwhile, or none
                 }
                 QDBusPendingReply<BluezObjects> reply = *pCall;
                 const BluezObjects objects = reply.isError() ? BluezObjects() : reply.value();
-                const QString address = phoneAddress();
+                const QString address = connectedAddress();
                 for (auto it = objects.cbegin(); it != objects.cend(); ++it) {
                     const QString destination = plainMap(it.value().value(kObexSession))
                                                         .value(QStringLiteral("Destination"))
                                                         .toString();
                     if (it.value().contains(kObexImage) &&
                             destination.compare(address, Qt::CaseInsensitive) == 0) {
-                        kLogger.info() << "covers through the session open to the phone:"
+                        kLogger.info() << "covers through the session open to the device:"
                                        << it.key().path();
+                        m_coverSessionFor.clear();
                         m_obexSession = it.key().path();
-                        requestThumbnail();
+                        if (!m_coverHandle.isEmpty() && m_coverPath.isEmpty()) {
+                            requestThumbnail();
+                        }
                         return;
                     }
                 }
-                if (orOpen) {
-                    openCoverSession();
-                }
+                openCoverSession();
             });
 }
 
 void BluetoothReceiver::openCoverSession() {
+    const QString device = m_connectedPath;
     QDBusMessage call = QDBusMessage::createMethodCall(
             kObex, QStringLiteral("/org/bluez/obex"), kObexClient, QStringLiteral("CreateSession"));
     QVariantMap options;
     options.insert(QStringLiteral("Target"), QStringLiteral("bip-avrcp"));
     options.insert(QStringLiteral("PSM"), QVariant::fromValue(coverPort()));
-    call << phoneAddress() << options;
+    call << connectedAddress() << options;
     auto* pWatcher = new QDBusPendingCallWatcher(
             QDBusConnection::sessionBus().asyncCall(call), this);
-    const QString handle = m_coverHandle;
-    const QString phone = m_phonePath;
     connect(pWatcher,
             &QDBusPendingCallWatcher::finished,
             this,
-            [this, handle, phone](QDBusPendingCallWatcher* pCall) {
+            [this, device](QDBusPendingCallWatcher* pCall) {
                 pCall->deleteLater();
+                if (m_coverSessionFor == device) {
+                    m_coverSessionFor.clear();
+                }
                 QDBusPendingReply<QDBusObjectPath> reply = *pCall;
+                if (device != m_connectedPath) {
+                    return; // another device meanwhile: obexd ends the session with its link
+                }
                 if (reply.isError()) {
                     kLogger.info() << "no cover session:" << reply.error().message();
-                    // Refused, most likely for another client's session still
-                    // connecting when we looked: look once more when it can
-                    // be there.
-                    QTimer::singleShot(kCoverSessionLookAgainMs, this, [this, handle, phone]() {
-                        if (handle == m_coverHandle && phone == m_phonePath &&
-                                m_obexSession.isEmpty()) {
-                            findCoverSession(false);
-                        }
-                    });
+                    retryCoverSession();
                     return;
                 }
+                kLogger.info() << "cover session open:" << reply.value().path();
                 m_obexSession = reply.value().path();
-                if (handle == m_coverHandle && phone == m_phonePath) {
+                m_coverSessionTries = 0;
+                if (!m_coverHandle.isEmpty() && m_coverPath.isEmpty()) {
                     requestThumbnail();
                 }
             });
+}
+
+void BluetoothReceiver::retryCoverSession() {
+    // obexd started by the first call answers before its client is there,
+    // and another client's session may still be connecting when we looked:
+    // looked for again a moment later, a few times per device.
+    if (++m_coverSessionTries >= kCoverSessionTries) {
+        kLogger.info() << "no cover session after" << m_coverSessionTries << "tries";
+        return;
+    }
+    const QString device = m_connectedPath;
+    QTimer::singleShot(kCoverSessionRetryMs, this, [this, device]() {
+        if (device == m_connectedPath) {
+            ensureCoverSession();
+        }
+    });
 }
 
 void BluetoothReceiver::requestThumbnail() {
@@ -979,37 +1262,43 @@ void BluetoothReceiver::requestThumbnail() {
     auto* pWatcher = new QDBusPendingCallWatcher(
             QDBusConnection::sessionBus().asyncCall(call), this);
     const QString handle = m_coverHandle;
+    const QString session = m_obexSession;
     connect(pWatcher,
             &QDBusPendingCallWatcher::finished,
             this,
-            [this, handle](QDBusPendingCallWatcher* pCall) {
+            [this, handle, session](QDBusPendingCallWatcher* pCall) {
                 pCall->deleteLater();
                 QDBusPendingReply<QDBusObjectPath, QVariantMap> reply = *pCall;
                 if (reply.isError()) {
                     kLogger.info() << "no cover:" << reply.error().message();
-                    // The session may be gone (another client's ends with it):
-                    // the next track looks for one again.
-                    m_obexSession.clear();
+                    const QString error = reply.error().name();
+                    if (session == m_obexSession &&
+                            (error == QStringLiteral("org.freedesktop.DBus.Error.UnknownObject") ||
+                                    error == QStringLiteral("org.freedesktop.DBus.Error.UnknownMethod") ||
+                                    error == QStringLiteral(
+                                                     "org.freedesktop.DBus.Error.ServiceUnknown"))) {
+                        // The session went (another client's ends with it):
+                        // another, and this track's cover through it.
+                        m_obexSession.clear();
+                        ++m_coverSessionTries;
+                        ensureCoverSession();
+                    }
                     return;
                 }
                 if (handle != m_coverHandle) {
-                    return; // the track moved on meanwhile
+                    // The track moved on meanwhile: its file is not wanted.
+                    QFile::remove(reply.argumentAt<1>().value(QStringLiteral("Filename")).toString());
+                    return;
                 }
                 m_obexTransfer = reply.argumentAt<0>().path();
                 m_obexFile = reply.argumentAt<1>()
                                      .value(QStringLiteral("Filename"))
                                      .toString();
-                QDBusConnection::sessionBus().connect(kObex,
-                        m_obexTransfer,
-                        kProperties,
-                        QStringLiteral("PropertiesChanged"),
-                        this,
-                        SLOT(onObexPropertiesChanged(QDBusMessage)));
             });
 }
 
 void BluetoothReceiver::onObexPropertiesChanged(const QDBusMessage& message) {
-    if (message.path() != m_obexTransfer) {
+    if (m_obexTransfer.isEmpty() || message.path() != m_obexTransfer) {
         return;
     }
     const QList<QVariant> args = message.arguments();
@@ -1023,6 +1312,18 @@ void BluetoothReceiver::onObexPropertiesChanged(const QDBusMessage& message) {
     } else if (status == QStringLiteral("error")) {
         kLogger.info() << "the cover transfer failed";
     }
+}
+
+void BluetoothReceiver::onObexInterfacesRemoved(const QDBusMessage& message) {
+    const QList<QVariant> args = message.arguments();
+    if (args.isEmpty() || m_obexSession.isEmpty() || objectPathOf(args.at(0)) != m_obexSession) {
+        return;
+    }
+    // The cover session ended with the device still here (its client gone,
+    // or the device closed it): another, or the device sends no more covers.
+    kLogger.info() << "the cover session ended:" << m_obexSession;
+    m_obexSession.clear();
+    ensureCoverSession();
 }
 
 } // namespace deck

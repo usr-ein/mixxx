@@ -9,7 +9,7 @@ namespace deck {
 
 /// The Bluetooth rune (ᛒ over ᚼ), as one stroke, in the middle of *box*: the
 /// home list's mark for "Bluetooth receiver", and the cover the page shows
-/// when a phone sends none. Drawn rather than loaded, as the other marks are.
+/// when a device sends none. Drawn rather than loaded, as the other marks are.
 inline void paintBluetoothRune(QPainter* pPainter, const QRectF& box, const QColor& colour,
         qreal penWidth) {
     const qreal size = qMin(box.width(), box.height());
