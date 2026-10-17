@@ -1,9 +1,9 @@
 #include "widget/deck/wdeckbrowser.h"
 
-#include <QSqlDatabase>
 #include <QHBoxLayout>
 #include <QHideEvent>
 #include <QMouseEvent>
+#include <QSqlDatabase>
 #include <QSqlQuery>
 #include <QStackedWidget>
 #include <QVBoxLayout>
@@ -14,21 +14,21 @@
 #include "control/controlpushbutton.h"
 #include "library/basetrackcache.h"
 #include "library/dao/trackschema.h"
+#include "library/deck/bluetoothreceiver.h"
 #include "library/deck/deckautoplay.h"
 #include "library/deck/deckhistory.h"
 #include "library/deck/deckqueries.h"
-#include "library/deck/bluetoothreceiver.h"
 #include "library/deck/deckrecorder.h"
 #include "library/deck/deckservices.h"
 #include "library/deck/decktrackmodel.h"
 #include "library/deck/pdbingest.h"
 #include "library/deck/playhistory.h"
-#include "library/queryutil.h"
 #include "library/library.h"
+#include "library/queryutil.h"
 #include "library/trackcollection.h"
 #include "library/trackcollectionmanager.h"
-#include "track/track.h"
 #include "moc_wdeckbrowser.cpp"
+#include "track/track.h"
 #include "util/logger.h"
 #include "widget/deck/deckaccent.h"
 #include "widget/deck/deckbezel.h"
@@ -590,6 +590,15 @@ WDeckBrowser::WDeckBrowser(QWidget* pParent,
     m_pRateRange = std::make_unique<ControlProxy>(
             DeckServices::deckGroup(), QStringLiteral("rateRange"), this);
     m_pRateRange->connectValueChanged(this, &WDeckBrowser::onRateRangeChanged);
+    if (m_pBluetoothReceiver) {
+        m_pPlay = std::make_unique<ControlProxy>(
+                DeckServices::deckGroup(), QStringLiteral("play"), this);
+        m_pPlay->connectValueChanged(this, [this](double) {
+            if (!m_stack.isEmpty() && m_stack.last().kind == Level::Kind::Sources) {
+                m_pMenuModel->updateRows(sourcesRows());
+            }
+        });
+    }
 
     m_pLevelControl = std::make_unique<ControlObject>(ConfigKey("[Browser]", "level"));
     m_pLevelControl->setReadOnly();
@@ -991,6 +1000,12 @@ QList<MenuRow> WDeckBrowser::sourcesRows() const {
         bluetooth.title = tr("Bluetooth receiver");
         bluetooth.payload = QStringLiteral("#bluetooth");
         bluetooth.detail = m_pBluetoothReceiver->facts().phoneName;
+        if (m_pPlay && m_pPlay->get() > 0.0) {
+            // Opening it stops the deck, and a wrong row mid-set would be
+            // silence: refused while the deck plays (the review's pick).
+            bluetooth.dimmed = true;
+            bluetooth.detail = tr("Stop the deck first");
+        }
         rows.append(bluetooth);
     }
 

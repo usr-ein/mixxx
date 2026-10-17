@@ -20,8 +20,9 @@ namespace deck {
 /// the menu closes (refusePending()).
 ///
 /// Everything a phone may do without a code -- just-works pairing, a profile
-/// asked for by a phone not yet trusted -- is allowed only while the Pair
-/// window is open or for a phone already paired: *allowed* says which.
+/// asked for by a device not trusted -- is allowed only for the device the DJ
+/// picked, or a phone new to the deck in the Pair window: *allowed* says
+/// which (bluetooth::mayConnect()).
 class BluetoothAgent : public QObject, protected QDBusContext {
     Q_OBJECT
     Q_CLASSINFO("D-Bus Interface", "org.bluez.Agent1")

@@ -329,6 +329,8 @@ class WDeckBrowser : public QWidget, public WBaseWidget {
     std::unique_ptr<ControlProxy> m_pPlayingKey;
     std::unique_ptr<ControlProxy> m_pTrackLoaded;
     std::unique_ptr<ControlProxy> m_pRateRange;
+    /// The deck playing: the Bluetooth receiver's row refuses it then.
+    std::unique_ptr<ControlProxy> m_pPlay;
     /// The medium the current list came from, for cache keys. Levels below a
     /// medium all carry it, so this is just the stack's.
     MediumId currentMedium() const;

@@ -102,7 +102,7 @@ void BluetoothAgent::RequestAuthorization(const QDBusObjectPath& device) {
 void BluetoothAgent::AuthorizeService(const QDBusObjectPath& device, const QString& uuid) {
     if (!m_allowed(device.path())) {
         kLogger.info() << "refused service" << uuid << "to" << device.path();
-        sendErrorReply(kRejected, QStringLiteral("not paired with this deck"));
+        sendErrorReply(kRejected, QStringLiteral("not the device picked on the deck"));
     }
 }
 

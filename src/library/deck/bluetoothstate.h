@@ -1,5 +1,6 @@
 #pragma once
 
+#include <QList>
 #include <QString>
 #include <QtGlobal>
 
@@ -24,6 +25,16 @@ struct Track {
     QString imageHandle;
 };
 
+/// A paired device, as the page lists it.
+struct Device {
+    /// BlueZ's object path: what the device is picked and forgotten by.
+    QString path;
+    QString name;
+    bool connected = false;
+    /// The one the DJ picked: the only one let in.
+    bool picked = false;
+};
+
 /// Everything the receiver knows, as plain facts.
 struct Facts {
     enum class Radio {
@@ -44,7 +55,12 @@ struct Facts {
     quint32 passkey = 0;
     /// The phone asking.
     QString pairingName;
-    /// The phone connected, if any.
+    /// The paired devices, by name: the DJ picks the one that plays (Sam: "I
+    /// don't want it jumping clients without being told").
+    QList<Device> devices;
+    /// The device picked, while the deck asks it to connect.
+    QString connectingName;
+    /// The phone connected, if any: the picked one, never another.
     QString phoneName;
     /// Its audio is streaming (the A2DP transport is active).
     bool streaming = false;
@@ -66,8 +82,10 @@ enum class Status {
     /// Up, but there is no controller to be a receiver with.
     NoAdapter,
     Failed,
-    /// Up, no phone: known phones may connect.
+    /// Up, nothing picked: the DJ picks a paired device, or pairs one.
     Waiting,
+    /// A device picked, asked to connect.
+    Connecting,
     /// Visible for pairing.
     Pairing,
     /// A code to confirm.
@@ -91,6 +109,15 @@ QString formatPasskey(quint32 passkey);
 /// Where the track is now: the position the phone last gave, moved on by the
 /// time since if it is playing, never past the end.
 qint64 positionNow(const Facts& facts, qint64 nowMs);
+
+/// Whether BlueZ may let *device* in: the device picked, and a phone new to
+/// the deck in the Pair window, which becomes the one picked once paired.
+/// Any other paired device trying to connect or take over is refused until
+/// the DJ picks it (Sam).
+bool mayConnect(const QString& device, const QString& picked, bool paired, bool discoverable);
+
+/// The paired devices in the order listed: by name, case aside.
+QList<Device> sortedDevices(QList<Device> devices);
 
 /// The screen goes off three minutes after the last touch or control (Sam).
 constexpr qint64 kScreenOffAfterMs = 3 * 60 * 1000;

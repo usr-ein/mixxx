@@ -4,6 +4,7 @@
 #include <QElapsedTimer>
 #include <QHash>
 #include <QObject>
+#include <QSet>
 #include <QString>
 #include <QTimer>
 #include <QVariantMap>
@@ -29,9 +30,11 @@ class BluetoothAgent;
 /// this menu, the deck itself is not playing from Mixxx anymore", and the
 /// radio is on only while the menu is open.
 ///
-/// **Opening** (setActive(true)) pauses the deck and keeps it paused, has
-/// Mixxx let go of the sound card (SoundManager::releaseDevices()), then
-/// brings the radio up: `trimixxx-bluetooth up`, as root through sudo -n
+/// **Opening** (setActive(true); the home list's row refuses it while the
+/// deck plays, as a wrong row mid-set would be silence) keeps the deck
+/// paused, has Mixxx let go of the sound card
+/// (SoundManager::releaseDevices()), then brings the radio up:
+/// `trimixxx-bluetooth up`, as root through sudo -n
 /// (pi_config/bluetooth), which starts bluetoothd, BlueALSA and the player
 /// that sends the phone's stream to the DAC. **Closing** takes all of that
 /// down (`trimixxx-bluetooth down`, which frees the DAC first), then takes the
@@ -46,8 +49,12 @@ class BluetoothAgent;
 /// the phone offers one, fetched by obexd (AVRCP's imaging, BIP). Mixxx is
 /// also the agent BlueZ asks for pairing (BluetoothAgent): visible only after
 /// Pair (pair()), with the six-digit code confirmed on the deck
-/// (answerPairing()). Phones it knows are asked to reconnect whenever the
-/// menu opens; BlueZ remembers them (on p8, on a release card).
+/// (answerPairing()). BlueZ remembers paired devices (on p8, on a release
+/// card), and the page lists them: **nothing connects until the DJ picks
+/// one** (pick()), on every opening, and only the one picked is let in; any
+/// other trying to connect or take over is refused until picked (Sam: "I
+/// don't want it jumping clients without being told"). A phone just paired is
+/// picked. forget() unpairs one, its keys gone with it.
 ///
 /// **A crash** leaves nothing up: the helper's guard takes the radio down
 /// when this Mixxx's process goes, and the constructor takes down whatever a
@@ -83,6 +90,11 @@ class BluetoothReceiver : public QObject {
     void pair();
     /// The code on screen, confirmed (true) or refused on the deck.
     void answerPairing(bool accept);
+    /// The paired device at *path* plays: whatever else is connected goes,
+    /// and it is asked to connect.
+    void pick(const QString& path);
+    /// The paired device at *path* unpaired: disconnected, and its keys gone.
+    void forget(const QString& path);
 
     const bluetooth::Facts& facts() const {
         return m_facts;
@@ -141,8 +153,11 @@ class BluetoothReceiver : public QObject {
     void stopListening();
     void readManagedObjects();
     void registerAgent();
-    /// Paired phones asked to connect: the menu has just opened.
-    void connectKnownPhones();
+    /// Trusted, which lets a device in without the agent: *path* only, or
+    /// none for an empty one.
+    void trustOnly(const QString& path);
+    /// A Device1 method, asked and not waited for.
+    void callDevice(const QString& path, const QString& method);
     /// One object's interfaces, as BlueZ reported them.
     void store(const QString& path, const QString& interface, const QVariantMap& properties);
     /// The facts again, from what BlueZ has said.
@@ -185,8 +200,12 @@ class BluetoothReceiver : public QObject {
     QString m_playerPath;
     /// The phone whose code is on screen.
     QString m_pairingPath;
-    /// Phones asked to connect once this time the menu opened.
-    bool m_knownPhonesAsked = false;
+    /// The device the DJ picked, the only one let in; none on opening.
+    QString m_pickedPath;
+    /// The one picked, while it is asked to connect.
+    QString m_connectingPath;
+    /// Paired devices in without being picked, being disconnected.
+    QSet<QString> m_refused;
 
     bluetooth::Facts m_facts;
     QElapsedTimer m_clock;

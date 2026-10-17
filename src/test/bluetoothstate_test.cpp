@@ -72,6 +72,15 @@ TEST(BluetoothStateTest, StatusTextNamesThePhoneAndTheDeck) {
     Facts facts = up();
     EXPECT_EQ(QStringLiteral("Waiting for a phone · Pair to add one"),
             statusText(facts, QStringLiteral("trimixxx2")));
+    Device pixel;
+    pixel.name = QStringLiteral("Pixel 9");
+    facts.devices = {pixel};
+    EXPECT_EQ(QStringLiteral("Pick a phone to play from"),
+            statusText(facts, QStringLiteral("trimixxx2")));
+    facts.connectingName = QStringLiteral("Pixel 9");
+    EXPECT_EQ(QStringLiteral("Connecting to Pixel 9…"),
+            statusText(facts, QStringLiteral("trimixxx2")));
+    facts.connectingName.clear();
     facts.discoverable = true;
     EXPECT_EQ(QStringLiteral("Visible as trimixxx2: pair from the phone"),
             statusText(facts, QStringLiteral("trimixxx2")));
@@ -90,6 +99,52 @@ TEST(BluetoothStateTest, StatusTextNamesThePhoneAndTheDeck) {
     facts.pairingName.clear();
     EXPECT_EQ(QStringLiteral("Pair with the phone? Same code on both: Confirm"),
             statusText(facts, QString()));
+}
+
+TEST(BluetoothStateTest, ConnectingUntilThePickedOneIsIn) {
+    Facts facts = up();
+    facts.connectingName = QStringLiteral("Pixel 9");
+    EXPECT_EQ(Status::Connecting, status(facts));
+    // Picked and asked outranks the Pair window: the DJ chose.
+    facts.discoverable = true;
+    EXPECT_EQ(Status::Connecting, status(facts));
+    facts.phoneName = QStringLiteral("Pixel 9");
+    EXPECT_EQ(Status::Connected, status(facts));
+}
+
+// ---------------------------------------------------------------------------
+// Who may connect: the device picked, nothing else (Sam)
+// ---------------------------------------------------------------------------
+
+TEST(BluetoothStateTest, OnlyThePickedDeviceIsLetIn) {
+    const QString pixel = QStringLiteral("/org/bluez/hci0/dev_AA");
+    const QString iphone = QStringLiteral("/org/bluez/hci0/dev_BB");
+    // Nothing picked, on every opening: no paired device gets in.
+    EXPECT_FALSE(mayConnect(pixel, QString(), true, false));
+    EXPECT_TRUE(mayConnect(pixel, pixel, true, false));
+    // Another paired device trying to take over is refused, Pair window or
+    // not: pairing is for phones new to the deck.
+    EXPECT_FALSE(mayConnect(iphone, pixel, true, false));
+    EXPECT_FALSE(mayConnect(iphone, pixel, true, true));
+    // A phone new to the deck, in the Pair window only.
+    EXPECT_TRUE(mayConnect(iphone, pixel, false, true));
+    EXPECT_FALSE(mayConnect(iphone, pixel, false, false));
+    // No path is no device.
+    EXPECT_FALSE(mayConnect(QString(), QString(), true, false));
+}
+
+TEST(BluetoothStateTest, DevicesByName) {
+    Device a;
+    a.name = QStringLiteral("pixel 9");
+    Device b;
+    b.name = QStringLiteral("iPhone 15");
+    Device c;
+    c.name = QStringLiteral("MBP NJ");
+    const QList<Device> sorted = sortedDevices({a, b, c});
+    ASSERT_EQ(3, sorted.size());
+    EXPECT_EQ(QStringLiteral("iPhone 15"), sorted.at(0).name);
+    EXPECT_EQ(QStringLiteral("MBP NJ"), sorted.at(1).name);
+    EXPECT_EQ(QStringLiteral("pixel 9"), sorted.at(2).name);
 }
 
 TEST(BluetoothStateTest, FailedSaysWhy) {

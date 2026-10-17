@@ -1,6 +1,7 @@
 #include "library/deck/bluetoothstate.h"
 
 #include <QCoreApplication>
+#include <algorithm>
 
 namespace mixxx {
 namespace deck {
@@ -41,6 +42,9 @@ Status status(const Facts& facts) {
         // stream is a phone that has not started sending yet.
         return facts.streaming ? Status::Playing : Status::Connected;
     }
+    if (!facts.connectingName.isEmpty()) {
+        return Status::Connecting;
+    }
     return facts.discoverable ? Status::Pairing : Status::Waiting;
 }
 
@@ -57,7 +61,10 @@ QString statusText(const Facts& facts, const QString& deckName) {
                 ? tr("Bluetooth would not start")
                 : tr("Bluetooth would not start: %1").arg(facts.failure);
     case Status::Waiting:
-        return tr("Waiting for a phone · Pair to add one");
+        return facts.devices.isEmpty() ? tr("Waiting for a phone · Pair to add one")
+                                       : tr("Pick a phone to play from");
+    case Status::Connecting:
+        return tr("Connecting to %1…").arg(facts.connectingName);
     case Status::Pairing:
         return tr("Visible as %1: pair from the phone").arg(deckName);
     case Status::Confirming:
@@ -102,6 +109,17 @@ qint64 positionNow(const Facts& facts, qint64 nowMs) {
         position = qMin(position, facts.track.durationMs);
     }
     return qMax<qint64>(position, 0);
+}
+
+bool mayConnect(const QString& device, const QString& picked, bool paired, bool discoverable) {
+    return (!picked.isEmpty() && device == picked) || (discoverable && !paired);
+}
+
+QList<Device> sortedDevices(QList<Device> devices) {
+    std::stable_sort(devices.begin(), devices.end(), [](const Device& a, const Device& b) {
+        return a.name.compare(b.name, Qt::CaseInsensitive) < 0;
+    });
+    return devices;
 }
 
 bool screenOffDue(qint64 lastActivityMs, qint64 nowMs) {
