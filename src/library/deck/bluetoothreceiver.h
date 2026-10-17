@@ -149,6 +149,12 @@ class BluetoothReceiver : public QObject {
     void recompute();
     void setAdapterProperty(const QString& name, const QVariant& value);
     void fetchCover();
+    /// The phone's cover session, one open already else (orOpen) a new one.
+    void findCoverSession(bool orOpen);
+    void openCoverSession();
+    void requestThumbnail();
+    quint16 coverPort() const;
+    QString phoneAddress() const;
     void clearCover();
     /// Whether a device may pair or connect without a code (the agent).
     bool allowed(const QString& device) const;
@@ -186,7 +192,8 @@ class BluetoothReceiver : public QObject {
     QElapsedTimer m_clock;
 
     /// The cover: the handle it is for, the obex session and transfer it
-    /// comes through, and the file it landed in.
+    /// comes through (the session ours, or one another client opened to the
+    /// phone), and the file it landed in.
     QString m_coverHandle;
     QString m_obexSession;
     QString m_obexTransfer;

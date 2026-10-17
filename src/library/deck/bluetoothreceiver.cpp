@@ -48,6 +48,7 @@ const QString kAgentManager = QStringLiteral("org.bluez.AgentManager1");
 
 const QString kObex = QStringLiteral("org.bluez.obex");
 const QString kObexClient = QStringLiteral("org.bluez.obex.Client1");
+const QString kObexSession = QStringLiteral("org.bluez.obex.Session1");
 const QString kObexImage = QStringLiteral("org.bluez.obex.Image1");
 const QString kObexTransfer = QStringLiteral("org.bluez.obex.Transfer1");
 
@@ -56,6 +57,9 @@ const QString kObexTransfer = QStringLiteral("org.bluez.obex.Transfer1");
 constexpr int kReacquireRetryMs = 1000;
 /// Tries before the toast says it is not getting better.
 constexpr int kReacquireQuietTries = 3;
+/// How long after a refused cover session to look for another client's: one
+/// still connecting when we looked is up by then.
+constexpr int kCoverSessionLookAgainMs = 2000;
 
 /// A unit's cgroup is there exactly while it runs: a look at whether a crash
 /// left the radio up, without a process or a bus.
@@ -707,74 +711,136 @@ void BluetoothReceiver::clearCover() {
 void BluetoothReceiver::fetchCover() {
     clearCover();
     m_coverHandle = m_facts.track.imageHandle;
-    const QVariantMap player = m_objects.value(m_playerPath).value(kPlayer);
-    const QVariantMap device = m_objects.value(m_phonePath).value(kDevice);
-    const quint16 port = static_cast<quint16>(player.value(QStringLiteral("ObexPort")).toUInt());
-    const QString address = device.value(QStringLiteral("Address")).toString();
     // A cover only when the phone offers one: a handle for this track, and
     // the port its imaging server listens on. Without either, the view draws
     // the rune.
-    if (m_coverHandle.isEmpty() || port == 0 || address.isEmpty()) {
+    if (m_coverHandle.isEmpty() || coverPort() == 0 || phoneAddress().isEmpty() ||
+            !QDBusConnection::sessionBus().isConnected()) {
         return;
     }
-    QDBusConnection session = QDBusConnection::sessionBus();
-    if (!session.isConnected()) {
-        return;
-    }
-    const QString handle = m_coverHandle;
-    auto getThumbnail = [this, handle](const QString& sessionPath) {
-        if (handle != m_coverHandle) {
-            return; // the track moved on meanwhile
-        }
-        // The thumbnail: 200 px square, JPEG, which is what the view draws.
-        // No target file: obexd makes one and says where (Filename).
-        QDBusMessage call = QDBusMessage::createMethodCall(
-                kObex, sessionPath, kObexImage, QStringLiteral("GetThumbnail"));
-        call << QString() << handle;
-        auto* pWatcher = new QDBusPendingCallWatcher(QDBusConnection::sessionBus().asyncCall(call), this);
-        connect(pWatcher, &QDBusPendingCallWatcher::finished, this, [this, handle](QDBusPendingCallWatcher* pCall) {
-            pCall->deleteLater();
-            QDBusPendingReply<QDBusObjectPath, QVariantMap> reply = *pCall;
-            if (reply.isError() || handle != m_coverHandle) {
-                if (reply.isError()) {
-                    kLogger.info() << "no cover:" << reply.error().message();
-                }
-                return;
-            }
-            m_obexTransfer = reply.argumentAt<0>().path();
-            m_obexFile = reply.argumentAt<1>().value(QStringLiteral("Filename")).toString();
-            QDBusConnection::sessionBus().connect(kObex,
-                    m_obexTransfer,
-                    kProperties,
-                    QStringLiteral("PropertiesChanged"),
-                    this,
-                    SLOT(onObexPropertiesChanged(QDBusMessage)));
-        });
-    };
     if (!m_obexSession.isEmpty()) {
-        getThumbnail(m_obexSession);
+        requestThumbnail();
         return;
     }
+    findCoverSession(true);
+}
+
+quint16 BluetoothReceiver::coverPort() const {
+    const QVariantMap player = m_objects.value(m_playerPath).value(kPlayer);
+    return static_cast<quint16>(player.value(QStringLiteral("ObexPort")).toUInt());
+}
+
+QString BluetoothReceiver::phoneAddress() const {
+    return m_objects.value(m_phonePath).value(kDevice).value(QStringLiteral("Address")).toString();
+}
+
+void BluetoothReceiver::findCoverSession(bool orOpen) {
+    // The phone may have a cover session open already: Pi OS's mpris-proxy
+    // opens one for every phone that offers covers, and a phone can take a
+    // single one (Android's serves one client at all), which would refuse
+    // ours. obexd lets any client use a session, so that one is taken, and
+    // one is opened only when there is none.
+    QDBusMessage call = QDBusMessage::createMethodCall(
+            kObex, QStringLiteral("/"), kObjectManager, QStringLiteral("GetManagedObjects"));
+    auto* pWatcher = new QDBusPendingCallWatcher(QDBusConnection::sessionBus().asyncCall(call), this);
+    const QString handle = m_coverHandle;
+    const QString phone = m_phonePath;
+    connect(pWatcher,
+            &QDBusPendingCallWatcher::finished,
+            this,
+            [this, handle, phone, orOpen](QDBusPendingCallWatcher* pCall) {
+                pCall->deleteLater();
+                if (handle != m_coverHandle || phone != m_phonePath) {
+                    return; // the track or the phone moved on meanwhile
+                }
+                QDBusPendingReply<BluezObjects> reply = *pCall;
+                const BluezObjects objects = reply.isError() ? BluezObjects() : reply.value();
+                const QString address = phoneAddress();
+                for (auto it = objects.cbegin(); it != objects.cend(); ++it) {
+                    const QString destination = plainMap(it.value().value(kObexSession))
+                                                        .value(QStringLiteral("Destination"))
+                                                        .toString();
+                    if (it.value().contains(kObexImage) &&
+                            destination.compare(address, Qt::CaseInsensitive) == 0) {
+                        kLogger.info() << "covers through the session open to the phone:"
+                                       << it.key().path();
+                        m_obexSession = it.key().path();
+                        requestThumbnail();
+                        return;
+                    }
+                }
+                if (orOpen) {
+                    openCoverSession();
+                }
+            });
+}
+
+void BluetoothReceiver::openCoverSession() {
     QDBusMessage call = QDBusMessage::createMethodCall(
             kObex, QStringLiteral("/org/bluez/obex"), kObexClient, QStringLiteral("CreateSession"));
     QVariantMap options;
     options.insert(QStringLiteral("Target"), QStringLiteral("bip-avrcp"));
-    options.insert(QStringLiteral("PSM"), QVariant::fromValue(port));
-    call << address << options;
-    auto* pWatcher = new QDBusPendingCallWatcher(session.asyncCall(call), this);
+    options.insert(QStringLiteral("PSM"), QVariant::fromValue(coverPort()));
+    call << phoneAddress() << options;
+    auto* pWatcher = new QDBusPendingCallWatcher(QDBusConnection::sessionBus().asyncCall(call), this);
+    const QString handle = m_coverHandle;
+    const QString phone = m_phonePath;
     connect(pWatcher,
             &QDBusPendingCallWatcher::finished,
             this,
-            [this, getThumbnail](QDBusPendingCallWatcher* pCall) {
+            [this, handle, phone](QDBusPendingCallWatcher* pCall) {
                 pCall->deleteLater();
                 QDBusPendingReply<QDBusObjectPath> reply = *pCall;
                 if (reply.isError()) {
                     kLogger.info() << "no cover session:" << reply.error().message();
+                    // Refused, most likely for another client's session still
+                    // connecting when we looked: look once more when it can
+                    // be there.
+                    QTimer::singleShot(kCoverSessionLookAgainMs, this, [this, handle, phone]() {
+                        if (handle == m_coverHandle && phone == m_phonePath &&
+                                m_obexSession.isEmpty()) {
+                            findCoverSession(false);
+                        }
+                    });
                     return;
                 }
                 m_obexSession = reply.value().path();
-                getThumbnail(m_obexSession);
+                if (handle == m_coverHandle && phone == m_phonePath) {
+                    requestThumbnail();
+                }
             });
+}
+
+void BluetoothReceiver::requestThumbnail() {
+    // The thumbnail: 200 px square, JPEG, which is what the view draws. No
+    // target file: obexd makes one and says where (Filename).
+    QDBusMessage call = QDBusMessage::createMethodCall(
+            kObex, m_obexSession, kObexImage, QStringLiteral("GetThumbnail"));
+    call << QString() << m_coverHandle;
+    auto* pWatcher = new QDBusPendingCallWatcher(QDBusConnection::sessionBus().asyncCall(call), this);
+    const QString handle = m_coverHandle;
+    connect(pWatcher, &QDBusPendingCallWatcher::finished, this, [this, handle](QDBusPendingCallWatcher* pCall) {
+        pCall->deleteLater();
+        QDBusPendingReply<QDBusObjectPath, QVariantMap> reply = *pCall;
+        if (reply.isError()) {
+            kLogger.info() << "no cover:" << reply.error().message();
+            // The session may be gone (another client's ends with it): the
+            // next track looks for one again.
+            m_obexSession.clear();
+            return;
+        }
+        if (handle != m_coverHandle) {
+            return; // the track moved on meanwhile
+        }
+        m_obexTransfer = reply.argumentAt<0>().path();
+        m_obexFile = reply.argumentAt<1>().value(QStringLiteral("Filename")).toString();
+        QDBusConnection::sessionBus().connect(kObex,
+                m_obexTransfer,
+                kProperties,
+                QStringLiteral("PropertiesChanged"),
+                this,
+                SLOT(onObexPropertiesChanged(QDBusMessage)));
+    });
 }
 
 void BluetoothReceiver::onObexPropertiesChanged(const QDBusMessage& message) {
