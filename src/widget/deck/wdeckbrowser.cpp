@@ -2,6 +2,7 @@
 
 #include <QSqlDatabase>
 #include <QHBoxLayout>
+#include <QHideEvent>
 #include <QMouseEvent>
 #include <QSqlQuery>
 #include <QStackedWidget>
@@ -638,6 +639,20 @@ void WDeckBrowser::pushLevel(Level level) {
     }
     m_stack.append(std::move(level));
     rebuildCurrentLevel();
+}
+
+void WDeckBrowser::hideEvent(QHideEvent* pEvent) {
+    QWidget::hideEvent(pEvent);
+    // The Bluetooth receiver is on while its page is shown, and the page is
+    // meant to be entered from its row only. The library hidden with the page
+    // up -- a long BACK, which keeps the stack -- takes the level with it, so
+    // that the library opens again on the home list: back into the page, the
+    // receiver would pause a deck playing by then and take Mixxx's sound
+    // mid-set. The page has had its own hide event by now, which closed the
+    // receiver.
+    if (!m_stack.isEmpty() && m_stack.last().kind == Level::Kind::Bluetooth) {
+        popLevel();
+    }
 }
 
 void WDeckBrowser::popLevel() {

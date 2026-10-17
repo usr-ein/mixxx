@@ -108,6 +108,11 @@ class WDeckBrowser : public QWidget, public WBaseWidget {
     /// not load. Takes the loaded marker off the row it was on.
     void onDeckEmpty();
 
+  protected:
+    /// The library hidden: with the Bluetooth receiver's page up, its level
+    /// goes too (see the body).
+    void hideEvent(QHideEvent* pEvent) override;
+
   private slots:
     void onMediaChanged();
     /// A medium's rows changed in place -- a folder stick's tags arriving.
